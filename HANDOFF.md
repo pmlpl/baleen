@@ -160,6 +160,7 @@ git status --short      # 谁在动，按上表认领
 | **K 混合检索** | ZCode-后端 | ✅ 已验收 | `repo/search.py` + `service/retrieve/retriever.py` + `retrieve_smoke.py`；**118 passed**；真实 query 双路命中，RRF=2/(60+1)=0.0328 与公式吻合；small-to-big 生效 |
 | **M 查询 API** | DSH-后端 | ✅ 已验收（协调方独立复跑：139 passed / 32.89s、ruff 干净） | `app/api/library.py`(268) + `app/repo/library.py`(128) + `tests/api/`(532)；**139 passed**；`total` 真 `count(*)`、`chunk_count`/`note_id` 批量查无 N+1、ILIKE 通配符已转义；检索复用线 K 的 retriever，API 层只做契约映射 |
 | **L 前端三页** | DSH-前端 | ✅ 已验收（协调方复核：type-check exit 0、build 772ms、Playwright 13 张、pageerror 0） | `frontend/src/{api,stores,views}` + `styles.css` + `App.vue` + `DELIVERY.md`；**修掉 vite proxy rewrite 真 bug**（原配置让除 `/healthz` 外全部 404）；真联调：笔记库 11 条、检索 5 命中 183ms、点命中真跳详情 |
+| **N query 集 + 消融 + 槽位细化** | DSH-评测 | ✅ 已验收（协调方独立复跑 `make_split --dry-run`：**(槽位,判定) 18/18 覆盖、待改 0 条**） | `eval/queries/`(20 条) + `ablation.py` + `ablation.md` + `make_split.py`(v3) + `metrics.py` + `labels.csv`(仅 split 列 4 行)；三档消融 **R@5 88.9 / 94.4 / 88.9%**，结论「**没有证据支持改 300**」（差异仅 1 条 query）；槽位细化后 **误拒率 0% → 10%，旧的 0% 果然是虚的** |
 
 **文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续；另有 **`docs/api.md` v2**（前后端唯一契约，枚举值以数据库 CHECK 为准）。
 
@@ -173,6 +174,16 @@ git status --short      # 谁在动，按上表认领
    RRF 分数无绝对量纲，v1 的选择是不设绝对阈值、把两路名次一起返回（`docs/api.md` §4 已写明取舍）。
 4. **`vite.config.ts` 的 proxy rewrite 从线 A 起就是错的** —— 一直没人发现，因为只有 `/healthz` 能通。
    教训：**契约/配置写完要真的打一次请求**，纸面通不等于链路通。
+5. **有 2 个子块超过 bge 的 512 token 上限，会被静默截断** —— `chunk 1364`（700 token，《轻量化发票 OCR > 项目结构》）
+   与 `chunk 1117`（517 token，《手写实战 > 完整代码实现》）。根因是 ADR §4.3「代码不受 `MAX_CHARS` 约束」，
+   而 `_chunk_code` 只在超限时往 `warnings` 里追加一句、**`import_smoke.py` 不打印 warnings**，所以线上完全看不见。
+   要修：要么让导入结果暴露 `warnings`，要么对超限代码块按行切并保留函数边界。
+6. **ADR 0004 §5 的 heading 前缀只落地了代码块** —— 按 `block_type` 核 324 个子块：
+   `code` 167 个有 `# {标题} > {面包屑} ({lang})` 前缀；**`text` 103 个、`table` 23 个都没有**（占 39%）。
+   正文块恰恰是最需要主题消歧的。**但 ADR 那句「能显著提升判别力」本身没有实验支撑**，
+   正确顺序是先做「有前缀 vs 无前缀」同口径 A/B 再改生产，不要照着一句话就动冻结区。
+7. **20 条 query 的相关性全是执行者自判、没有人工标注** —— n=18 正例，1 条 query = 5.56pt，
+   所以三档消融的差异**统计上都不显著**。这批数字要进论文，得先人工复核（重点 cross-section 3 条 + long 3 条）。
 
 ### 遗留待处理（不阻塞主干，但要记着）
 
@@ -203,11 +214,12 @@ git status --short      # 谁在动，按上表认领
 | # | 线 | 干什么 | 状态 |
 |---|---|---|---|
 | 1 | **线 M** | 后端 4 个查询 API（`docs/api.md` §3 §4） | ✅ 已验收并提交 `745f47c` |
-| 2 | **线 L** | 前端三页（导入 / 笔记库 / 检索） | ✅ 已验收并提交（见 `git log` 线 L 一条） |
-| 3 | **线 N** | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) | 🔄 DSH-评测 进行中 |
+| 2 | **线 L** | 前端三页（导入 / 笔记库 / 检索） | ✅ 已验收并提交 `f80df35` |
+| 3 | **线 N** | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) | ✅ 已验收并提交（见 `git log` 线 N 一条） |
 | 4 | — | **G2 live 复测** | ⏸ 阻塞：**2026-10-29 01:19 复测仍 HTTP 502**（上游 `insufficient_quota`） |
 | 5 | — | **问答生成**（检索 → 带出处回答） | ⏸ 依赖 LLM 额度；前端可复用现有 `POST /api/search` |
-| 6 | — | 补 `notes.markdown` 生成（见 §1「真问题」第 1 条） | 未派，等人拍板 |
+| 6 | — | **人工复核 20 条 query 的期望**（重点 cross-section 3 条 + long 3 条） | 未派 —— **只能人做，20 分钟，做完这批指标才有资格进论文** |
+| 7 | — | 补 `notes.markdown` 生成 / 代码块超限 / heading 前缀 A/B（见 §1「真问题」1/5/6） | 未派，等人拍板 |
 
 **槽位细化的缺口（协调方 2026-10-29 实测）**：`(槽位, 判定)` 共 18 个组合，14 个已在 test 覆盖，
 缺 **(2,accept) (4,reject) (5,accept) (7,accept)** 四个 —— 最少挪 4 条，test 14→18（0.40→0.51）。
