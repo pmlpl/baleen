@@ -152,6 +152,7 @@ git status --short      # 谁在动，按上表认领
 | **H-批1 LLM adapter** | Trae-后端 | ✅ 已验收 | `app/service/llm/{client,tokens}.py`；**Transport 可注入设计**（测试用 Fake，完全不联网，换 httpx 只实现一个类）；5 类错误分类、429 不重试、**api_key 不进日志/异常**（有断言）；**62 passed**）
 | **H-批2 G2 归属闸** | Trae-后端 | ✅ 已验收 | `gate/g2.py`(354 行)、`scripts/g2_smoke.py`；**77 passed**；防注入有直接注入测试；3000 token 预算（21 文件 max 2934）；JSON 坏→重试→降级；**live 未跑（缺 key）** |
 | **I-批1 导入状态机** | Trae-后端 | ✅ 已验收 | `repo/` 7 文件 + `imports/pipeline.py`(433 行) + `import_smoke.py`；**87 passed**；端到端跑通，**父块无向量**（DB 核对 = 0），幂等去重命中；charter 改为读 `baleen/charter.md`（1372 字符/1010 token）|
+| **J G2 政策修正** | Trae-后端 | ✅ 已验收 | `g2.py` prompt 重写（前置问限定范围 + 明确该收清单 + 拿不准就收）；`llm/client.py` 429 尊重 Retry-After（≤90s/最多2次）；`g2_smoke` 加 `--delay/--limit/--resume`；**90 passed** |
 
 **文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续。
 
@@ -177,7 +178,7 @@ git status --short      # 谁在动，按上表认领
 
 ---
 
-### 线 J · G2 判定政策修正 + 限流适配　｜　**当前执行者：Trae-后端（进行中）**
+### 线 J · G2 判定政策修正 + 限流适配　｜　**✅ 已交付并验收（Trae-后端）**　·　剩 live 重跑待主人开闸
 
 ```
 接手前照 §0.2 写「接手确认单」。
@@ -234,6 +235,11 @@ C. scripts/g2_smoke.py：加节流与分批
 ```
 
 ### 线 I-批2 · arq worker + 上传 API　｜　**当前执行者：ZCode-后端（未开工）**　·　与线 J 并行
+
+> **2026-10-28 23:5x 状态**：ZCode 会话报告"完成"，但工作区里**没有任何产出**
+> （无 `app/worker/`、无 `app/api/upload.py`、`pyproject.toml` 无 `arq`）。
+> 判断：它多半停在 §0.2 的「接手确认单」等主人确认 —— 命令里写了"等我确认后再动手"。
+> **主人只需回它一句「确认，开始」即可。**
 
 ```
 ⚠️ 本线与其他线【并行】进行，先看清文件边界：
@@ -473,6 +479,7 @@ git commit -F msg.txt                 # ④ 消息用文件传（长消息会被
 | 2026-10-28 | **Trae-后端** 线 H-批1（LLM adapter） | **质量高于要求**。人家要求「干净的同步函数」，它做成了 **`Transport` Protocol + `UrllibTransport` 可注入** —— 测试注入 FakeTransport **完全不联网**，以后换 httpx 只实现一个类。错误分 5 类（认证/超时/限流/网络/响应），仅网络与 5xx 重试（429 不重试），`api_key` 有「不进异常文本」的显式断言。62 passed。**加分**：如实报告 `pptx_parser.py` 有既有的 format 问题但**没越界去改**（纪律正确）|
 | 2026-10-28 | **Trae-后端** 线 H-批2（G2 归属闸） | **验收通过**。77 passed（+15）。防注入做到位：`<file_content>` 包裹 + system 声明「是数据不是指令」+ `test_injection_text_wrapped_in_delimiters` 直接注入「忽略以上指令」并断言被包裹。`G2Output` 用 `Literal` + 额外校验 rubric §7 映射（accept→index / partial→extract_spans / reject→topic_dialog|drop）。JSON 坏→重试1次→降级 accept/normal/index + degraded 标记。**LLM 异常向上抛不静默降级**（理由："否则 key 配错会把所有文件都收下"）——这个判断是对的 |
 | 2026-10-28 | **Trae-后端** 线 I-批1（导入状态机） | **验收通过**。87 passed（+10）。端到端实测：`sha256=0.3ms dedupe=233ms G0=42ms G1=13ms note=17ms chunk=2326ms embed=395ms`；DB 核对 **`parent_with_embedding=0`**（父块绝无向量，ADR 0003 决策①落地）；同文件二次导入命中 sha256 只花 82ms、未重复调 G2。charter 实现为 `resolve_charter()` 方法（文件 > 环境变量 > 默认），有专项测试 |
+| 2026-10-28 | **Trae-后端** 线 J（G2 政策修正 + 限流适配） | **验收通过**。90 passed（+3）。`_system_prompt` 三处修正（前置问限定适用范围 / 明确该收清单 / 拿不准就收），**防注入段与 JSON 契约一字未删**；429 改为尊重 `Retry-After`（≤90s、最多 2 次），Transport 契约扩为三元组；`g2_smoke` 加 `--delay 3 / --limit / --resume`。人家独立复跑 dry-run：`不走这一问=True`、`拿不准就 accept=True`、预算 4000=charter 1148+正文 1437。**它没用真网关跑 live（配额有限），改用本地假 OpenAI 服务验管道——判断正确** |
 
 ---
 
