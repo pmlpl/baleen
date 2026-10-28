@@ -143,7 +143,7 @@ git status --short      # 谁在动，按上表认领
 | 线 | 执行者 | 状态 | 最近交付 |
 |---|---|---|---|
 | **A 环境骨架** | ZCode | ✅ 已验收 | `docker-compose.yml`、`backend/` 骨架、`frontend/` 骨架 |
-| **B 解析 ADR + G0 模块** | ZCode | 🟡 结构验收通过（未跑其测试、未读其逻辑） | `docs/adr/0002`、`backend/app/service/parse/` 8 文件、`tests/` + fixtures、`scripts/parse_smoke.py` |
+| **B 解析 ADR + G0 模块** | ZCode | ✅ 已验收（含补遗：pytest 15 passed、smoke 35 文件状态分布与标注吻合） | `docs/adr/0002`、`backend/app/service/parse/` 8 文件、`tests/` + fixtures、`scripts/parse_smoke.py` |
 | **C 评测脚手架** | Trae | ✅ 已验收（`stratified-v2`） | `eval/DELIVERY.md`、`make_split.py`、`_common.py`、`report.md` |
 | **D 数据模型** | ZCode | ✅ 已验收（人家独立复跑确认） | `app/models/` 8 文件、`0002_data_model.py`、`repo/base.py`、`config.py` 补字段；**pytest 15 passed**、DB 实建 6 表、`halfvec(1024)`、pgvector 0.8.7 |
 | **E 切块 + 向量化** | ZCode-后端 | ✅ 已验收（含 E-2 修复，人家用真实笔记复跑） | `app/service/chunk/`(601 行)、`app/service/embed/`、`scripts/chunk_smoke.py`；**29 passed**；真实笔记 in_range 11.6%→**64.4%**、缺陷反馈 0%→**100%**、over_limit/truncated 仍为 **0**；torch 2.14.1+cu126 @cuda 52 items/s |
@@ -154,6 +154,7 @@ git status --short      # 谁在动，按上表认领
 | **I-批1 导入状态机** | Trae-后端 | ✅ 已验收 | `repo/` 7 文件 + `imports/pipeline.py`(433 行) + `import_smoke.py`；**87 passed**；端到端跑通，**父块无向量**（DB 核对 = 0），幂等去重命中；charter 改为读 `baleen/charter.md`（1372 字符/1010 token）|
 | **J G2 政策修正** | Trae-后端 | ✅ 已验收 | `g2.py` prompt 重写（前置问限定范围 + 明确该收清单 + 拿不准就收）；`llm/client.py` 429 尊重 Retry-After（≤90s/最多2次）；`g2_smoke` 加 `--delay/--limit/--resume`；**90 passed** |
 | **I-批2 worker+API** | ZCode-后端 | ✅ 已验收 | `worker/worker.py`、`api/upload.py`(244 行)、`deps.py`、`main.py`+2 行；**109 passed**；TestClient 实测 healthz 200 / sources 404 / 空POST 422；arq 0.28 + redis 降级 5.3.1 已验证 |
+| **K 混合检索** | ZCode-后端 | ✅ 已验收 | `repo/search.py` + `service/retrieve/retriever.py` + `retrieve_smoke.py`；**118 passed**；真实 query 双路命中，RRF=2/(60+1)=0.0328 与公式吻合；small-to-big 生效 |
 
 **文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续。
 
@@ -179,47 +180,17 @@ git status --short      # 谁在动，按上表认领
 
 ---
 
-### 线 K · 检索（混合检索 + rerank）　｜　**当前执行者：待分配**
+### ⏭ 下一批（按优先级，尚未派活）
 
-```
-接手前照 §0.2 写「接手确认单」。
+| # | 干什么 | 前置 |
+|---|---|---|
+| **1** | **G2 live 复测** | ⏸ 等上游额度恢复（见 §2 线 L 的说明） |
+| 2 | **前端（线 L）** | 无 —— 后端 API + 检索都已可用 |
+| 3 | **问答生成**（检索→带出处回答） | 检索已就绪 |
+| 4 | 20 个 query 集 + 切块消融实验 | 评测侧 |
+| 5 | 槽 7 分层细到 (槽位, 判定) | 评测侧 |
 
-现状：导入链已闭环 —— 上传 → 排队 → G0/G1/G2 → note → chunks → embeddings 全部打通，
-DB 里已有真实数据（含测试导入的 note/chunk/embedding）。现在缺「读」的那一半。
-
-任务：
-1. app/service/retrieve/
-   - query 侧：embed_query()（**必须用带指令前缀的那个函数**，非对称检索）
-   - 检索：向量（pgvector halfvec 余弦）+ 词法（chunks.text 的 trgm）双路召回
-     → RRF 融合 → 取 top N
-   - **小块检索、父块入上下文**：命中的是子块，返回给调用方的是它的父块（small-to-big）
-   - 只查 status='active' 的 note；父块本身不参与向量召回
-2. app/repo/ 补检索查询（走 Repo(owner_id)，不许裸 session）
-3. scripts/retrieve_smoke.py --query "..." [--top-k 5]
-   - 打印：命中的子块、对应的父块 heading_path、分数
-4. 测试（不加载真模型时用 fake embedder；要测真实检索就明确标注需要模型）
-
-验收：
-- uv run pytest -q 基线 109，不许降
-- retrieve_smoke 对一条真实 query 能返回带 heading_path 的父块
-- §3.1 残留自查
-
-不要做：不写前端、不改 parse/gate/chunk/embed/pipeline/worker/api。
-```
-
-### 线 L · G2 live 复测　｜　**等上游额度恢复**（不是代码任务）
-
-G2 政策已修（线 J），但 **mtt 网关的 6 个上游账号全部 `insufficient_quota`**，
-`/v1/chat/completions` 间歇性返回 502（网关汇总 `all_upstreams_failed`）。
-
-额度恢复后的复测命令（**必须带延迟 + 分批**）：
-
-```powershell
-cd baleen/backend
-uv run python scripts/g2_smoke.py --samples ../eval/samples/_inbox --live --delay 5 --limit 8
-```
-
-**期望**：误拒率从修正前的 53.3% 明显下降。这是论文第 5 章的核心数据。
+**派活前先确认**：`backend/DELIVERY.md` 顶部速览里的模块表还准不准（现在除了前端和问答，后端全绿）。
 ## 3. 卡住时找谁
 
 **遇到下面「必须停下问」的，停下来把问题写进你目录下的 `DELIVERY.md`，等人回答。不要自己试一堆方案。**
