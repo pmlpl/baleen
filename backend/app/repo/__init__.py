@@ -7,6 +7,7 @@ from .jobs import JobsRepo
 from .notes import NotesRepo
 from .repos import Repos
 from .review_runs import ReviewRunsRepo
+from .search import SearchRepo
 from .sources import SourcesRepo
 
 __all__ = [
@@ -17,5 +18,6 @@ __all__ = [
     "Repo",
     "Repos",
     "ReviewRunsRepo",
+    "SearchRepo",
     "SourcesRepo",
 ]

@@ -66,6 +66,104 @@ cd backend && uv run pytest -q     →  37 passed
   chat 不可用**（待额度恢复后验证）。正常调用 `max_tokens=800` 实测 **3.4 秒/次**，JSON 正常。
 
 ---
+## 2026-10-29 · 线 K · 混合检索 + RRF rerank · 执行者：ZCode-后端
+
+> 开工前已按 §0.2 交接手确认单,协调方批复「按倾向做」(6 个设计点全部按倾向落地:
+> rerank=RRF 不引 cross-encoder / 两路对称只搜子块 / 每路候选 max(top_k×3, 20) /
+> 模型名 import 自 pipeline / trgm 下限 0.05 / 不区分 extract_spans)。
+
+### 产物
+
+- **`app/repo/search.py`（新建,`SearchRepo`）** —— 检索查询全部收口在 repo(AGENTS §9):
+  - `vector_search(query_vec, limit, *, model)`:embeddings ⋈ chunks ⋈ notes,按 halfvec 余弦距离
+    (`vec.cosine_distance(...)` 升序,命中 `embeddings_vec_hnsw` 索引),过滤
+    `model` + `is_parent=false` + `owner_id` + `status='active'`,返回 (chunk, note_title);
+  - `lexical_search(query, limit, *, min_similarity=0.05)`:`func.similarity(text, q)` 降序
+    （GIN trgm 索引在库,但「按相似度排序」本身走全量候选,数据量小可接受）,同样四重过滤;
+  - `get_parents(parent_ids)`:子 → 父解析。
+  - `repos.py` / `repo/__init__.py`:聚合导出 `search` / `SearchRepo`（各一行级改动）。
+- **`app/service/retrieve/retriever.py`（新建）** —— `retrieve(query, *, top_k=5, owner_id=1,
+  embed_func=None, session_factory=None) -> RetrievalResult`:
+  - query 侧**必须** `embed_query`（带指令前缀的非对称接口,AGENTS §5 决策 4）;
+  - 每路候选 `max(top_k×3, 20)` → **RRF 融合**（k=60 标准值,rerank 即 RRF,不引 cross-encoder,
+    不新增依赖）→ 按**父块**聚合:父块分 = 其命中子块 RRF 之和,代表子块取该父块下 RRF 最高者;
+  - 返回 `RetrievalHit`:父块 text / heading_path、note 标题、rrf 分、代表子块 id/text、
+    **双路名次**（vector_rank / lexical_rank,None=该路未命中）;
+  - `embeddings.model` 过滤值 **import 自 `pipeline.EMBEDDING_MODEL`**（只读不改,单一来源;
+    放 service 层做,repo 不反向依赖 service——模型名作为参数传入 repo）;
+  - `embed_func` / `session_factory` 可注入（测试假向量 + savepoint 隔离会话）。
+- **`scripts/retrieve_smoke.py`（新建）**:`--query`(必填) `--top-k`(默认 5);真 bge + 真开发库;
+  打印每条命中的 rrf 分、双路名次、heading_path、note 标题、父块/子块摘要;DB/模型缺失收敛为一行提示。
+- **测试** `tests/service/retrieve/{conftest,test_retrieve}.py`（9 例,**不加载 bge、不连真 Redis**）:
+  fake `embed_func` 注入 one-hot 向量;DB 走外层事务+savepoint,结束回滚。
+  **关键隔离决策:场景用 owner_id=42/43** —— 开发库真实数据全是 owner 1,
+  owner 作用域让「向量名次第 1」这类断言不受真实数据干扰(与 import 测试按 sha 过滤同理)。
+  覆盖:向量路命中+排序 / 词法路 trgm 命中 / RRF 双路融合(分值=2/(60+1) 精确断言) /
+  small-to-big(返回父块文本≠子块文本) / archived 笔记不召回 / owner 隔离 /
+  **父块即使被塞了向量也不参与召回**(含无子块孤儿父块) / top_k 截断 / 空 owner 空返回。
+
+### 自测（原始输出）
+
+```
+uv run pytest -q     →  118 passed in 15.91s    # 基线 109 + 本批 9,无 skip
+uv run ruff check .  →  All checks passed!
+uv run ruff format --check <本批文件> →  16 files already formatted
+```
+
+`uv run python scripts/retrieve_smoke.py --query "闭包的作用域链是怎么工作的" --top-k 3`
+（真 bge,加载 ~2s @cuda;真开发库）:
+
+```
+query: 闭包的作用域链是怎么工作的  (top_k=3)
+1. rrf=0.0164 [vec#1 lex--] 导入冒烟笔记
+   父块: 闭包是函数与其词法环境的组合,函数在定义时就捕获了外层作用域中的变量。即使外层函数
+         已经返回,闭包仍然可以访问那些变量,这也是很多内存泄漏问题的根源。…
+2. rrf=0.0161 [vec#2 lex--] 导入冒烟笔记 > 结论
+   父块: 闭包本身不是问题,问题是闭包生命周期长于使用者的预期。只要把注册与注销成对写…
+3. rrf=0.0159 [vec#3 lex--] 导入冒烟笔记 > 为什么容易泄漏
+   父块: 注册事件监听时保留一个 unsubscribe 函数,组件卸载时调用它;…
+```
+
+`--query "git 新建并切换分支" --top-k 3`:top1 = `Git Bash 常用命令备忘`(父块
+「git switch -c feature/x 新建并切换分支…」),top2 = 同笔记「为什么这么做」——
+**验收要求「真实 query 返回带 heading_path 的父块」两条 query 均达成**。
+
+### HANDOFF §3.1 残留自查（本批未起任何服务器,smoke 为直连 CLI）
+
+```
+Get-NetTCPConnection -LocalPort 8123 -State Listen              → (empty)
+Get-CimInstance Win32_Process -Filter "Name='uvicorn.exe'"      → (empty)
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match 'baleen' }             → (empty)
+```
+
+### 已知限制
+
+- **trgm 对中文偏弱**:两条真实 query 的词法路都没过 0.05 下限(lex--),命中的全是向量路。
+  pg_trgm 按 3 字符滑窗,中文 query 通常 4-8 字,与长文本的重叠占比天然低。阈值/召回策略
+  待 20 query 集(前置依赖,一直没建)校准;若词法路长期空转,可考虑 pg_bigm(AGENTS §4 预留项)。
+- **向量路无下限过滤**:余弦距离只排序不设阈值,候选池必有返回(正交也距离 1.0),
+  靠 RRF 排序压低噪声。要不要加距离上限(如 distance < 0.9)留给真实 query 校准后定。
+- **词法路排序不走索引**:GIN trgm 只加速包含类过滤,`ORDER BY similarity` 是全量候选排序;
+  v1 单用户数据量(百级 chunk)无感,数据大了要换 tsvector 或 GiST。
+- **未区分 extract_spans(partial)**:按确认单第 6 点,partial 笔记照常整篇召回。
+- **rerank 是纯 RRF**:无 cross-encoder 精排;query 侧 embed 每次调用现算(未缓存)。
+- 测试的向量是 one-hot 合成值,HNSW 近似检索在真实分布下的名次抖动未覆盖(冒烟补真实分布)。
+
+### 需要确认的问题
+
+- (无 —— 6 个设计点开工前已批复)
+
+### 断点
+
+线 K 到此为止。接续点:
+- **API 暴露**:检索服务未接 HTTP(线 K 任务书明确「不改 api/」);后续给前端线 L 加
+  `GET/POST /api/search` 时,`retrieve()` 已把 embed_func / owner_id / top_k 都参数化,直接调用即可;
+- **20 query 集**:建好后可校准 trgm 阈值 / 向量距离上限 / RRF k;
+- **线 L G2 live 复测**:与本批无关,等额度(见速览的 LLM 上游额度备注)。
+
+---
+
 ## 2026-10-28 · 线 I-批2 · arq worker + 上传 API · 执行者：ZCode-后端
 
 > 开工前已按 §0.2 交接手确认单，协调方逐条批复后执行（no_llm 参数、白名单口径 A、

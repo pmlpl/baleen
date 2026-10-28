@@ -14,6 +14,7 @@ from .embeddings import EmbeddingsRepo
 from .jobs import JobsRepo
 from .notes import NotesRepo
 from .review_runs import ReviewRunsRepo
+from .search import SearchRepo
 from .sources import SourcesRepo
 
 
@@ -27,6 +28,7 @@ class Repos:
     chunks: ChunksRepo = field(init=False)
     embeddings: EmbeddingsRepo = field(init=False)
     jobs: JobsRepo = field(init=False)
+    search: SearchRepo = field(init=False)
 
     def __post_init__(self) -> None:
         self.sources = SourcesRepo(self.session, self.owner_id)
@@ -35,3 +37,4 @@ class Repos:
         self.chunks = ChunksRepo(self.session, self.owner_id)
         self.embeddings = EmbeddingsRepo(self.session, self.owner_id)
         self.jobs = JobsRepo(self.session, self.owner_id)
+        self.search = SearchRepo(self.session, self.owner_id)
