@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
+from app.api.upload import router as upload_router
 from app.core.config import get_settings
 from app.core.db import engine
 from app.core.redis import create_redis_client
@@ -31,6 +32,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health_router)
+    app.include_router(upload_router)
     return app
 
 

@@ -57,6 +57,129 @@ cd backend && uv run pytest -q     →  37 passed
 - **临时服务器清理**：见 `HANDOFF.md` §3.1（必须 `taskkill /T`，曾留下 17 小时的孤儿 uvicorn）
 
 ---
+## 2026-10-28 · 线 I-批2 · arq worker + 上传 API · 执行者：ZCode-后端
+
+> 开工前已按 §0.2 交接手确认单，协调方逐条批复后执行（no_llm 参数、白名单口径 A、
+> 50MB/55MB、暂存清理入口、max_jobs=1+job_timeout=900 均按批复落地）。
+> 本批与线 J 并行，未碰其文件（g2.py / llm/client.py / g2_smoke.py / test_g2.py / test_client.py）。
+
+### 产物
+
+- **`app/worker/`（新建）**
+  - `worker.py`：arq 任务 `import_file(ctx, file_path, *, no_llm)` **直接 `await run_import_async`**
+    （批 1 断点：不套 asyncio.run / to_thread），`worker="arq-worker"`；
+    `enqueue_import(file_path, *, dedupe_key, no_llm)` 以 **dedupe_key 作 arq `_job_id`**，重复入队幂等；
+    `WorkerSettings`：`max_jobs=1`（bge 在 GPU，导入串行）、`job_timeout=900`（协调方拍板）；
+    启动命令 `cd backend && uv run arq app.worker.worker.WorkerSettings`。
+  - **暂存区生命周期归 worker**：任务成功删暂存文件（只删 `STAGING_ROOT` 之内的路径，任务参数不可信）、
+    失败保留供 arq 重试、**worker 启动时清理 >24h 的孤儿**（批复方案 a；方案 b 的 scripts/ 在本批文件边界外）。
+  - **g2_skipped 标记**：`no_llm=true` 且非 dedupe 命中且成功后，往 `sources.parse_meta` 写
+    `{"g2_skipped": true}`（G2 的 review_runs 行本来就由 pipeline 跳过不写）。
+    写在 worker 侧而非 pipeline —— 本批文件边界不含 `app/service/imports/`（确认单已报备）。
+    后续批量补跑按 `parse_meta->>'g2_skipped'` 查询即可。
+  - `run_import_async` 为**函数级延迟导入**：上传 API 进程 import `app.worker` 拿 `STAGING_ROOT`/
+    `enqueue_import` 时**不会拉起 torch/解析栈**。
+- **`app/api/upload.py`（新建）**：`POST /api/sources` + `GET /api/sources/{id}`
+  - POST：multipart 上传 → 流式落暂存区 `baleen/storage/uploads/{uuid}_{原文件名}`（保留原文件名，
+    边读边算 sha256、边限大小）→ 存 blob（复用 pipeline 的 `_store_blob`，内容寻址只有一处实现）
+    → 建 source/job（`dedupe_key=import:<sha256>`，与 pipeline 同一份常量）→ 入队。
+    新建 201 / dedupe 命中 200；Redis 不可用 503（job 行已落库，重传自愈）。
+  - **扩展名白名单 = `PARSERS ∪ IMAGE_EXTS ∪ UNSUPPORTED_MESSAGES`**（批复方案 A）：
+    .doc/.xlsx/.xls/图片照收、由 G0 给具体提示与状态；415 只留给系统完全不认识的扩展名。
+  - **大小限制**：文件 50 MB；请求体 55 MB —— `Content-Length` 头先挡（依赖在解析 multipart 之前执行），
+    再流式边读边限，不把大文件整个读进内存。
+  - **dedupe 语义**：`deduped = not job_created`（同一内容提交过，不论任务是否完成）；
+    job `done/running` 不再入队；`queued/failed/dead` 重入队（arq `_job_id` 幂等挡重复，队列丢失时自愈）。
+  - `?no_llm=true` 查询参数（默认 false）：跳过 G2 且可识别（见上）。
+  - GET：parse_status + parse_meta 的 message/warnings/g2_skipped + job 状态 + note_id +
+    各闸门 review_runs（G0/G1/G2 逐个 `review_runs.get`，**未改 repo 加新方法**）。
+- **`app/api/deps.py`（新建）**：`get_session` 依赖（只注入 `app/core/db.session_factory`，未改 core/）。
+- **`app/main.py`**：仅 +2 行（import router、`include_router(upload_router)`）。
+- **`pyproject.toml` + `uv.lock`**：`arq 0.28.0`（批复同意交付 uv.lock）；⚠️ 连带 **redis 8.1.0 → 5.3.1**
+  （arq 约束 redis<6；现有用法 `Redis.from_url/ping/aclose` 全兼容，healthz+冒烟已验证）；
+  ⚠️ 另加两个**任务书钦定功能的必要依赖**（见「需要确认」）：`python-multipart 0.0.32`（运行时，
+  FastAPI multipart 唯一指定解析器）、`httpx 0.28.1`（dev 组，starlette TestClient 的硬依赖）。
+- 测试（不连真 Redis、不加载 bge）：`tests/api/{conftest,test_upload}.py`（10 例：
+  TestClient + 依赖覆盖注入「外层事务+savepoint」session（结束经 portal 回滚，不污染开发库）、
+  fake enqueue、storage/暂存指 tmp_path）；`tests/worker/{conftest,test_import_job}.py`（9 例：
+  fake `run_import_async` 只验编排、g2_skipped 标记/不冤记、暂存清理、路径护栏、WorkerSettings 断言）。
+
+### 自测（原始输出）
+
+```
+uv run pytest -q     →  109 passed in 15.45s    # = 线 J 交付后基线 90 + 本批 19,无 skip
+uv run ruff check .  →  All checks passed!
+uv run ruff format --check <本批文件> → 全部已格式化(未碰 pptx_parser.py 的既有遗留)
+```
+
+基线对账：任务书 87（I-批1 验收）+ 线 J 净增 3（其 DELIVERY 记 90）+ 本批 19 = **109**。
+本批全程未改线 J 的 5 个文件。
+
+真实链路冒烟（真实 worker + uvicorn:8123 + 真 Redis + 真 PG；冒烟时间 2026-10-29 00:23，
+GPU 正常加载 bge,未触发 OOM、未启用 CPU 回退）：
+
+```
+GET  /healthz                          → 200 {"status":"ok","db":"ok","redis":"ok"}
+POST /api/sources?no_llm=true (md)     → 201 {"source_id":121,"job_id":111,"job_status":"queued","deduped":false}
+POST /api/sources (.exe)               → 415 {"detail":"暂不支持的格式:.exe"}
+GET  /api/sources/121 轮询             → queued → running(parse_status=ok,note 70) → done(attempts=1,约 8s)
+```
+
+最终 GET /api/sources/121（节选）：`parse_status=ok`、`g2_skipped=true`、`note_id=70`、
+`job={status:done,attempts:1,last_error:null}`、review_runs 恰好 **G0(skip) + G1(accept/core/index) 两行、无 G2 行**。
+
+DB/文件核对（docker exec psql + 本地检查）：
+
+```
+chunks=4 (父块 2 / 子块 2)  embeddings=2(仅子块,父块 0 向量 ✓ ADR 0003 决策①)
+sources.parse_meta->>'g2_skipped' = true
+blob: storage/f4/f4cfba79…(368 字节)   storage/uploads/ 为空(成功后 worker 自删暂存 ✓)
+```
+
+### HANDOFF §3.1 残留自查（worker + uvicorn 均以 taskkill /PID /T /F 结束）
+
+```
+Get-NetTCPConnection -LocalPort 8123 -State Listen              → (empty)
+Get-CimInstance Win32_Process -Filter "Name='uvicorn.exe'"      → (empty)
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match 'baleen' }             → (empty)
+```
+
+### 已知限制
+
+- **queued 状态重复上传**：会重入队（arq `_job_id` 幂等挡掉真重复）并留下第二份暂存文件——
+  若 arq 确实还有该任务,这份暂存就是孤儿,由 worker 启动时的 24h 清理兜底。取「队列丢失可自愈」优先。
+- **无 Content-Length 的流式大包**（chunked 上传）绕过头部检查,仍会被服务端 spool 到磁盘
+  （starlette >1MB 落盘,不占内存）,流内 50MB 限长仍生效；彻底的前置拦截要在 main.py 加中间件,越界未做。
+- `parse_status` 在 G0 完成前是占位 `"error"`（与 pipeline 的 CLI 导入一致,受 CHECK 约束所限）,
+  前端须结合 `job.status` 判断「排队中」。
+- `enqueue_import` 每次调用各开/关一个 redis 连接池（单用户上传频率低,可接受;要优化得在
+  main.py 挂 app.state,越界未做）。
+- g2_skipped 标记在 worker 侧写（边界所限）；dedupe 命中且此前真跑过 G2 的 source 不打标记（避免冤记）。
+- worker 编排测试对 `run_import_async` 的 fake 是 patch `app.service.imports` 包属性
+  （import_file 是函数级延迟导入,每次调用从包属性取）——后续若改回顶层导入,测试的 patch 点要跟着改。
+- 冒烟在开发库留下 1 条真实记录（source 121 / note 70 / job 111）与内容寻址 blob（storage/f4/…，
+  已 gitignore）；未擅自删。
+
+### 需要确认的问题
+
+1. **两个依赖追认**：`python-multipart`（运行时,无它 multipart 上传端点根本不可用）与
+   `httpx`（dev 组,无它 TestClient 不可用）。两者都是任务书钦定功能（multipart 上传 / TestClient 测试）
+   的直接必要件,属「没得选」而非「我想要」,故未停下来等批复,先加后报。
+2. **redis 库 8.1.0 → 5.3.1 降级追认**（arq 约束 redis<6;跨 major,按 §3 列入需确认而非自行默默接受）。
+3. **deduped 语义**：`not job_created`（同一内容提交过即 true,含在途）——协调方批复只规定了
+   done 情形,在途情形我按此语义实现,前端如需区分可用 job_status。
+4. 冒烟产生的 source 121 / note 70 / job 111 删否？未擅自删数据。
+
+### 断点
+
+线 I-批2 到此为止,上传 → 排队 → 导入 → 查询全链路已通。后续接续点：
+- **live G2**（等主人 key 与线 J 验收）：worker 原样支持,上传时不带 `no_llm` 即真跑 G2；
+- **批量补跑 G2**：按 `parse_meta->>'g2_skipped'` 查出 source 集,另开任务做补跑入口（不在本批）；
+- **检索线 K / 前端线 L**：`GET /api/sources/{id}` 已给出状态页所需全部字段。
+
+---
+
 ## 2026-10-28 · 线 J · G2 判定政策修正 + 限流适配
 
 > 执行者：**Trae-后端**（同执行者续做）。只改 `backend/`；未动 `eval/`、`charter.md`、chunk/embed/parse/pipeline。

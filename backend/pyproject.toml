@@ -19,10 +19,13 @@ dependencies = [
     "pgvector>=0.5.1",
     "torch>=2.14.1",
     "sentence-transformers>=6.2.0",
+    "arq>=0.28.0",
+    "python-multipart>=0.0.32",
 ]
 
 [dependency-groups]
 dev = [
+    "httpx>=0.28.1",
     "pytest>=9.1.1",
     "ruff>=0.6",
 ]
