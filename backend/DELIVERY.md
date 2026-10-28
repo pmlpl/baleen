@@ -4,6 +4,41 @@
 
 ---
 
+## 2026-10-28 19:07 · 线 F · 修 `.env` 加载路径
+
+### 产物
+
+- `app/core/config.py`：加 `BASE_DIR = Path(__file__).resolve().parents[2]`（→ `backend/`）与 `ROOT_DIR = BASE_DIR.parent`（→ `baleen/`）两个绝对路径常量；`model_config.env_file` 从 `".env"`（按 CWD 解析）改成 `(ROOT_DIR / ".env", BASE_DIR / ".env")` 元组——**根 .env 先读、`backend/.env` 覆盖它**（便于本地临时调试）。从任何 CWD 启动都能找到仓库根的 .env。
+- `tests/test_config.py`（新增，2 例，**不碰真的 `baleen/.env`**，AGENTS §3 硬约束 3）：
+  1. `test_root_dir_absolute_and_has_env_example`：断言 `ROOT_DIR` 是绝对路径、且 `ROOT_DIR / ".env.example"` 存在（即 `ROOT_DIR` 确实指向 `baleen/`）。
+  2. `test_reads_env_file_from_root_dir`：`tmp_path` 造临时 `.env` 写 `EMBEDDING_MODEL_PATH=/fake/...`，`monkeypatch` 把 `ROOT_DIR` 与 `Settings.model_config.env_file` 都指过去（`env_file` 在类定义时绑定原 `ROOT_DIR`，必须同时 patch），`delenv` 清掉环境变量避免它优先于文件，`get_settings.cache_clear()` 后断言读到 `/fake/...`。
+
+### 自测（原始输出）
+
+`uv run python -c "from app.core.config import get_settings as g; print(repr(g().embedding_model_path))"`（在 `backend/` 下执行）：
+```
+'C:\\Users\\MOM\\Desktop\\学习项目\\智能笔记库\\models\\bge-large-zh-v1.5'
+```
+修前是 `''`（空），修后读到主人填在 `baleen/.env` 里的模型绝对路径。
+
+`uv run pytest -q`：
+```
+31 passed in 14.43s   # 原 29 + config 2
+```
+ruff check + format 全绿。
+
+### 已知限制
+
+- pydantic-settings 的默认优先级是 **环境变量 > .env 文件 > 代码默认值**：`baleen/.env` 里写的值会被已存在的同名环境变量覆盖。这是 pydantic 的既定行为、符合预期（docker compose 的 `POSTGRES_*` 也是靠环境变量注入容器，不走 .env 文件）。embed 测试的 conftest 正是靠 `os.environ` 注入 `EMBEDDING_MODEL_PATH` 覆盖 .env，所以模型路径改动不影响 31 个测试。
+- `backend/.env` 若存在会覆盖根 `.env`——只用于本地临时调试，正式环境不应放。
+
+### 需要确认的问题
+
+- （无）
+
+---
+
+
 ## 2026-10-28 18:32 · 线 E-2 · 修切块碎片化（ADR 0004 §4.7 / §6）
 
 ### 产物
