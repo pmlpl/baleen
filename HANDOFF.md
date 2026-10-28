@@ -48,17 +48,63 @@
 | 决定 | 结论 | 日期 |
 |---|---|---|
 | `embeddings.vec` 写入方式 | **选 A：`uv add pgvector`**，用官方 `HALFVEC` 类型替换自定义 `HalfVec(UserDefinedType)` | 2026-10-28 |
+| 向量化推理栈 | **GPU 版 torch**。本机 RTX 3060 Laptop / 6 GB 显存 / 驱动 616.56。**必须做 device 自动降级**（`cuda if torch.cuda.is_available() else cpu`），因为答辩机器可能没有 GPU | 2026-10-28 |
 
-### ⏸ 等拍板才能开工：向量化要用哪个推理栈
+---
 
-`bge-large-zh-v1.5` 要跑起来必须选一条路。**实测现状**：`onnxruntime` ✅ 已在锁文件里（pymupdf 带进来的），`numpy` ✅ 已有，当前 `.venv` 是 **311 MB**。
+## 2. 待处理
 
-| 方案 | 增加体积 | 代价 |
-|---|---|---|
-| **A（推荐）** `torch`(CPU) + `sentence-transformers` | venv → 约 600 MB | 最省事，直接加载现有 HF cache 路径；与 asklaw 一致 |
-| **C** ONNX 版 bge + 已有 `onnxruntime` | venv 几乎不涨 | 但**得先拿到 ONNX 导出的模型**（要联网或先装 torch 转一次），断网前提有风险 |
+### 给 ZCode（线 E：切块 + 向量化）
 
-> 人家建议 **A**：多 300 MB 换来"一定能跑、跑法和文档一致"，对毕设值得。C 适合以后体积敏感时再做优化。
+```
+开工先按顺序读：
+1. baleen/AGENTS.md                        → §3 硬约束、§4 技术栈、§6 环境事实
+2. baleen/docs/adr/0004-text-splitting.md  → 切块的完整规格（三层结构、五类难处理单元、四个硬指标）
+3. baleen/docs/adr/0003-data-model.md      → chunks / embeddings 表结构（§2.4、§2.5）
+
+任务：实现切块器 + 向量化器。只动 baleen/backend/。
+
+已批准的依赖（都是新增，一次装齐）：
+  uv add pgvector
+  uv add torch sentence-transformers        # PyPI 默认 wheel 在 Windows 上就带 CUDA，约 2.5 GB，下载慢很正常
+  ⚠️ 下载若长时间卡住，停下来问主人是否要开代理，不要自己乱换源
+
+交付 4 样：
+
+1. app/service/chunk/（切块器，纯函数，不碰数据库）
+   - 输入 block JSON → 输出 sections[] + chunks[]（父块与子块）
+   - 严格按 ADR 0004：目标 300 字 / MAX 400 / token 硬上限 480 / overlap 0 / 句子不劈开
+   - 五类难处理单元都要实现：表格按行+重复表头、代码按函数边界、无标题长文按句子累积、
+     目录识别后不 embed（meta.skipped_embed）、图片块文本极少不 embed
+   - 文件顶部把 TARGET_CHARS / MIN_CHARS / MAX_CHARS / HARD_TOKEN_LIMIT 定义成常量，
+     并加注释「推导值，待 ADR 0004 §8 的消融实验校准」
+
+2. app/service/embed/（向量化器）
+   - embed_passage(texts) 和 embed_query(text) 必须是两个函数（非对称检索）：
+     query 要加前缀「为这个句子生成表示以用于检索相关文章：」，passage 不加
+   - device = "cuda" if torch.cuda.is_available() else "cpu"，启动时打一行日志说明用了哪个
+   - 模型路径读 config.embedding_model_path（不许硬编码）；为空时报错并提示去配 .env
+   - 模型自带 Normalize → 输出已 L2 归一化，不要重复归一化
+   - 批量：batch_size 可配（GPU 默认 32，CPU 默认 8）
+
+3. 把 app/models/base.py 的自定义 HalfVec 换成 pgvector 的 HALFVEC，
+   并确认 alembic 迁移仍然可用（DDL 应保持 halfvec(1024) 不变）
+
+4. 单测（自造小 fixture，不许读 eval/samples）：
+   - 切块：短笔记单块 / 长文多块 / 大表格按行带表头 / 长代码按函数边界 /
+     目录页 skipped_embed / 断言 chunks_truncated == 0 且 chunks_over_limit == 0
+   - 向量化：embed_query 与 embed_passage 输出维度都是 1024、都是单位向量（模长 ≈ 1）
+   - 一个端到端小测：一段 markdown → 切块 → 向量化 → 长度与维度断言
+
+不要做：不写导入状态机、不加 API 端点、不写检索、不往数据库真写笔记（可以写一个临时测试用例再回滚）。
+
+自测（贴原始输出到 DELIVERY.md）：
+- uv run pytest tests/service/chunk tests/service/embed -q
+- 打印当前 device、模型加载耗时、对 100 条假文本的吞吐（条/秒）
+- 确认 channels_truncated=0 / chunks_over_limit=0
+
+交付写到 baleen/backend/DELIVERY.md。
+```
 
 ---
 
