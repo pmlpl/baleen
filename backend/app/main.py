@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as health_router
+from app.api.library import router as library_router
 from app.api.upload import router as upload_router
 from app.core.config import get_settings
 from app.core.db import engine
@@ -32,6 +33,7 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
     app.include_router(health_router)
+    app.include_router(library_router)
     app.include_router(upload_router)
     return app
 

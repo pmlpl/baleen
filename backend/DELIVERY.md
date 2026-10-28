@@ -7,7 +7,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-10-28 · 线 H 开工前
+**最后更新**：2026-10-29 · 线 M 交付后
 
 ### 已完成模块
 
@@ -18,16 +18,21 @@
 | **切块** | `app/service/chunk/` | ✅ 同节内合并；真实笔记 in_range 64%–100% |
 | **向量化** | `app/service/embed/` | ✅ torch 2.14.1+cu126，cuda 52 items/s |
 | **G1 价值闸** | `app/service/gate/g1.py` | ✅ 真实样本**误拒率 0/15 = 0.0%** |
-| **G2 归属闸** | — | ❌ 未开始（线 H） |
-| **导入状态机** | — | ❌ 未开始 |
-| **检索** | — | ❌ 未开始 |
-| **API 端点** | 只有 `/healthz` | ❌ 未开始 |
+| **G2 归属闸** | `app/service/gate/g2.py` | ✅ H-批2 + 线 J 政策修正；**live 未跑（缺额度）** |
+| **导入状态机** | `app/service/imports/pipeline.py` | ✅ I-批1；端到端实测，父块无向量已核对 |
+| **arq worker + 上传 API** | `app/worker/`、`app/api/upload.py` | ✅ I-批2；新建 201 / dedupe 200 / 轮询可用 |
+| **混合检索 + RRF** | `app/repo/search.py`、`app/service/retrieve/` | ✅ 线 K；真实 query 双路命中，RRF 与公式吻合 |
+| **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
+| **API 端点总览** | `app/main.py` | ✅ 7 个：`/healthz` · 上传 2 个 · 查询/检索 4 个 |
+| **前端** | `frontend/` | ❌ 未开始（线 L，接口已就绪） |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  37 passed
+cd backend && uv run pytest -q     →  139 passed
 ```
+
+基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → **139**（线 M）
 
 **任何新任务都不许把这个数降下来。**
 
@@ -64,6 +69,181 @@ cd backend && uv run pytest -q     →  37 passed
   ⚠️ `glm-5.2` 是**推理模型**：`max_tokens=8` 时 `content` 为空、`finish_reason=length`，
   思考进 `reasoning_content`。`probe()` 用的正是 `max_tokens=8`，**可能把推理模型误判成
   chat 不可用**（待额度恢复后验证）。正常调用 `max_tokens=800` 实测 **3.4 秒/次**，JSON 正常。
+
+---
+## 2026-10-29 · 线 M · 后端查询 API · 执行者：DSH-后端
+
+> 开工前按 §0.2 读完全部交接材料（`AGENTS.md` 全文 / `HANDOFF.md` §0·§0.1·§0.2·§3·§3.1·§3.2 /
+> `docs/api.md` v1 / 本文件速览 + 全部交付块 / `docs/adr/0003`）。
+> 只动 `backend/`；**未执行任何 git 命令**；只新增 3 个文件 + `main.py` 加 2 行 + 本文件。
+
+### 产物
+
+- **`app/repo/library.py`（新建，`LibraryRepo(Repo)` 只读查询）**
+  - `list_sources(parse_status, limit, offset) -> (total, 当前页)`：`created_at DESC, id DESC`；
+    `total` 走 `select(func.count()).select_from(base.subquery())`，与分页彻底解耦（**不是** `len(items)`）；
+  - `note_ids_by_source(source_ids)`：列表页 source → note_id **一次批量**补齐（1:N 取 id 最小那篇）；
+  - `list_notes(q, limit, offset)`：标题 `ILIKE`；用户输入里的 `%` `_` `\` 全部转义
+    （`ilike(pattern, escape="\\")`）——实测 `q=%` 返回 `total=0`，不会退化成「匹配全部」；
+  - `parent_chunk_counts(note_ids)`：**一次 `GROUP BY` 聚合**出父块数，列表页无 N+1；
+  - `get_active_note(note_id)` / `list_parent_chunks(note_id)`（`is_parent=true`，`ord ASC`）。
+  - **未改** `app/repo/__init__.py` 的 `Repos`，也未动任何已有 repo 方法；本文件不提供写方法。
+- **`app/api/library.py`（新建，`APIRouter(prefix="/api", tags=["library"])`）** —— 契约 4 接口：
+  1. `GET /api/sources`：分页 + 可选 `parse_status`，`{total, items[]}`，items **不含** `review_runs`；
+     `message` 取自 `parse_meta.message`，`note_id` 由上面那次批量查询补；
+  2. `GET /api/notes`：分页 + 可选 `q`（标题 ILIKE，不走向量），每项带 `chunk_count`（**父块数**）；
+  3. `GET /api/notes/{note_id}`：全量字段 + `parents[]`（只 `is_parent=true`、`ord ASC`）；
+     不存在 → 404 + `{"detail": "笔记不存在:<id>"}`（人话中文）；
+  4. `POST /api/search`：`{query, top_k}` → `{query, took_ms, hits[]}`；**直接复用**
+     `app.service.retrieve.retriever.retrieve(query, top_k=..., owner_id=1)`，
+     本层只把 `RetrievalResult/RetrievalHit` 逐字段映射成契约 JSON + `time.perf_counter()` 计时。
+  - 分页 `limit` 默认 20 / 上限 100、`offset` 默认 0；`query` 1–500 字（**纯空白 422**，自动 strip 后
+    回显）；`top_k` 1–20 默认 5；`hits` 为空返回 **200 + `[]`**（不是 404、不是错误）。
+  - 检索入口做成 **`Depends(get_retrieve)` + 函数内延迟导入**：API 进程启动不 import
+    sentence-transformers/torch/解析栈（与 `upload.py` 对 pipeline 的取舍一致）；
+    单测因此能用 `dependency_overrides` 换假实现，**绝不加载 bge**。
+- **`app/main.py`**：只加 2 行（`from app.api.library import router as library_router` +
+  `app.include_router(library_router)`），其余一字未动。
+- **`tests/api/test_library.py`（新建，21 例）**：复用现有 `tests/api/conftest.py` 的 `env` fixture
+  （TestClient + 外层事务 + savepoint，结束回滚，不污染开发库）。
+  两条隔离技巧（开发库里本来就有真实数据，不能假设库是空的）：
+  ① 种下的行 `created_at` 一律设 **2099**（必排在真实 2026 数据之前，排序/分页断言稳定）；
+  ② `filename`/`title` 带本文件唯一标记（过滤断言与库里多少行无关）。
+  关键断言：`total` 与**直连数据库**算的 `count(*)` 对帐；`chunk_count` 断言「2 父块」而库里该笔记共
+  **5 个块**（证明按父块算）；`parse_status` 过滤全量校验；`review_runs` 不出现在列表项里；
+  `q` 的 ILIKE/降序/分页；`parents` 只父块且 `ord ASC`；404 中文 detail；archived 在列表与详情都不可见；
+  检索的全部字段逐一等值（含 `vector_rank/lexical_rank = null`）、空结果 `[]`、`top_k` 透传与默认值、
+  空白/超长/越界 422 且**不触发检索**、500 字与 `top_k=20` 边界通过。
+
+### 自测（原始输出）
+
+```
+uv run pytest -q     →  139 passed in 31.69s      # 基线 118 + 本批 21,无 skip
+uv run ruff check app tests  →  All checks passed!
+uv run ruff format --check app/repo/library.py app/api/library.py tests/api/test_library.py app/main.py
+                             →  4 files already formatted
+uv run ruff format --check app tests
+                             →  1 file would be reformatted: app/service/parse/pptx_parser.py:78
+                                (既有遗留,线 H-批1 已记录;parse/ 是冻结区,本批未碰)
+```
+
+**真实链路自测**（`docker compose ps` → db / redis 均 `Up (healthy)`；`uv run fastapi dev --port 8123`；
+真实开发库：`sources=12 / notes=11 / chunks=508 / embeddings=309`；真 bge @cuda，日志可见
+`Loading weights: 100%`）。响应均为真实原文，此处按 ≤50 行截断：
+
+```
+[200] GET /healthz
+      {"status":"ok","db":"ok","redis":"ok"}
+
+[200] GET /api/sources?limit=2
+      {"total":12,"items":[{"id":238,"filename":"演示-闭包与内存泄漏.txt","ext":".txt","size_bytes":476,
+        "parse_status":"error","message":null,"note_id":null,"created_at":"2026-10-28T17:27:51.225968Z"},
+       {"id":213,"filename":"doc-ocr-system__README.md","ext":".md","size_bytes":10648,"parse_status":"ok",
+        "message":null,"note_id":164,"created_at":"2026-10-28T17:25:44.840797Z"}]}
+
+[200] GET /api/sources?limit=1&parse_status=ok        # total 是真 count(*),= 11 ≠ len(items)=1
+      {"total":11,"items":[{"id":213,...}]}
+
+[200] GET /api/notes?limit=2
+      {"total":11,"items":[{"id":164,"title":"轻量化发票 OCR 识别与校验系统","lang":null,"tags":[],
+        "quality":"core","status":"active","source_id":213,"chunk_count":15,
+        "created_at":"2026-10-28T17:25:45.114517Z"},
+       {"id":162,"title":"项目实验实训报告（一）",...,"chunk_count":7,...}]}
+
+[200] GET /api/notes/164
+      {"id":164,...,"markdown":null,"parents":[{"chunk_id":1345,"ord":1,
+        "heading_path":"轻量化发票 OCR 识别与校验系统",
+        "text":"B/S 架构发票智能处理平台：上传 → 图像预处理 → 轻量化 OCR → 版式 1:1 还原 → …",
+        "token_count":110},{"chunk_id":1346,"ord":3,"heading_path":"轻量化发票 OCR 识别与校验系统 > 核心功能",...}]}
+
+[404] GET /api/notes/999999
+      {"detail":"笔记不存在:999999"}
+
+[200] POST /api/search  {"query":"闭包的作用域链是怎么工作的","top_k":3}
+      {"query":"闭包的作用域链是怎么工作的","took_ms":3061,"hits":[
+        {"parent_id":898,"child_id":942,"note_id":156,"note_title":"闭包 —— 面试必问，装逼必备",
+         "rrf_score":0.079405,"vector_rank":1,"lexical_rank":null,
+         "heading_path":"闭包 —— 面试必问，装逼必备 > 六、闭包的更多实际使用场景 > 场景 1：节流（Throttle）和防抖（Debounce）",
+         "parent_text":"// 防抖：用户停止操作后才执行\nfunction debounce(fn, delay) {...",
+         "child_text":"# 闭包 —— … > 场景 1：节流（Throttle）和防抖（De…"},
+        {"parent_id":889,"child_id":919,...,"rrf_score":0.043371,"vector_rank":6,"lexical_rank":null},
+        {"parent_id":896,"child_id":936,...,"rrf_score":0.041202,"vector_rank":9,"lexical_rank":null}]}
+
+[200] 同一 query 第二次（模型已加载）                       → took_ms=129，hits 完全相同（幂等）
+[200] POST /api/search  {"query":"git 新建并切换分支","top_k":2}   → took_ms=119
+      top1: note 158「手写实战练习」vec=7 lex=null rrf=0.055671
+      top2: note 70「Git Bash 常用命令备忘」vec=1 lex=1 rrf=0.032787  ← = 2/(60+1)，与线 K 公式一致
+
+[422] POST /api/search  {"query":"   "}
+      {"detail":[{"type":"value_error","loc":["body","query"],
+        "msg":"Value error, query 不能为空白","input":"   ","ctx":{"error":{}}}]}
+
+[422] POST /api/search  {"query":"闭包","top_k":21}
+      {"detail":[{"type":"less_than_equal","loc":["body","top_k"],
+        "msg":"Input should be less than or equal to 20","input":21,"ctx":{"le":20}}]}
+
+[422] GET /api/notes?limit=101
+      {"detail":[{"type":"less_than_equal","loc":["query","limit"],...,"ctx":{"le":100}}]}
+
+[200] GET /api/notes?q=%25                              # q = "%" → 通配符已转义
+      {"total":0,"items":[]}
+```
+
+### HANDOFF §3.1 残留自查（本批起过 3 次 `fastapi dev --port 8123`，每次都以 `taskkill /T /F` 收尾）
+
+```
+Get-NetTCPConnection -LocalPort 8123 -State Listen              → (空)
+无 8123 残留进程(CommandLine 匹配 '8123')                        → (空)
+```
+
+⚠️ 但自查里 **8000 端口有非本批启动的进程**，如实记录、未擅自处理：
+
+```
+uvicorn.exe PID 49544   start=2026/10/29 1:26:01  ... app.main:app --port 8000
+python.exe PID 35604/31912  start=2026/10/29 1:26:01  同上(uvicorn 的 python 包装)
+HTTP 探测 http://127.0.0.1:8000/api/notes?limit=1 → 无响应(疑似僵死/启动即卡住)
+```
+
+它们的启动参数是 `--port 8000`、**不是**本批的 `fastapi dev --port 8123`，且启动时间早于本批开工；
+按「只清理自己起的」原则未 kill。**若要清：`taskkill /PID 49544 /T /F`（协调方决定）。**
+
+### 已知限制
+
+- **契约与库有两处对不上（不是本批引入，需协调方裁决，`docs/api.md` 我没动）**：
+  1. 契约示例写 `"quality": "high"`，但 `notes` 的 CHECK 只允许 `core|normal|reference|junk`
+     （ADR 0003 §2.3、`app/models/note.py`）。真实数据全是 `core`，接口原样返回库里的值。
+  2. 契约示例写 `"ext": "docx"`（不带点），但 `upload.py` 存的是 `Path(...).suffix` = **`.docx`（带点）**，
+     既有 `GET /api/sources/{id}` 也一直返回带点。本批为一致性**原样返回**（实测 `".md"`/`".txt"`），
+     没在 API 层偷偷 strip —— 要么改契约示例，要么改存储 + 迁移，两者都不是本批能自决的。
+- **`took_ms` 冷启动含模型加载**：本进程第一次 `POST /api/search` 实测 **3061ms**（其中 bge 加载约 1.5s），
+  热值 **119–134ms**；而**首个**检索请求的整体墙钟约 17.5s（torch/sentence-transformers 的首次 import
+  发生在依赖解析阶段，不在 `took_ms` 计时窗口内）。单用户 v1 可接受，要改善就在 lifespan 里预热
+  （会拖慢 `fastapi dev` 启动，越界未做）。
+- **检索阻塞事件循环**：`retrieve()` 里 `embed_query` 是同步 CPU/GPU 调用，直接跑在事件循环上
+  （`worker` 是用 `to_thread` 的，API 侧没有）。单用户无并发压力时不改；要加就 `asyncio.to_thread`。
+- **真实库上很难得到「空 `hits`」**：向量路无距离下限（线 K 已记录的已知限制），任何 query 都有候选，
+  所以「空数组」分支由单测覆盖（fake retriever），真实链路只能证明非空路径。
+- **`archived` 笔记在列表与详情都不可见（404）**：按「软删除=对外不可见」+ `repo/base.py` 的
+  「notes 查询一律带 `status='active'`」约定实现。契约没写这条；若前端要回收站视图，需另加接口。
+- **单测的假命中对象不 import `RetrievalHit`**（避免为 21 个 API 测试拉起 torch），字段名靠人工保证；
+  真字段对齐由真实链路自测证实（上面 `parent_id/child_id/rrf_score/vector_rank/...` 全部出得来）。
+- **`sources` 列表是 1:N → 取一篇**：同一文件多笔记时 `note_id` 取 id 最小的那篇（代表值）。
+- **`lang`/`tags` 真实数据多为 `null`/`[]`**：导入流水线目前不填这两个字段（不是本批的接口问题），
+  前端要显示得等导入侧补。
+
+### 需要确认的问题
+
+1. 上面两处**契约 vs 库**的不一致（`quality` 取值、`ext` 是否带点）怎么裁决？改契约示例 / 改存储+迁移 / 保持现状。
+2. 8000 端口那三个**非本批**启动的 uvicorn 进程（僵死、HTTP 无响应）要不要清掉？我只清了自己的 8123。
+3. `POST /api/search` 的 `took_ms` 口径：现在含首次模型加载。要不要改成「只算检索本身」或加旁路预热？
+
+### 断点
+
+线 M 到此为止，**前端（线 L）所需的 4 个接口全部可用**（契约 v1 §3/§4）。
+后续接续点：
+- 线 L 前端可直接照 `docs/api.md` 写调用；`GET /api/sources` 与 `GET /api/notes` 都支持分页 + `total`；
+- 问答生成（检索 → 带出处回答）可复用同一个 `retrieve()` 依赖，`hits` 里 `parent_text` 就是喂 LLM 的上下文；
+- 若加了 20 query 集，可回头校准 `took_ms` 之外的 trgm 阈值（线 K 遗留）。
 
 ---
 ## 2026-10-29 · 线 K · 混合检索 + RRF rerank · 执行者：ZCode-后端
