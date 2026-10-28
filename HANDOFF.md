@@ -194,6 +194,56 @@ C. scripts/g2_smoke.py：加节流与分批
 不要做：不动 eval/、不改 charter.md、不改 chunk/embed/parse/pipeline、不写检索与前端。
 ```
 
+### 给 ZCode-后端（线 I-批2：arq worker + 上传 API）｜**可与线 J 并行**
+
+```
+⚠️ 本线与其他线【并行】进行，先看清文件边界：
+
+  别人正在改（你一个字都不许碰）：
+      app/service/gate/g2.py
+      app/service/llm/client.py
+      scripts/g2_smoke.py
+      eval/ 下一切
+
+  你只碰这些：
+      app/worker/            （新建）
+      app/api/               （新建 upload.py 等）
+      app/main.py            （只加 include_router 一行）
+      backend/pyproject.toml （加 arq）
+      backend/DELIVERY.md    （追加，标题注明「执行者：ZCode-后端 · 线 I-批2」）
+
+接手前照 §0.2 写「接手确认单」，并在确认单第 3 项里逐条列出你要改的文件。
+
+任务：
+
+1. app/worker/（arq worker）
+   - worker.py：注册 import 任务 → 调用 app/service/imports/pipeline
+   - Redis 地址复用 config.redis_url
+   - ⚠️ pipeline 是**同步**函数 → worker 里直接跑，或 asyncio.to_thread 包装
+
+2. app/api/upload.py
+   - POST /api/sources      上传文件（multipart）→ 存 blob → 建 source 记录 → 排 job
+   - GET  /api/sources/{id} 查状态（parse_status + 该 source 最新的 review_runs）
+   - 大小限制 + 扩展名白名单（复用 parse 的判定，别另写一套）
+
+3. app/main.py 注册新 router（只加一行 include_router，不许改别的）
+
+4. pyproject.toml：uv add arq（AGENTS.md §4 技术栈里已列，不需要再申请）
+
+测试（**不加载 bge 模型、不连真 Redis**）：
+   - 上传端点用 TestClient + 临时 storage 目录（tmp_path）
+   - worker 任务用 fake pipeline 验证编排，不真跑解析
+
+⛔ 若跑测试时 GPU 显存不足（另一条线可能正占着模型），用
+   $env:CUDA_VISIBLE_DEVICES='' 强制走 CPU，并在 DELIVERY 里说明。
+
+自测（贴进 DELIVERY）：
+   - uv run pytest -q              （基线 87，不许降）
+   - docker compose up -d 后，curl 上传一个 md → 拿到 source_id，能查到 parse_status
+   - §3.1 残留自查（三项全空）
+
+不要做：不碰 g2.py / llm/client.py / g2_smoke.py / eval/ / charter.md；不写检索与前端。
+```
 ### 之后（等线 J 验收再开）
 
 - **线 I-批2**：arq worker + 上传 API
