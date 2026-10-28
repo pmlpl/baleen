@@ -11,6 +11,8 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://baleen:baleen@localhost:5432/baleen"
     redis_url: str = "redis://localhost:6379/0"
     cors_origins: str = "http://localhost:5173"
+    # bge-large-zh-v1.5 的本地 HF cache 路径(AGENTS.md §6:.env.example 有,代码不许硬编码绝对路径)
+    embedding_model_path: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

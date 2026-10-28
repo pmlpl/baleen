@@ -26,7 +26,7 @@
 | **A 环境骨架** | ZCode | ✅ 已验收 | `docker-compose.yml`、`backend/` 骨架、`frontend/` 骨架 |
 | **B 解析 ADR + G0 模块** | ZCode | 🟡 结构验收通过（未跑其测试、未读其逻辑） | `docs/adr/0002`、`backend/app/service/parse/` 8 文件、`tests/` + fixtures、`scripts/parse_smoke.py` |
 | **C 评测脚手架** | Trae | ✅ 已验收（`stratified-v2`） | `eval/DELIVERY.md`、`make_split.py`、`_common.py`、`report.md` |
-| **D 数据模型** | ZCode | ⬜ 待开工 | 本期任务，见 §2 |
+| **D 数据模型** | ZCode | ✅ 已验收（人家独立复跑确认） | `app/models/` 8 文件、`0002_data_model.py`、`repo/base.py`、`config.py` 补字段；**pytest 15 passed**、DB 实建 6 表、`halfvec(1024)`、pgvector 0.8.7 |
 
 **文档现状**：`docs/adr/` 有 `0001-architecture-baseline` / `0002-parsing-stack` / `0003-data-model`，编号连续。
 
@@ -41,43 +41,22 @@
 
 ## 2. 待处理
 
-### 给 ZCode（线 B：数据模型落地）
+**本期暂无新任务。** 数据模型（线 D）已交付并验收，见 §1。
 
-```
-开工先按顺序读三份文档：
-1. baleen/AGENTS.md                              → §3 硬约束、§5 决策、§6 环境事实
-2. baleen/docs/adr/0003-data-model.md            → 本任务的完整规格（6 张表 DDL + 索引）
-3. baleen/docs/adr/0001-architecture-baseline.md → 决策 1/11/12 的背景，可略读
+### 等人类拍板才能开工的一项
 
-任务：落地数据模型。**只动 baleen/backend/**。
+ZCode 提了一个问题，**必须主人定**：
 
-交付 4 样：
-
-1. SQLAlchemy 2.x 模型（app/models/）：sources / review_runs / notes / chunks / embeddings / jobs
-   字段与类型严格照 ADR 0003 §2，不许自行增删列。
-
-2. Alembic 迁移（alembic/versions/0002_*.py，挂在 0001_baseline 之后）：
-   - op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-   - op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-   - 6 张表
-   - ADR 0003 §5 的全部索引（含 chunks 的 trgm GIN、embeddings 的 HNSW halfvec_cosine_ops）
-   - CHECK 约束：枚举列一律用 TEXT + CHECK（不用 PG 原生 ENUM）；
-     chunks 要保证 (parent_id IS NULL) = is_parent
-
-3. app/repo/base.py：Repo(owner_id) 薄封装骨架 —— 以后所有查询的唯一入口
-
-4. app/core/config.py 补 embedding_model_path 字段
-   （.env.example 里已经有这个变量，代码一直没读它，这次一起补上）
-
-不要做：不加 API 端点、不写业务逻辑、不做切块、不动 eval/、不动 eval/samples。
-
-自测（三样都要贴原始输出到 DELIVERY.md）：
-- uv run alembic upgrade head
-- docker compose exec db psql -U baleen -d baleen -c "SELECT extversion FROM pg_extension WHERE extname='vector';"
-- docker compose exec db psql -U baleen -d baleen -c "\d+ chunks"
-
-交付写到 baleen/backend/DELIVERY.md（上次漏了这个文件，这次必须写）。
-```
+> 现在的 `embeddings.vec` 用的是自定义 `HalfVec(UserDefinedType)` —— 建表和索引都正常，
+> 但它**没有 bind/result processor**，真正插入向量值时会出问题。
+>
+> **两个选项**：
+> - **A. `uv add pgvector`**（官方包，纯 Python、几十 KB）→ 用它的 `HALFVEC` 类型，一步到位
+> - **B. 自己给 `HalfVec` 补 bind/result processor** → 零新依赖，但要手写 half 精度转换（容易错）
+>
+> 人家建议 **A**：这是数据库扩展的薄适配层，不是框架；且手写序列化是自找 bug。
+>
+> **决定了写在这里，然后开「切块 + 向量化」任务时一起做。**
 
 ---
 
@@ -143,6 +122,7 @@
 | 2026-10-28 | Trae 线 C（阶段 1-2） | 纪律好：做到阶段 1 就停；发现数据不一致**没有擅自改**，主动上报 |
 | 2026-10-28 | Trae 线 C（阶段 3） | `report.md` 合格：10 节结构、误拒率/误丢率置顶、非法组合单列。**但 test 集 split 未分层**（槽 6/9/11/12/13/14 全在 dev，partial 0 条）→ 已要求重做，`stratified-v2` 已修复 |
 | 2026-10-28 | Trae 线 C（`stratified-v2`） | 14 个槽位在 test 各 ≥1、配对样本同 split、代码去重（1197 行）、主动列 3 条已知限制。**遗留**：槽 7 分层仍未细到 (槽位, 判定) 粒度，误拒率 0% 是假象 |
+| 2026-10-28 | ZCode 线 D（数据模型） | **合格**。ADR 0003 的 6 张表全部落地、`halfvec(1024)` + HNSW + trgm GIN、CHECK 约束齐全；人家独立复跑确认 `pytest 15 passed`、DB 实建 6 表、pgvector 0.8.7。**加分**：主动补上了上次遗留的 G0 功能验证（`pytest tests/service/parse` 15 passed；smoke 35 文件 → ok=21 / no_text_expected=9 / unsupported_format=5 / error=0）。**遗留决策**：`embeddings.vec` 的写入需要 pgvector 包或补 bind processor，见 §2 |
 
 ---
 
