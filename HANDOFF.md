@@ -163,6 +163,46 @@
 
 ---
 
+## 3.1 临时资源清理（起过服务器就必须自查）
+
+**背景（真实事故）**：2026-10-28 凌晨 02:23，一条临时 healthz 测试命令遗留了 uvicorn，
+一直占到 **当天 19:xx（约 17 小时）**，锁住 8123 端口，还导致 **Git 无法升级**
+（`bash.exe` 占着 Git 的二进制）。根因是 `kill $UVPID` 只杀了外层 wrapper。
+
+### 规则
+
+**① 优先用 in-process 测试，压根不起服务器**
+
+测 HTTP 端点用 `starlette.testclient.TestClient(app)` —— 不占端口、不起进程、跑完自动结束。
+不需要 uvicorn，不需要 curl，不会有孤儿。
+
+**② 真需要起服务器时（只有测"真实网络链路"才需要）**
+
+```powershell
+# 起
+$p = Start-Process -FilePath "uv" -ArgumentList "run","uvicorn","app.main:app","--port","8123" -PassThru -WindowStyle Hidden
+try {
+    # 轮询等就绪（别用固定 sleep）
+    for ($i=0; $i -lt 30; $i++) { try { Invoke-WebRequest "http://127.0.0.1:8123/healthz" -TimeoutSec 1 | Out-Null; break } catch { Start-Sleep -Milliseconds 300 } }
+    # …测试…
+} finally {
+    # ★ 必须 /T 连子树：uv → uvicorn.exe → python.exe，只杀外层会留孤儿
+    & taskkill /PID $p.Id /T /F 2>$null
+}
+```
+
+**③ 交付前自查（把输出贴进 DELIVERY）**
+
+```powershell
+Get-NetTCPConnection -LocalPort 8123 -State Listen   # 必须为空
+Get-CimInstance Win32_Process -Filter "Name='uvicorn.exe'"   # 必须为空
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match 'baleen' }           # 必须为空
+```
+
+**④ 任何情况下都不许 `kill` 了事** —— Windows 上必须 `taskkill /T /F`。
+
+---
 ## 4. 交付写在哪
 
 做完后，**追加**到你目录下的 `DELIVERY.md`（没有就建），格式：
