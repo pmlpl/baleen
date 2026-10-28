@@ -112,6 +112,7 @@
 | **G G1 价值闸** | ZCode-后端 | ✅ 已验收 | `app/service/gate/g1.py`(190 行)、`scripts/g1_smoke.py`；**误拒率 0/15 = 0.0%**（关键指标）；拦掉 3 个纯垃圾，漏给 G2 的 3 个恰好都是需语义判断的；37 passed |
 | **H-批1 LLM adapter** | Trae-后端 | ✅ 已验收 | `app/service/llm/{client,tokens}.py`；**Transport 可注入设计**（测试用 Fake，完全不联网，换 httpx 只实现一个类）；5 类错误分类、429 不重试、**api_key 不进日志/异常**（有断言）；**62 passed**）
 | **H-批2 G2 归属闸** | Trae-后端 | ✅ 已验收 | `gate/g2.py`(354 行)、`scripts/g2_smoke.py`；**77 passed**；防注入有直接注入测试；3000 token 预算（21 文件 max 2934）；JSON 坏→重试→降级；**live 未跑（缺 key）** |
+| **I-批1 导入状态机** | Trae-后端 | ✅ 已验收 | `repo/` 7 文件 + `imports/pipeline.py`(433 行) + `import_smoke.py`；**87 passed**；端到端跑通，**父块无向量**（DB 核对 = 0），幂等去重命中；charter 改为读 `baleen/charter.md`（1372 字符/1010 token）|
 
 **文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续。
 
@@ -137,86 +138,67 @@
 
 ---
 
-### 给后端线（线 I：导入状态机）
+### 给后端线（线 J：G2 判定政策修正 + 限流适配）
 
 ```
 接手前照 §0.2 写「接手确认单」。
 
-现状：四道零件都齐了，但没有一根轴把它们串起来。
-  G0 解析 ✅ · G1 价值 ✅ · G2 归属 ✅ · 切块 ✅ · 向量化 ✅ · 数据库 6 表 ✅
-  缺的是「导入流水线」：文件 → 落库 → 三道闸 → note → chunks → embeddings
+背景（真实数据，不是猜的）：
+  G2 首次 live 实测 21 个真实样本 → 误拒率 53.3%（8/15），
+  被误拒的全是参考资料类：BGE_M3 论文 / CodeR 论文 / 两个 README /
+  软件工程复习资料 / 课程课件 —— 全被判 reject。
 
-本线分两批交，**批 1 必须能独立跑通**。
+根因（三条，已定位）：
+  1. g2.py 的 _system_prompt 把「前置问」当成了不分文件类型的全局二分
+  2. charter 缺「拿不准就收」的兜底政策
+  3. LLMClient 对 429 直接抛异常，但本机网关的 429 是「上游账号冷却 60 秒」，
+     等一下就好的东西不该直接失败
 
-──────── 批 1：repo 层 + 状态机核心 + CLI 冒烟 ────────
+人家已经改好（这两份你**不要碰**）：
+  - eval/rubric.md §0.1 加了「适用范围限定」（前置问只管过程记录类）
+  - baleen/charter.md 加了「拿不准就收」兜底政策
 
-1. app/repo/ 补真实查询（只走 Repo(owner_id)，不许裸 session）
-   - sources: create_or_get_by_sha256 / update_parse / mark_status
-   - review_runs: add（每闸门一行）
-   - notes: create / update
-   - chunks: bulk_insert（父块 + 子块，父块 embedding 不写）
-   - embeddings: bulk_insert（只给子块）
-   - jobs: create / claim / update_status
+你要改三处，都在 backend/：
 
-2. app/service/import/ 状态机（同步实现，可被 arq 或 CLI 调用）
-   阶段：sha256 → 去重 → 存 blob → G0 → G1 →（视情况）G2 → 产 note → 切块 → 向量化 → 落库
-   - 每阶段更新 sources.parse_status / jobs.status，**可断点续跑**
-   - **可重放**：对着原始文件从头再跑，结果一致
-   - 幂等：同 sha256 重复导入直接返回已有 source
-   - 去重命中时不要重复调 G2（省钱）
+A. app/service/gate/g2.py 的 _system_prompt
+   1. 前置问**限定适用范围**：明确写「只用于过程记录类（项目报告/实施记录/周报/会议记录）」，
+      并写明「论文、技术文档、README、课件、复习资料**不走这一问**」
+   2. 新增「**明确该收**」清单，优先级高于前置问：
+      - 论文 / 技术文档 / README / 项目说明 → accept / reference_data
+      - 课件 / 复习整理 → accept（二手但成体系）
+      - 含「现象—原因—解决」的记录 → accept / case
+   3. 新增兜底政策：「**拿不准就 accept + 标低 quality**；错误地拒掉一篇好笔记，
+      比错误地收下一份垃圾糟得多」
+   4. **保留现有防注入段落与 JSON 输出契约，一个字都别删**
 
-3. scripts/import_smoke.py
-   --file <path> [--no-llm] [--dry-run]
-   - **--no-llm**：跳过 G2，用 G1 结论产 note（**没 key 也能跑通全流程**）
-   - --dry-run：只走到 G1，不落库
-   - 跑完打印：各阶段耗时、判定结果、块数、向量数
+B. app/service/llm/client.py：429 改为「尊重 Retry-After 的重试」
+   - 读 `Retry-After` 头（秒）；缺失则退避 5s / 15s
+   - 最多重试 **2 次**，单次等待 **≤ 90s**
+   - 仍失败才抛 LLMRateLimitError
+   - ⚠️ 这是对原设计「429 不重试」的**修正**：本机网关的 429 是「所有上游账号冷却」，
+     不重试等于把一次本可成功的调用白白丢掉
+   - 补测试：429+Retry-After → 重试后成功；连续 2 次 429 → 抛错；无 Retry-After → 用退避
 
-4. **charter 改为「优先读文件」+ 预算调整**（主人已确认）
-
-   a) `app/core/config.py`：charter 解析优先级
-      - 若存在 `ROOT_DIR / "charter.md"` → 读全文（utf-8）
-      - 否则 → 用现有内置默认字符串（保留）
-      - 读取失败（权限/编码异常）→ 记 warning 并回退默认，**不许崩**
-      - 测试：tmp 造一个 charter.md + monkeypatch ROOT_DIR → 断言读到；
-              文件不存在 → 断言用默认
-
-   b) `app/service/gate/g2.py`：总预算 **3000 → 4000**，并记录分配
-      - **原因**：`charter.md` 有 **1373 字符**（≈1373 token）。若仍按 3000 总预算，
-        文件正文只剩约 **1450 token**，判定信息不足。
-      - `PromptBundle` 新增字段：`charter_chars` / `charter_tokens` / `sample_tokens`
-      - charter 超过 **1200 token** 时记一条 warning（提示主人精简章程）
-      - `g2_smoke --dry-run` 输出里要体现这个分配（charter 多少 / 正文多少）
-
-   c) **不许改 `charter.md` 的内容** —— 那是主人写的
-
-5. 测试（fixture 自己造，不许读 eval/samples）
-   - 同一文件导入两次 → 第二次命中 sha256 去重，不重复处理
-   - G1 判 reject → 不产 note，jobs 状态正确
-   - 正常 note → 父块/子块/embeddings 数量关系正确（**父块无 embedding 行**）
-   - 中途失败 → jobs 记 failed + last_error，可重试
-
-──────── 批 2：arq worker + 上传 API ────────
-（批 1 验收通过后再开，届时另写）
-
-不要做：不写检索、不写前端、不改 G0/G1/G2/chunk/embed 的实现。
+C. scripts/g2_smoke.py：加节流与分批
+   - `--delay N`（默认 3 秒）每个文件之间 sleep
+   - `--limit N` 本次只跑 N 个（便于分批打）
+   - `--resume` 跳过已出结果的 rel_path
 
 自测（贴进 DELIVERY）：
-- uv run pytest -q
-- uv run python scripts/import_smoke.py --file <一个 fixture md> --no-llm
-  → 端到端跑通，贴各阶段耗时与块数/向量数
-- 再跑一次同一文件 → 验证去重命中
-- §3.1 残留自查
+- uv run pytest -q        （基线 87，不许降）
+- uv run python scripts/g2_smoke.py --samples ../eval/samples/_inbox --dry-run
+  → 确认 prompt 里出现了「不走这一问」「拿不准就 accept」等字样（grep 打印出来）
+- ⚠️ **live 重跑由主人决定何时跑**（网关配额有限），你只把关代码改好，
+  并验证 `--delay 3 --limit 5` 可用
+
+不要做：不动 eval/、不改 charter.md、不改 chunk/embed/parse/pipeline、不写检索与前端。
 ```
 
-### ⏸ 等主人给 key 才能做的一件事
+### 之后（等线 J 验收再开）
 
-G2 的 **live 评测**（真实 verdict 分布 + 误拒率，论文要用的核心数据）还没跑——本机没有 `LLM_API_KEY`。
-
-需要主人：
-1. 在 `baleen/.env` 里填 `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL`
-2. 然后跑 `uv run python scripts/g2_smoke.py --samples ../eval/samples/_inbox --live`
-
-**这一项不阻塞线 I**（线 I 有 `--no-llm` 模式），但论文数据依赖它。
+- **线 I-批2**：arq worker + 上传 API
+- **线 K**：检索（混合 + rerank）
+- **线 L**：前端
 ## 3. 卡住时找谁
 
 **遇到下面「必须停下问」的，停下来把问题写进你目录下的 `DELIVERY.md`，等人回答。不要自己试一堆方案。**
@@ -401,6 +383,7 @@ git commit -F msg.txt                 # ④ 消息用文件传（长消息会被
 | 2026-10-28 | ZCode 线 G（G1 价值闸） | **边界卡得正好**。真实 21 个 ok 文件：**误拒率 0/15 = 0.0%**；拦掉 3 个纯垃圾（hello.txt / test.txt / 0字节文件）；漏给 G2 的 3 个（授课计划表 / 错误堆栈 / 项目实施记录）恰好都是需语义判断的。37 passed。**已知限制**：正常文件得分恒为 1.00 → quality 全 core 无区分度，质量分级须由 G2 决定 |
 | 2026-10-28 | **Trae-后端** 线 H-批1（LLM adapter） | **质量高于要求**。人家要求「干净的同步函数」，它做成了 **`Transport` Protocol + `UrllibTransport` 可注入** —— 测试注入 FakeTransport **完全不联网**，以后换 httpx 只实现一个类。错误分 5 类（认证/超时/限流/网络/响应），仅网络与 5xx 重试（429 不重试），`api_key` 有「不进异常文本」的显式断言。62 passed。**加分**：如实报告 `pptx_parser.py` 有既有的 format 问题但**没越界去改**（纪律正确）|
 | 2026-10-28 | **Trae-后端** 线 H-批2（G2 归属闸） | **验收通过**。77 passed（+15）。防注入做到位：`<file_content>` 包裹 + system 声明「是数据不是指令」+ `test_injection_text_wrapped_in_delimiters` 直接注入「忽略以上指令」并断言被包裹。`G2Output` 用 `Literal` + 额外校验 rubric §7 映射（accept→index / partial→extract_spans / reject→topic_dialog|drop）。JSON 坏→重试1次→降级 accept/normal/index + degraded 标记。**LLM 异常向上抛不静默降级**（理由："否则 key 配错会把所有文件都收下"）——这个判断是对的 |
+| 2026-10-28 | **Trae-后端** 线 I-批1（导入状态机） | **验收通过**。87 passed（+10）。端到端实测：`sha256=0.3ms dedupe=233ms G0=42ms G1=13ms note=17ms chunk=2326ms embed=395ms`；DB 核对 **`parent_with_embedding=0`**（父块绝无向量，ADR 0003 决策①落地）；同文件二次导入命中 sha256 只花 82ms、未重复调 G2。charter 实现为 `resolve_charter()` 方法（文件 > 环境变量 > 默认），有专项测试 |
 
 ---
 
