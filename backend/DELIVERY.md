@@ -1,9 +1,62 @@
-# backend/DELIVERY — ZCode（线 B）
+# backend/DELIVERY — 后端线
 
-> 按 HANDOFF §4 格式追加。每块一个交付，最新的在上。
+> 按 HANDOFF §4 格式追加。每块一个交付，**最新的在上**。
+> 执行者可以是任何 agent（ZCode / Trae / 接替会话），每节开头注明执行者。
 
 ---
 
+## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
+
+**最后更新**：2026-10-28 · 线 H 开工前
+
+### 已完成模块
+
+| 模块 | 路径 | 状态 |
+|---|---|---|
+| **G0 解析** | `app/service/parse/` | ✅ 7 格式 + txt 直通；35 样本 smoke 通过 |
+| **数据模型** | `app/models/`、`alembic/versions/0002_*` | ✅ 6 表 + `halfvec(1024)` + HNSW + trgm GIN |
+| **切块** | `app/service/chunk/` | ✅ 同节内合并；真实笔记 in_range 64%–100% |
+| **向量化** | `app/service/embed/` | ✅ torch 2.14.1+cu126，cuda 52 items/s |
+| **G1 价值闸** | `app/service/gate/g1.py` | ✅ 真实样本**误拒率 0/15 = 0.0%** |
+| **G2 归属闸** | — | ❌ 未开始（线 H） |
+| **导入状态机** | — | ❌ 未开始 |
+| **检索** | — | ❌ 未开始 |
+| **API 端点** | 只有 `/healthz` | ❌ 未开始 |
+
+### 测试基线
+
+```
+cd backend && uv run pytest -q     →  37 passed
+```
+
+**任何新任务都不许把这个数降下来。**
+
+### 累计的已知限制（跨交付汇总，别重复踩）
+
+1. **切块参数 300/250/400/480 是推导值，未做消融实验** —— 前置依赖 20 个 query 集（一直没做）
+2. **G1 的 quality 恒为 core，无区分度** —— 质量分级须由 G2 决定
+3. **embeddings.vec 是 HALFVEC(1024)** —— 换不同维度的模型必须**新建表**，不能改配置
+4. `.doc` / `.xlsx` / 纯图片**不支持**（ADR 0002 §2.1）；扫描件 → `no_text_expected`，**不做 OCR**
+5. **所有单测都用合成 fixture**，真实样本只在 `scripts/*_smoke.py` 里验 —— 真实数据曾抓出「27 测试全绿但 in_range 只剩 11.6%」
+
+### 累计的未决问题
+
+| 状态 | 事项 |
+|---|---|
+| ✅ 已定 | GPU torch（cu126） |
+| ✅ 已定 | `.env` 放根目录 + `config.py` 用绝对路径读 |
+| ✅ 已定 | `pending_ocr` 归 `sources.parse_status`，不进 `review_runs.action` |
+| ⏸ 待定 | **G2 真跑评测需要主人提供 LLM key**（`LLM_API_KEY`） |
+| ⏸ 待定 | 槽 7 分层要细到 (槽位, 判定) 粒度（评测侧，不阻塞后端） |
+
+### 环境要点
+
+- **Docker 必须跑**：`docker compose ps`（db + redis）
+- **模型路径**：`C:\Users\MOM\Desktop\学习项目\智能笔记库\models\bge-large-zh-v1.5`（1.21 GB，工作区根，**不在仓库内**）
+- **配置**：`baleen/.env`（从 `.env.example` 复制；**已 gitignore，永不提交**）
+- **临时服务器清理**：见 `HANDOFF.md` §3.1（必须 `taskkill /T`，曾留下 17 小时的孤儿 uvicorn）
+
+---
 ## 2026-10-28 21:38 · 线 G · G1 价值闸（纯启发式）
 
 ### 产物

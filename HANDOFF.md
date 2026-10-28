@@ -91,7 +91,9 @@
 ### 给后端线（线 H：LLM adapter + G2 归属闸）｜执行者不限：谁接谁上
 
 ```
-先读：
+先读（按此顺序，别跳）：
+0. baleen/backend/DELIVERY.md 顶部的「📌 当前状态速览」
+   → 后端已经有哪些模块、测试基线多少、累计踩过哪些坑、什么还没做。**这一节能省你半小时。**
 1. baleen/AGENTS.md §5 决策 6/7/9/10（三闸分工、G2 判"可复用知识"、OpenAI 兼容 adapter）
 2. baleen/eval/rubric.md（这是判定口径的唯一来源，尤其 §0.1「复述规则 vs 自己想明白」和 §7.1 四个 action）
 3. baleen/app/service/gate/g1.py 与 app/service/parse/types.py
