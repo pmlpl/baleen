@@ -171,7 +171,25 @@
    - --dry-run：只走到 G1，不落库
    - 跑完打印：各阶段耗时、判定结果、块数、向量数
 
-4. 测试（fixture 自己造，不许读 eval/samples）
+4. **charter 改为「优先读文件」+ 预算调整**（主人已确认）
+
+   a) `app/core/config.py`：charter 解析优先级
+      - 若存在 `ROOT_DIR / "charter.md"` → 读全文（utf-8）
+      - 否则 → 用现有内置默认字符串（保留）
+      - 读取失败（权限/编码异常）→ 记 warning 并回退默认，**不许崩**
+      - 测试：tmp 造一个 charter.md + monkeypatch ROOT_DIR → 断言读到；
+              文件不存在 → 断言用默认
+
+   b) `app/service/gate/g2.py`：总预算 **3000 → 4000**，并记录分配
+      - **原因**：`charter.md` 有 **1373 字符**（≈1373 token）。若仍按 3000 总预算，
+        文件正文只剩约 **1450 token**，判定信息不足。
+      - `PromptBundle` 新增字段：`charter_chars` / `charter_tokens` / `sample_tokens`
+      - charter 超过 **1200 token** 时记一条 warning（提示主人精简章程）
+      - `g2_smoke --dry-run` 输出里要体现这个分配（charter 多少 / 正文多少）
+
+   c) **不许改 `charter.md` 的内容** —— 那是主人写的
+
+5. 测试（fixture 自己造，不许读 eval/samples）
    - 同一文件导入两次 → 第二次命中 sha256 去重，不重复处理
    - G1 判 reject → 不产 note，jobs 状态正确
    - 正常 note → 父块/子块/embeddings 数量关系正确（**父块无 embedding 行**）
