@@ -58,6 +58,7 @@
 | **C 评测脚手架** | Trae | ✅ 已验收（`stratified-v2`） | `eval/DELIVERY.md`、`make_split.py`、`_common.py`、`report.md` |
 | **D 数据模型** | ZCode | ✅ 已验收（人家独立复跑确认） | `app/models/` 8 文件、`0002_data_model.py`、`repo/base.py`、`config.py` 补字段；**pytest 15 passed**、DB 实建 6 表、`halfvec(1024)`、pgvector 0.8.7 |
 | **E 切块 + 向量化** | ZCode-后端 | ✅ 已验收（含 E-2 修复，人家用真实笔记复跑） | `app/service/chunk/`(601 行)、`app/service/embed/`、`scripts/chunk_smoke.py`；**29 passed**；真实笔记 in_range 11.6%→**64.4%**、缺陷反馈 0%→**100%**、over_limit/truncated 仍为 **0**；torch 2.14.1+cu126 @cuda 52 items/s |
+| **F `.env` 加载** | ZCode-后端 | ✅ 已验收 | `config.py` 改绝对路径读根 `.env`；从任意 cwd 都能读到；**31 passed**（新增 `tests/test_config.py`）|
 
 **文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续。
 
@@ -83,45 +84,59 @@
 
 ---
 
-### 给 ZCode-后端（线 F：修 `.env` 加载路径）
+### 给 ZCode-后端（线 G：G1 价值闸）
 
 ```
-先读 baleen/AGENTS.md §3 硬约束（尤其是第 3 条：不许创建/修改 .env）与 §6 环境事实。
+先读：
+1. baleen/AGENTS.md §5 决策 5/6/8（三闸分工、单用户默认收）
+2. baleen/eval/rubric.md §2.1 三档判据（这是判定口径的来源）
+3. baleen/app/service/parse/types.py（ParseResult 的形状）
 
-背景：主人在 baleen/.env 建了文件，但后端读不到。
-  实测：从 backend/ 加载 Settings → embedding_model_path = ''（空）
-  原因：config.py 用 env_file=".env"，按【当前工作目录】解析，
-        从 backend/ 启动时找的是 backend/.env，而 .env 在仓库根 baleen/。
+背景：主干还缺两道判定闸门。**先做 G1**（纯启发式、零成本、不联网、不调 LLM），
+它负责拦掉「明确无价值」的垃圾，模棱两可的一律放过交给 G2。
 
-已拍板方案 A（只保留根 .env，与 docker compose 共用一份）：
+⚠️ 最重要的约束（AGENTS.md 决策 8）：单用户场景下【误拒代价 ≫ 误收代价】。
+   → G1 只拦「明确垃圾」，**绝不因为"短/看不懂/没小标题"就 reject**。
 
 任务（只动 baleen/backend/）：
 
-1. app/core/config.py 改成绝对路径读：
+1. app/service/gate/g1.py：judge(parse_result, ...) -> GateResult
+   输出字段与 review_runs 表对齐：
+     gate="G1", verdict(accept|reject), quality, score, action(index|drop), reasons[]
 
-     BASE_DIR = Path(__file__).resolve().parents[2]   # → backend/
-     ROOT_DIR = BASE_DIR.parent                        # → baleen/
-     model_config = SettingsConfigDict(
-         env_file=(ROOT_DIR / ".env", BASE_DIR / ".env"),   # 后者覆盖前者
-         env_file_encoding="utf-8",
-         extra="ignore",
-     )
+2. 打分信号（**每个信号都要能单独解释，落进 reasons**）：
+   - 空/极短：去空白后 < 30 字符 → 直接 junk
+   - 样板词命中：hello world / lorem ipsum / 这是一个测试 / 无标题 / 草稿 / test file → 直接 junk
+   - 零结构：无标题、无列表、无表格、无代码块、且段落数 <= 1 → 强减分
+   - 低信息密度：字符熵偏低 / 词型-词例比偏低 → 减分
+   - 自我重复：全篇 shingle 重复率过高（同一句反复）→ 减分
+   - 中文占比：**只记录，不参与判定**（避免误伤英文论文）
 
-   顺序是刻意的：根 .env 先读，backend/.env（若存在）覆盖它 —— 便于本地临时调试。
+3. 判定规则：
+   - 命中「直接 junk」→ reject / junk / drop
+   - 综合得分低于阈值 → reject / junk / drop
+   - 其余 **一律 accept**，按得分标 core / normal / reference
 
-2. 加一条测试（放 tests/test_config.py）：
-   - **绝对不许碰真的 baleen/.env**（硬约束 3）
-   - 用 monkeypatch + tmp_path 造一个临时 .env，monkeypatch 掉 ROOT_DIR 常量，
-     再 get_settings.cache_clear()，断言能读到临时文件里的值
-   - 另加一条：断言 ROOT_DIR 解析出来的路径是绝对的、且父目录里有 .env.example
+4. 阈值全部写成模块级常量，并加注释：
+   「推导值，待 eval/labels.csv 的 35 条人工标注校准」
 
-不要做：不创建/修改真的 `.env`、不改 `.env.example` 里的值、不动其他配置项、不动 eval/。
+5. 单测（合成 fixture，**不许把 eval/samples 硬编码进测试**）：
+   - "hello, world!" → reject / junk
+   - 0 字节空文件 → reject / junk
+   - "这是一个测试文件" 单行 → reject / junk
+   - 613 行正常笔记 → accept
+   - **3 行但有真实信息的 txt → 必须 accept**（这是关键反例，不许 reject）
 
-验收（贴进 DELIVERY）：
-- 在 backend/ 目录下执行 `uv run python -c "from app.core.config import get_settings as g; print(repr(g().embedding_model_path))"`
-  → 输出应是模型绝对路径，不是 ''
-  （前提：主人已按 .env.example 填好根 .env；若未填，如实说明并贴出提示）
-- `uv run pytest -q` 全绿
+不要做：不接 LLM、不写 G2、不碰数据库、不动 eval/、不改切块与解析。
+
+自测（贴进 DELIVERY）：
+- uv run pytest tests/service/gate -q
+- 新增 scripts/g1_smoke.py --samples <路径>（缺目录就 skip），跑 eval/samples/_inbox 的 35 个样本，
+  产出三张表：
+    a) G1 判定分布
+    b) 与 eval/labels.csv 的 human_verdict 对照的混淆矩阵
+    c) G1 单独的误拒率（human accept/partial 中被 G1 判 reject 的比例）← 这个数论文要用
+  ⚠️ 只读 eval/，一个字节都不许改
 ```
 ## 3. 卡住时找谁
 
@@ -188,6 +203,7 @@
 | 2026-10-28 | ZCode 线 D（数据模型） | **合格**。ADR 0003 的 6 张表全部落地、`halfvec(1024)` + HNSW + trgm GIN、CHECK 约束齐全；人家独立复跑确认 `pytest 15 passed`、DB 实建 6 表、pgvector 0.8.7。**加分**：主动补上了上次遗留的 G0 功能验证（`pytest tests/service/parse` 15 passed；smoke 35 文件 → ok=21 / no_text_expected=9 / unsupported_format=5 / error=0）。**遗留决策**：`embeddings.vec` 的写入需要 pgvector 包或补 bind processor，见 §2 |
 | 2026-10-28 | ZCode 线 E（切块+向量化） | **代码合格但设计有漏**。27 passed、`over_limit=0`/`truncated=0`、`HalfVec`→`HALFVEC` 已换、torch 2.14.1+cu126 上 cuda 52 items/s。**但真实笔记实测碎片化**：闭包.md 96 块/中位 79 token/`in_range` 11.6%。根因是 **ADR 0004 漏写"切完要合并"**（不是实现错误），§4.7 已补，修复任务见 §2 线 E-2。**教训：27 个测试全用合成 fixture，真实样本一个没进测试** |
 | 2026-10-28 | ZCode 线 E-2（切块碎片化） | **修复到位**。真实笔记复跑：闭包.md 96块/79tok/11.6% → **50块/191tok/64.4%**；缺陷反馈 0% → **100%**（口径修正生效）；实训报告 66.7% → 80%；`over_limit=0`/`truncated=0` 仍成立；29 passed。顺带把 594 行写死的 `480` 改成 `HARD_TOKEN_LIMIT` |
+| 2026-10-28 | ZCode 线 F（`.env` 加载） | **一次修对**。`config.py` 改 `BASE_DIR=parents[2]` / `ROOT_DIR=parent`，`env_file=(ROOT_DIR/".env", BASE_DIR/".env")`。人家实测：从 `backend/` 与从仓库根两种 cwd 都能读到模型路径且文件存在；31 passed（新增 2 条配置测试，用 `tmp_path` 不碰真 `.env`）|
 
 ---
 
