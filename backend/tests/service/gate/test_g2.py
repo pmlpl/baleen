@@ -22,9 +22,9 @@ from app.service.parse.blocks import heading, paragraph_from_text
 
 
 class FakeTransport:
-    """按顺序返回预置响应;异常项直接抛出。"""
+    """按顺序返回预置响应;异常项直接抛出。兼容 2 元组与 3 元组(带 headers)。"""
 
-    def __init__(self, responses: list[tuple[int, bytes] | BaseException]) -> None:
+    def __init__(self, responses: list[tuple | BaseException]) -> None:
         self._responses = list(responses)
         self.calls: list[dict] = []
 
@@ -33,6 +33,9 @@ class FakeTransport:
         item = self._responses.pop(0)
         if isinstance(item, BaseException):
             raise item
+        if len(item) == 2:
+            status, raw = item
+            return status, {}, raw
         return item
 
 

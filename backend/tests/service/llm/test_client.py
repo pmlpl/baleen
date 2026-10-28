@@ -23,9 +23,13 @@ from app.service.llm import (
 
 
 class FakeTransport:
-    """按顺序返回预置响应;异常项直接抛出。"""
+    """按顺序返回预置响应;异常项直接抛出。
 
-    def __init__(self, responses: list[tuple[int, bytes] | BaseException]) -> None:
+    响应项可写成 2 元组 ``(status, body)``(无响应头,兼容旧写法),
+    或 3 元组 ``(status, headers, body)``(测 Retry-After 等响应头)。
+    """
+
+    def __init__(self, responses: list[tuple | BaseException]) -> None:
         self._responses = list(responses)
         self.calls: list[dict] = []
 
@@ -36,6 +40,9 @@ class FakeTransport:
         item = self._responses.pop(0)
         if isinstance(item, BaseException):
             raise item
+        if len(item) == 2:
+            status, raw = item
+            return status, {}, raw
         return item
 
 
@@ -49,14 +56,16 @@ def _chat_body(content: str = "ok") -> bytes:
     ).encode()
 
 
-def _client(responses, **kwargs) -> tuple[LLMClient, FakeTransport]:
+def _client(
+    responses, *, sleeps: list[float] | None = None, **kwargs
+) -> tuple[LLMClient, FakeTransport]:
     transport = FakeTransport(responses)
     client = LLMClient(
         base_url="https://api.example.test/v1",
         api_key="sk-unit-test-SECRET",
         model="fake-model",
         transport=transport,
-        sleep=lambda _s: None,
+        sleep=sleeps.append if sleeps is not None else (lambda _s: None),
         **kwargs,
     )
     return client, transport
@@ -96,11 +105,43 @@ class TestErrorClassification:
         assert "sk-unit-test-SECRET" not in str(ei.value)
         assert len(transport.calls) == 1  # 认证失败不重试
 
-    def test_rate_limit_not_retried(self):
-        client, transport = _client([(429, b"{}")])
-        with pytest.raises(LLMRateLimitError):
+    def test_rate_limit_retries_with_retry_after(self):
+        sleeps: list[float] = []
+        client, transport = _client(
+            [(429, {"Retry-After": "1"}, b"{}"), (200, {}, _chat_body("ok"))],
+            sleeps=sleeps,
+        )
+        assert client.chat([{"role": "user", "content": "x"}]).content == "ok"
+        assert len(transport.calls) == 2
+        assert sleeps == [1.0]
+
+    def test_rate_limit_without_retry_after_uses_backoff(self):
+        sleeps: list[float] = []
+        client, transport = _client(
+            [(429, b"{}"), (429, b"{}"), (200, _chat_body("recovered"))],
+            sleeps=sleeps,
+        )
+        assert client.chat([{"role": "user", "content": "x"}]).content == "recovered"
+        assert len(transport.calls) == 3
+        assert sleeps == [5.0, 15.0]
+
+    def test_rate_limit_exhausted(self):
+        sleeps: list[float] = []
+        client, transport = _client([(429, b"{}")] * 3, sleeps=sleeps)
+        with pytest.raises(LLMRateLimitError) as ei:
             client.chat([{"role": "user", "content": "x"}])
-        assert len(transport.calls) == 1
+        assert ei.value.status_code == 429
+        assert len(transport.calls) == 3  # 1 次 + 重试 2 次
+        assert sleeps == [5.0, 15.0]
+
+    def test_rate_limit_retry_after_capped(self):
+        sleeps: list[float] = []
+        client, _ = _client(
+            [(429, {"Retry-After": "1000"}, b"{}"), (200, {}, _chat_body())],
+            sleeps=sleeps,
+        )
+        client.chat([{"role": "user", "content": "x"}])
+        assert sleeps == [90.0]  # 单次等待不超过 90s
 
     def test_other_4xx_not_retried(self):
         client, transport = _client([(400, b'{"error":"bad request"}')])

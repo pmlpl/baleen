@@ -24,10 +24,13 @@ from pydantic import BaseModel, Field
 from app.core.config import Settings, get_settings
 
 DEFAULT_TIMEOUT = 60.0  # 秒
-DEFAULT_MAX_RETRIES = 2  # 仅网络/5xx;总尝试次数 = 1 + 该值
+DEFAULT_MAX_RETRIES = 2  # 仅网络/5xx/429;总尝试次数 = 1 + 该值
 DEFAULT_MAX_TOKENS = 800
 # 重试退避基准(秒),按 0.5 / 1.0 递增;测试注入 no-op sleep
 RETRY_BACKOFF = 0.5
+# 429 的退避:优先读 Retry-After,缺失时按 5s / 15s(本机网关「上游账号冷却 60 秒」)
+RATE_LIMIT_BACKOFF = (5.0, 15.0)
+MAX_RATE_LIMIT_WAIT = 90.0  # 单次等待上限,避免一个请求挂太久
 
 
 # ---- 错误分类(调用方按类型决定:重试 / 提示用户 / 降级)----
@@ -48,7 +51,7 @@ class LLMTimeoutError(LLMError):
 
 
 class LLMRateLimitError(LLMError):
-    """429:限流。按任务书不重试。"""
+    """429:限流;尊重 Retry-After 重试 2 次后仍失败才抛。"""
 
 
 class LLMNetworkError(LLMError):
@@ -64,8 +67,8 @@ class Transport(Protocol):
 
     def request(
         self, method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float
-    ) -> tuple[int, bytes]:
-        """返回 (status_code, response_body);网络异常直接抛出。"""
+    ) -> tuple[int, dict[str, str], bytes]:
+        """返回 (status_code, response_headers, response_body);网络异常直接抛出。"""
         ...
 
 
@@ -74,13 +77,13 @@ class UrllibTransport:
 
     def request(
         self, method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float
-    ) -> tuple[int, bytes]:
+    ) -> tuple[int, dict[str, str], bytes]:
         req = urllib.request.Request(url, data=body, headers=headers, method=method)
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
-                return resp.status, resp.read()
+                return resp.status, dict(resp.headers.items()), resp.read()
         except urllib.error.HTTPError as exc:  # 4xx/5xx 也是合法响应,由上层分类
-            return exc.code, exc.read()
+            return exc.code, dict((exc.headers or {}).items()), exc.read()
 
 
 class ChatResult(BaseModel):
@@ -219,17 +222,19 @@ class LLMClient:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
 
-        last_error: LLMError | None = None
         for attempt in range(self.max_retries + 1):
-            if attempt:
-                self._sleep(RETRY_BACKOFF * attempt)
             try:
-                status, raw = self._transport.request(method, url, headers, body, self.timeout)
+                status, resp_headers, raw = self._transport.request(
+                    method, url, headers, body, self.timeout
+                )
             except (TimeoutError, urllib.error.URLError) as exc:
                 if isinstance(exc, TimeoutError) or isinstance(exc.reason, TimeoutError):
-                    last_error = LLMTimeoutError(f"请求超时({self.timeout:.0f}s):{exc}")
+                    error: LLMError = LLMTimeoutError(f"请求超时({self.timeout:.0f}s):{exc}")
                 else:
-                    last_error = LLMNetworkError(f"网络错误:{exc.reason}")
+                    error = LLMNetworkError(f"网络错误:{exc.reason}")
+                if attempt >= self.max_retries:
+                    raise error from exc
+                self._sleep(RETRY_BACKOFF * (attempt + 1))
                 continue
 
             if 200 <= status < 300:
@@ -239,17 +244,24 @@ class LLMClient:
                     f"认证失败(HTTP {status}):请检查 LLM_API_KEY", status_code=status
                 )
             if status == 429:
-                raise LLMRateLimitError("触发限流(HTTP 429):请稍后再试", status_code=status)
+                if attempt >= self.max_retries:
+                    raise LLMRateLimitError(
+                        f"触发限流(HTTP 429),已重试 {self.max_retries} 次仍失败",
+                        status_code=status,
+                    )
+                self._sleep(_retry_after_seconds(resp_headers, attempt))
+                continue
             if 500 <= status < 600:
-                last_error = LLMResponseError(
-                    f"服务端错误(HTTP {status}),已重试 {self.max_retries} 次仍失败",
-                    status_code=status,
-                )
+                if attempt >= self.max_retries:
+                    raise LLMResponseError(
+                        f"服务端错误(HTTP {status}),已重试 {self.max_retries} 次仍失败",
+                        status_code=status,
+                    )
+                self._sleep(RETRY_BACKOFF * (attempt + 1))
                 continue
             raise LLMResponseError(f"请求被拒绝(HTTP {status}):{_short(raw)}", status_code=status)
 
-        assert last_error is not None  # 循环至少执行一次且未 return → 必有错误
-        raise last_error
+        raise LLMError("请求重试次数耗尽")  # 理论不可达:每个分支都会 return 或 raise
 
     def _parse_chat(self, raw: bytes) -> ChatResult:
         try:
@@ -267,6 +279,17 @@ class LLMClient:
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
         )
+
+
+def _retry_after_seconds(headers: dict[str, str], attempt: int) -> float:
+    """429 的等待时长:优先 Retry-After(秒),缺失则退避 5s / 15s;单次上限 90s。"""
+    raw = headers.get("Retry-After") or headers.get("retry-after")
+    if raw:
+        try:
+            return max(0.0, min(float(raw), MAX_RATE_LIMIT_WAIT))
+        except (TypeError, ValueError):
+            pass  # HTTP-date 等非数字格式 → 退回固定退避
+    return RATE_LIMIT_BACKOFF[min(attempt, len(RATE_LIMIT_BACKOFF) - 1)]
 
 
 def _short(raw: bytes, limit: int = 200) -> str:
