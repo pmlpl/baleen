@@ -41,22 +41,24 @@
 
 ## 2. 待处理
 
-**本期暂无新任务。** 数据模型（线 D）已交付并验收，见 §1。
+**本期暂无已开工任务。** 数据模型（线 D）已交付并验收，见 §1。ADR 0004（切块规则）已写好。
 
-### 等人类拍板才能开工的一项
+### ✅ 已拍板
 
-ZCode 提了一个问题，**必须主人定**：
+| 决定 | 结论 | 日期 |
+|---|---|---|
+| `embeddings.vec` 写入方式 | **选 A：`uv add pgvector`**，用官方 `HALFVEC` 类型替换自定义 `HalfVec(UserDefinedType)` | 2026-10-28 |
 
-> 现在的 `embeddings.vec` 用的是自定义 `HalfVec(UserDefinedType)` —— 建表和索引都正常，
-> 但它**没有 bind/result processor**，真正插入向量值时会出问题。
->
-> **两个选项**：
-> - **A. `uv add pgvector`**（官方包，纯 Python、几十 KB）→ 用它的 `HALFVEC` 类型，一步到位
-> - **B. 自己给 `HalfVec` 补 bind/result processor** → 零新依赖，但要手写 half 精度转换（容易错）
->
-> 人家建议 **A**：这是数据库扩展的薄适配层，不是框架；且手写序列化是自找 bug。
->
-> **决定了写在这里，然后开「切块 + 向量化」任务时一起做。**
+### ⏸ 等拍板才能开工：向量化要用哪个推理栈
+
+`bge-large-zh-v1.5` 要跑起来必须选一条路。**实测现状**：`onnxruntime` ✅ 已在锁文件里（pymupdf 带进来的），`numpy` ✅ 已有，当前 `.venv` 是 **311 MB**。
+
+| 方案 | 增加体积 | 代价 |
+|---|---|---|
+| **A（推荐）** `torch`(CPU) + `sentence-transformers` | venv → 约 600 MB | 最省事，直接加载现有 HF cache 路径；与 asklaw 一致 |
+| **C** ONNX 版 bge + 已有 `onnxruntime` | venv 几乎不涨 | 但**得先拿到 ONNX 导出的模型**（要联网或先装 torch 转一次），断网前提有风险 |
+
+> 人家建议 **A**：多 300 MB 换来"一定能跑、跑法和文档一致"，对毕设值得。C 适合以后体积敏感时再做优化。
 
 ---
 
