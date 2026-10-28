@@ -1,0 +1,81 @@
+# ===========================================================
+# baleen · .gitignore
+# 原则：代码与文本进库，数据与大文件不进库
+# ===========================================================
+
+# ---------- 评测样本：真实文件，私人 + 体积大 ----------
+eval/samples/*
+!eval/samples/.gitkeep
+!eval/samples/_inbox
+eval/samples/_inbox/*
+!eval/samples/_inbox/.gitkeep
+
+# ⚠️ 以下文件【必须入库】，谁也别给它们加 ignore 规则：
+#   eval/labels.csv      人工标注（金标准，丢了要重标）
+#   eval/manifest.json   样本清单 + sha256 + 入选理由
+#   eval/rubric.md       标注指南
+#   eval/TASK.md         评测任务书
+#   eval/report.md       评测报告快照（论文引用）
+#   eval/scripts/*.py    评测脚本
+
+# ---------- 评测产物：可随时重跑生成 ----------
+eval/preds.csv
+eval/candidates.csv
+eval/*.tmp
+
+# ---------- Python ----------
+**/.venv/
+**/venv/
+**/__pycache__/
+**/*.py[cod]
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
+**/*.egg-info/
+**/build/
+
+# ---------- Node ----------
+**/node_modules/
+**/dist/
+**/.vite/
+**/.turbo/
+**/*.tsbuildinfo
+
+# ---------- 环境变量与密钥 ★ 最重要 ----------
+**/.env
+**/.env.*
+!**/.env.example
+*.pem
+*.key
+
+# ---------- 数据库与用户上传 ----------
+*.sqlite3
+*.db
+pgdata/
+storage/
+uploads/
+data/blobs/
+
+# ---------- 模型权重：GB 级二进制，永远不进仓库 ----------
+# 模型是「环境资产」不是「项目代码」。正确的引用方式是 .env 里的 EMBEDDING_MODEL_PATH，
+# 不是把权重塞进仓库。放进来一次，.git 历史里永久留存 1.2GB，再也瘦不下来。
+models/
+**/models/
+*.safetensors
+*.gguf
+*.onnx
+*.ckpt
+*.pt
+*.pth
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/*
+!.vscode/extensions.json
+.idea/
+Thumbs.db
+Desktop.ini
+
+# ---------- 日志与临时 ----------
+*.log
+tmp/
+temp/

@@ -1,0 +1,38 @@
+# baleen 本地依赖服务:PostgreSQL 17 + pgvector、Redis 7
+# 在 baleen/ 目录下执行:docker compose up -d
+# 无 .env 也能跑(下面 ${VAR:-默认值} 兜底);要改端口/密码,cp .env.example .env 后编辑
+
+services:
+  db:
+    # 官方 postgres:17 镜像不含 pgvector,这里用 pgvector 官方构建的 PostgreSQL 17
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-baleen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-baleen}
+      POSTGRES_DB: ${POSTGRES_DB:-baleen}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - baleen_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-baleen} -d ${POSTGRES_DB:-baleen}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - baleen_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  baleen_pg_data:
+  baleen_redis_data:

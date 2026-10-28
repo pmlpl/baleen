@@ -1,0 +1,36 @@
+﻿rel_path,filename,ext,char_count,slot,split,human_verdict,human_quality,human_note_type,human_value_score,human_is_partial,human_reason,human_valued_span,human_next_action
+_inbox/02-04-闭包.md,02-04-闭包.md,md,12539,1,dev,accept,core,concept,5,false,613行的JS闭包教程，有官方定义、形成条件、大白话解释和可运行代码示例，换个人直接能学会,,index
+_inbox/02-12-Fetch-Axios.md,02-12-Fetch-Axios.md,md,18613,1,dev,accept,core,concept,5,false,827行的Fetch/Axios完全指南，含大量可运行代码、常见坑点（fetch对4xx不抛异常）、拦截器、并发与取消请求，可直接当参考手册,,index
+_inbox/02-16-手写实战练习.md,02-16-手写实战练习.md,md,21797,1,dev,accept,core,concept,5,false,902行的面试手撕题集，数组去重等高频题各给多种解法并注明原理、优点与缺点，可直接当面试复习手册,,index
+_inbox/20260905_181535_a3e501ad.pdf,20260905_181535_a3e501ad.pdf,pdf,1,7,dev,reject,junk,other,1,false,扫描的增值税专用发票，与另两份发票扫描同源，单据内容不属知识,,drop
+_inbox/20260906_105322_839e8a44.pdf,20260906_105322_839e8a44.pdf,pdf,1,7,test,reject,junk,other,1,false,扫描的增值税专用发票，OCR能读出单据信息但属单据不属知识，扫描件不等于该收,,drop
+_inbox/20260919_150620_eb5e8db3.pdf,20260919_150620_eb5e8db3.pdf,pdf,1,12,test,reject,junk,other,1,false,与20260906_105322_839e8a44.pdf字节完全相同（sha256一致），仅文件名不同，属重复导入,,drop
+_inbox/23软件工程技术本2班考勤表（第8-10周）.xlsx,23软件工程技术本2班考勤表（第8-10周）.xlsx,xlsx,46340,4,dev,reject,junk,other,1,false,全班考勤表，内容是同学姓名学号与出勤标记，属个人数据且含他人隐私，无可复用知识,,drop
+_inbox/Agent应用开发学习指南.md,Agent应用开发学习指南.md,md,10395,1,test,accept,core,concept,5,false,按80/20原则组织的Agent开发五阶段指南，含传统程序与Agent的对比表、核心三要素与代码结构，结构完整可直接跟学,,index
+_inbox/BGE_M3.pdf,BGE_M3.pdf,pdf,61617,3,test,accept,reference,reference_data,5,false,BAAI的M3-Embedding原始论文，多语言多粒度长文本embedding，是本项目embedding选型的直接理论依据,,index
+_inbox/CodeR.pdf,CodeR.pdf,pdf,89160,3,dev,accept,reference,reference_data,4,false,同门的通用代码embedding论文，涉及代码检索与RAG，可作为代码类笔记检索的参考,,index
+_inbox/doc-ocr-system__README.md,doc-ocr-system__README.md,md,6462,6,test,accept,reference,reference_data,4,false,发票OCR项目的说明文档，含核心功能清单、架构图、技术栈选型表、目录结构与API清单，属查阅型技术资料,,index
+_inbox/hello.txt,hello.txt,txt,13,13,dev,reject,junk,other,1,false,全文只有一行 hello world，没有任何可复用信息,,drop
+_inbox/MyTokenTransfer__README.md,MyTokenTransfer__README.md,md,19192,6,dev,accept,reference,reference_data,4,false,自研API密钥管理台的项目说明文档，含架构、配置与用法，属查阅型技术文档,,index
+_inbox/test.txt,test.txt,txt,8,13,dev,reject,junk,other,1,false,全文只有一行「这是一个测试文件」，没有任何可复用信息,,drop
+_inbox/【哲风壁纸】人物特写-动漫少女.jpg,【哲风壁纸】人物特写-动漫少女.jpg,jpg,-1,11,test,reject,junk,other,1,false,动漫人物壁纸，文件名带下载站前缀，无任何文本或知识内容,,drop
+_inbox/屏幕截图 2026-10-24 144652.png,屏幕截图 2026-10-24 144652.png,png,-1,11,dev,reject,junk,other,1,false,模型用量仪表盘截图，OCR能读出数字但属一次性个人统计，没有任何可复用知识,,drop
+_inbox/屏幕截图 2026-10-26 010134.png,屏幕截图 2026-10-26 010134.png,png,-1,11,dev,reject,junk,other,1,false,AI助手审批查询的界面截图，表格内容属一次性个人数据，无可复用知识,,drop
+_inbox/情景6 Spring Boot消息服务.pptx,情景6 Spring Boot消息服务.pptx,pptx,18959,2,dev,accept,normal,concept,3,false,Spring Boot消息服务的课程课件，覆盖消息队列概念、RabbitMQ安装配置与整合，知识完整但属二手材料,,index
+_inbox/新建 文本文档.txt,新建 文本文档.txt,txt,0,13,test,reject,junk,other,1,false,0字节空文件，没有任何内容,,drop
+_inbox/综合实践课程项目报告.doc,综合实践课程项目报告.doc,doc,-1,5,dev,reject,junk,case,2,false,实训项目报告的流程汇报，与《项目实施记录》同类，未体现技术判断或踩坑结论，但含OCR项目架构与实施过程等可展开话题,,topic_dialog
+_inbox/缺陷反馈_VIP音乐播放能力缺失.md,缺陷反馈_VIP音乐播放能力缺失.md,md,1301,10,test,accept,core,case,4,false,完整记录了QQ音乐三层防护的突破情况、已跑通接口和一版错误判断的纠正，做同类逆向能直接复用,,index
+_inbox/软件工程复习核心知识点提取.pdf,软件工程复习核心知识点提取.pdf,pdf,8878,2,dev,accept,core,concept,5,false,软件工程七章复习要点整理，结构完整且带表格与重点标注，可直接当复习答案来源,,index
+_inbox/软件开发项目大综合实训-AI轻量化落地工程项目实践教学课件.pptx,软件开发项目大综合实训-AI轻量化落地工程项目实践教学课件.pptx,pptx,8209,2,dev,accept,normal,reference_data,3,false,AI轻量化实训课的课程大纲，含五阶段96学时安排、技术栈与考核方式，属查阅型课程信息无具体技术内容,,index
+_inbox/软件开发项目大综合实训实践授课进度计划表.docx,软件开发项目大综合实训实践授课进度计划表.docx,docx,1849,4,dev,reject,junk,other,1,false,抽取全文仅8行，全部是授课进度计划表的空白表头与签名栏，没有任何实际进度内容,,drop
+_inbox/错误堆栈.txt,错误堆栈.txt,txt,873,9,test,reject,junk,log,1,false,只有调用栈，没有触发条件、版本和结论，无法复现也无法复用,,drop
+_inbox/附件2-1：广东工商职业技术大学学生岗位实习管理人员(指导教师)巡访情况记录表.doc,附件2-1：广东工商职业技术大学学生岗位实习管理人员(指导教师)巡访情况记录表.doc,doc,-1,8,test,reject,junk,other,1,false,学校岗位实习的空白行政表格，与学习知识库无关,,drop
+_inbox/附件2-9：广东工商职业技术大学学生岗位实习安全承诺书.doc,附件2-9：广东工商职业技术大学学生岗位实习安全承诺书.doc,doc,-1,8,dev,reject,junk,other,1,false,签名用的行政文书模板，与学习知识库无关,,drop
+_inbox/霸道总裁爱上我.doc,霸道总裁爱上我.doc,doc,3698,14,test,accept,core,concept,4,false,文件名像小说，实际是霸总文题材的结构化解析笔记，含核心概念、人物模板、三幕结构与趋势判断，文件名不可作为判定依据,,index
+_inbox/鞠婧祎.jpeg,鞠婧祎.jpeg,jpeg,-1,11,dev,reject,junk,other,1,false,明星人物照片，无任何文本或知识内容,,drop
+_inbox/项目实施记录（一）.md,项目实施记录（一）.md,md,2645,5,test,reject,junk,procedure,2,false,实训模板填出来的过程记录，全是按流程执行的汇报，没有技术判断或踩坑结论,,topic_dialog
+_inbox/项目实验实训报告（一）.md,项目实验实训报告（一）.md,md,3965,5,dev,accept,core,case,4,false,与《项目实施记录》同一件事，但这份有「问题-原因-解决」三段式踩坑结论（RapidOCR版本锁、opencv冲突、CRLF/LF换行）和带观点的总结，排障知识可复用,,index
+_inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg,8b8442659fd99c1bf9e8518ed19f687a.jpg,jpg,-1,7,dev,accept,normal,concept,3,false,手写的AI应用开发知识提纲，四大板块覆盖RAG、大模型原理、Agent编排与鉴权，虽只有关键词无展开，但结构完整可当回顾目录,,index
+_inbox/5e47312e6d3499a33f304a0bbdbf8ba3.jpg,5e47312e6d3499a33f304a0bbdbf8ba3.jpg,jpg,-1,7,dev,accept,normal,concept,3,false,手写的JavaScript入门笔记，含getElementById代码示例与数据类型三分类，篇幅短但内容准确可复用,,index
+_inbox/软件开发项目大综合实训实践项目指导书.docx,软件开发项目大综合实训实践项目指导书.docx,docx,5335,2,test,partial,normal,reference_data,3,true,全文约七成是教学安排（适用专业、场地、指导团队、评分要求、预习思考题），可用内容集中在第四部分,第四部分「实训内容及步骤」,extract_spans
+_inbox/016-core-tools-test-coverage.md,016-core-tools-test-coverage.md,md,10154,4,test,accept,core,reference_data,4,false,一份测试覆盖率变更文档，含 5 张「用例/输入/期望」表格与 45 个用例，并说明了哪 5 个工具为何必须补测，测试设计方法可复用到其他项目,,index

@@ -1,0 +1,7 @@
+{
+  "version": "stratified-v2",
+  "strategy": "stratified",
+  "seed": 42,
+  "test_ratio": 0.4,
+  "rows": 35
+}
