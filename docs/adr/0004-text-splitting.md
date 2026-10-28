@@ -157,6 +157,40 @@ OCR 未接入前，图片子块**文本量极低** → 也不 embed（避免"空
 
 ---
 
+---
+
+### 4.7 后处理：同节内合并（★ 2026-10-28 补充，此前是本文档的漏洞）
+
+**发现的问题**：主流程在 heading 和代码块处**无条件 flush**，导致结构细密的笔记严重碎片化。
+实测《02-04-闭包.md》：11,664 字被切成 **96 个子块，中位仅 79 token，`chunks_in_range` 只有 11.6%**（51% 的块 < 80 token）。
+
+根因不是实现写错，是**本 ADR 漏写了"切完要合并"这一步**。
+
+**规则**：主流程结束后，对**每个 section 内部**做一次相邻合并。
+
+```
+for each section:
+    merged = []
+    for child in section.children:
+        if merged 非空
+           and len(merged[-1]) < MIN_CHARS                    # 上一块还太小
+           and len(merged[-1]) + len(child) <= MAX_CHARS:     # 合并后不超上限
+            merged[-1] = merged[-1] + "\n" + child            # 向右合并
+        else:
+            merged.append(child)
+    重算每块的 token_count 与全部硬指标
+```
+
+**三条硬约束**：
+
+1. **绝不跨 section 合并** —— 会破坏 `heading_path` 语义，检索溯源就废了
+2. 合并后仍须满足 `HARD_TOKEN_LIMIT`（480）
+3. 合并只做**相邻拼接**，不重新切分、不劈开已有句子
+
+**预期**：《闭包.md》96 块 → 约 40–50 块，`in_range` 从 11.6% 升到 60% 以上。
+
+---
+
 ## 5. `heading_path` 与溯源
 
 每个子块都存 `heading_path`，形如：
@@ -189,7 +223,14 @@ OCR 未接入前，图片子块**文本量极低** → 也不 embed（避免"空
 | `chunks_total` | — |
 | **`chunks_over_limit`**（token > 480） | **必须 = 0** |
 | **`chunks_truncated`**（被 tokenizer 截断） | **必须 = 0** |
-| `chunks_in_range`（250 ≤ chars ≤ 400 的占比） | 目标 ≥ 70%，低于 60% 要给 warning |
+| `chunks_in_range`（250 ≤ chars ≤ 400 的占比，**分母只统计所在 section 字符数 ≥ `MIN_CHARS` 的子块**） | 目标 ≥ 70%，低于 60% 要给 warning |
+
+> **为什么要把"小节的块"排除出分母**：如果一个 section 本身只有 100 字（比如《缺陷反馈》里
+> `### QQ音乐三层防护` 这种"每节一句话"的笔记），它里面的子块**永远达不到 250 字**。
+> 把它们算进分母会永久拉低指标，**掩盖真正的问题**（代码块切碎散文那种）。
+>
+> 判据：**section 太小 → 它本身就是最小单位，不该按 300 字要求**；
+> section 够大却有碎块 → 那才是切块器的问题（正是 §4.7 要修的）。
 
 > **`chunks_truncated` 必须由程序自己算**：调 `tokenizer(text, truncation=False)` 数真实 token，
 > 不能靠字数估算。这是唯一能保证"没被静默截断"的办法。

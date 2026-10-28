@@ -57,14 +57,15 @@
 | **B 解析 ADR + G0 模块** | ZCode | 🟡 结构验收通过（未跑其测试、未读其逻辑） | `docs/adr/0002`、`backend/app/service/parse/` 8 文件、`tests/` + fixtures、`scripts/parse_smoke.py` |
 | **C 评测脚手架** | Trae | ✅ 已验收（`stratified-v2`） | `eval/DELIVERY.md`、`make_split.py`、`_common.py`、`report.md` |
 | **D 数据模型** | ZCode | ✅ 已验收（人家独立复跑确认） | `app/models/` 8 文件、`0002_data_model.py`、`repo/base.py`、`config.py` 补字段；**pytest 15 passed**、DB 实建 6 表、`halfvec(1024)`、pgvector 0.8.7 |
+| **E 切块 + 向量化** | ZCode-后端 | 🟡 已交付，**真实数据暴露碎片化**，线 E-2 修复中 | `app/service/chunk/`(551 行)、`app/service/embed/`、27 passed、torch 2.14.1+cu126 @cuda 52 items/s |
 
-**文档现状**：`docs/adr/` 有 `0001-architecture-baseline` / `0002-parsing-stack` / `0003-data-model`，编号连续。
+**文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续。
 
 ### 遗留待处理（不阻塞主干，但要记着）
 
 1. **槽 7 分层要细到 (槽位, 判定) 粒度** —— 现在 test 里槽 7 只有发票，2 张手写笔记全在 dev，误拒率 0% 是假象
 2. **切块参数要实验校准** —— 250–400 字是从 512 token 上限推导的，没做过实验；前置依赖是 20 个 query 集
-3. **线 B 的 pytest 与 smoke 脚本没人跑过** —— 结构验收≠功能验收
+3. **所有单测都用合成 fixture，没有一份真实样本进测试** —— 线 E 的碎片化就是这么漏掉的（27 passed 但真实数据 in_range 只有 11.6%）
 4. **前端只有空白首页** —— 主干通了才动
 
 ---
@@ -82,60 +83,52 @@
 
 ---
 
-### 给 ZCode（线 E：切块 + 向量化）
+### 给 ZCode-后端（线 E-2：修切块碎片化）
 
 ```
-开工先按顺序读：
-1. baleen/AGENTS.md                        → §3 硬约束、§4 技术栈、§6 环境事实
-2. baleen/docs/adr/0004-text-splitting.md  → 切块的完整规格（三层结构、五类难处理单元、四个硬指标）
-3. baleen/docs/adr/0003-data-model.md      → chunks / embeddings 表结构（§2.4、§2.5）
+先读：
+1. baleen/docs/adr/0004-text-splitting.md 的 §4.7（新增）与 §6（指标口径已改）
+2. baleen/backend/app/service/chunk/chunker.py（你自己写的）
 
-任务：实现切块器 + 向量化器。只动 baleen/backend/。
+背景：线 E 已交付并验收，但主人在真实笔记上跑了，**碎片化严重**：
 
-已批准的依赖（都是新增，一次装齐）：
-  uv add pgvector
-  uv add torch sentence-transformers        # PyPI 默认 wheel 在 Windows 上就带 CUDA，约 2.5 GB，下载慢很正常
-  ⚠️ 下载若长时间卡住，停下来问主人是否要开代理，不要自己乱换源
+| 文件 | 字数 | 子块数 | 中位 token | chunks_in_range |
+|---|---|---|---|---|
+| 02-04-闭包.md（代码块密集） | 11,664 | 96 | 79 | 11.6% |
+| 缺陷反馈_VIP音乐播放能力缺失.md（小标题密集） | 1,769 | 11 | 64 | 0% |
+| 项目实验实训报告（一）.md（长段落） | 3,690 | 12 | 264 | 66.7% |
 
-交付 4 样：
+这不是你写错了，是 ADR 0004 漏了「切完要合并」这一步（§4.7 已补）。
 
-1. app/service/chunk/（切块器，纯函数，不碰数据库）
-   - 输入 block JSON → 输出 sections[] + chunks[]（父块与子块）
-   - 严格按 ADR 0004：目标 300 字 / MAX 400 / token 硬上限 480 / overlap 0 / 句子不劈开
-   - 五类难处理单元都要实现：表格按行+重复表头、代码按函数边界、无标题长文按句子累积、
-     目录识别后不 embed（meta.skipped_embed）、图片块文本极少不 embed
-   - 文件顶部把 TARGET_CHARS / MIN_CHARS / MAX_CHARS / HARD_TOKEN_LIMIT 定义成常量，
-     并加注释「推导值，待 ADR 0004 §8 的消融实验校准」
+改 4 处：
 
-2. app/service/embed/（向量化器）
-   - embed_passage(texts) 和 embed_query(text) 必须是两个函数（非对称检索）：
-     query 要加前缀「为这个句子生成表示以用于检索相关文章：」，passage 不加
-   - device = "cuda" if torch.cuda.is_available() else "cpu"，启动时打一行日志说明用了哪个
-   - 模型路径读 config.embedding_model_path（不许硬编码）；为空时报错并提示去配 .env
-   - 模型自带 Normalize → 输出已 L2 归一化，不要重复归一化
-   - 批量：batch_size 可配（GPU 默认 32，CPU 默认 8）
+1. **加同节内合并后处理**（照 ADR §4.7 的伪代码）
+   - 放在 chunk() 主流程末尾、_metrics() 之前
+   - 绝不跨 section 合并（会破坏 heading_path 语义）
+   - 合并后仍须 ≤ HARD_TOKEN_LIMIT
+   - 合并后重算 token_count 与全部硬指标
 
-3. 把 app/models/base.py 的自定义 HalfVec 换成 pgvector 的 HALFVEC，
-   并确认 alembic 迁移仍然可用（DDL 应保持 halfvec(1024) 不变）
+2. **修 in_range 口径**（ADR §6 已改）
+   - 分母只统计「所在 section 字符数 ≥ MIN_CHARS」的子块
+   - 不加这个修正，小节型笔记（每节一句话）会永久把指标拉到 0，掩盖真问题
 
-4. 单测（自造小 fixture，不许读 eval/samples）：
-   - 切块：短笔记单块 / 长文多块 / 大表格按行带表头 / 长代码按函数边界 /
-     目录页 skipped_embed / 断言 chunks_truncated == 0 且 chunks_over_limit == 0
-   - 向量化：embed_query 与 embed_passage 输出维度都是 1024、都是单位向量（模长 ≈ 1）
-   - 一个端到端小测：一段 markdown → 切块 → 向量化 → 长度与维度断言
+3. **修硬编码**：chunker.py 第 532 行 `token_count > 480` 改成 `> HARD_TOKEN_LIMIT`
 
-不要做：不写导入状态机、不加 API 端点、不写检索、不往数据库真写笔记（可以写一个临时测试用例再回滚）。
+4. **补测试**（现有 27 个测试全用干净 fixture，所以漏掉了这个）
+   - 新增 fixture：一个「代码块密集 + 小标题密集」的 markdown，模拟闭包.md 的结构
+   - 断言：合并后 in_range ≥ 0.6，且子块数比不合并明显减少
+   - 新增 scripts/chunk_smoke.py --samples <路径>（照 parse_smoke.py 的样子，
+     缺目录就 skip；**不许硬编码 eval/ 路径**）
 
-自测（贴原始输出到 DELIVERY.md）：
-- uv run pytest tests/service/chunk tests/service/embed -q
-- 打印当前 device、模型加载耗时、对 100 条假文本的吞吐（条/秒）
-- 确认 chunks_truncated=0 / chunks_over_limit=0
+验收（把原始输出贴进 DELIVERY）：
+- over_limit = 0 且 truncated = 0（不能因合并而破）
+- 02-04-闭包.md：in_range ≥ 0.6，子块数 ≤ 60
+- 项目实验实训报告：in_range 不降
+- 缺陷反馈.md：允许 in_range 偏低（各节本身只有 60-100 字），但要在 DELIVERY 里说明
+  这是「节太小」而非「切得碎」，属于符合预期
 
-交付写到 baleen/backend/DELIVERY.md。
+不要做：不改 ADR §3 的参数值、不做消融实验、不动 eval/。
 ```
-
----
-
 ## 3. 卡住时找谁
 
 **遇到下面「必须停下问」的，停下来把问题写进你目录下的 `DELIVERY.md`，等人回答。不要自己试一堆方案。**
@@ -199,6 +192,7 @@
 | 2026-10-28 | Trae 线 C（阶段 3） | `report.md` 合格：10 节结构、误拒率/误丢率置顶、非法组合单列。**但 test 集 split 未分层**（槽 6/9/11/12/13/14 全在 dev，partial 0 条）→ 已要求重做，`stratified-v2` 已修复 |
 | 2026-10-28 | Trae 线 C（`stratified-v2`） | 14 个槽位在 test 各 ≥1、配对样本同 split、代码去重（1197 行）、主动列 3 条已知限制。**遗留**：槽 7 分层仍未细到 (槽位, 判定) 粒度，误拒率 0% 是假象 |
 | 2026-10-28 | ZCode 线 D（数据模型） | **合格**。ADR 0003 的 6 张表全部落地、`halfvec(1024)` + HNSW + trgm GIN、CHECK 约束齐全；人家独立复跑确认 `pytest 15 passed`、DB 实建 6 表、pgvector 0.8.7。**加分**：主动补上了上次遗留的 G0 功能验证（`pytest tests/service/parse` 15 passed；smoke 35 文件 → ok=21 / no_text_expected=9 / unsupported_format=5 / error=0）。**遗留决策**：`embeddings.vec` 的写入需要 pgvector 包或补 bind processor，见 §2 |
+| 2026-10-28 | ZCode 线 E（切块+向量化） | **代码合格但设计有漏**。27 passed、`over_limit=0`/`truncated=0`、`HalfVec`→`HALFVEC` 已换、torch 2.14.1+cu126 上 cuda 52 items/s。**但真实笔记实测碎片化**：闭包.md 96 块/中位 79 token/`in_range` 11.6%。根因是 **ADR 0004 漏写"切完要合并"**（不是实现错误），§4.7 已补，修复任务见 §2 线 E-2。**教训：27 个测试全用合成 fixture，真实样本一个没进测试** |
 
 ---
 
