@@ -57,7 +57,7 @@
 | **B 解析 ADR + G0 模块** | ZCode | 🟡 结构验收通过（未跑其测试、未读其逻辑） | `docs/adr/0002`、`backend/app/service/parse/` 8 文件、`tests/` + fixtures、`scripts/parse_smoke.py` |
 | **C 评测脚手架** | Trae | ✅ 已验收（`stratified-v2`） | `eval/DELIVERY.md`、`make_split.py`、`_common.py`、`report.md` |
 | **D 数据模型** | ZCode | ✅ 已验收（人家独立复跑确认） | `app/models/` 8 文件、`0002_data_model.py`、`repo/base.py`、`config.py` 补字段；**pytest 15 passed**、DB 实建 6 表、`halfvec(1024)`、pgvector 0.8.7 |
-| **E 切块 + 向量化** | ZCode-后端 | 🟡 已交付，**真实数据暴露碎片化**，线 E-2 修复中 | `app/service/chunk/`(551 行)、`app/service/embed/`、27 passed、torch 2.14.1+cu126 @cuda 52 items/s |
+| **E 切块 + 向量化** | ZCode-后端 | ✅ 已验收（含 E-2 修复，人家用真实笔记复跑） | `app/service/chunk/`(601 行)、`app/service/embed/`、`scripts/chunk_smoke.py`；**29 passed**；真实笔记 in_range 11.6%→**64.4%**、缺陷反馈 0%→**100%**、over_limit/truncated 仍为 **0**；torch 2.14.1+cu126 @cuda 52 items/s |
 
 **文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续。
 
@@ -83,52 +83,27 @@
 
 ---
 
-### 给 ZCode-后端（线 E-2：修切块碎片化）
+### ⏸ 等拍板：`.env` 位置不一致，会挡住下一步
 
-```
-先读：
-1. baleen/docs/adr/0004-text-splitting.md 的 §4.7（新增）与 §6（指标口径已改）
-2. baleen/backend/app/service/chunk/chunker.py（你自己写的）
+**实测**：主人在 `baleen/.env` 建了文件（**0 字节，空的**），但**后端读不到它**。
 
-背景：线 E 已交付并验收，但主人在真实笔记上跑了，**碎片化严重**：
+| 事实 | 说明 |
+|---|---|
+| `baleen/.env.example` 在**仓库根** | 8 个变量：POSTGRES_* / DATABASE_URL / REDIS_URL / CORS_ORIGINS / EMBEDDING_MODEL_PATH |
+| docker compose 读**根** `.env` | ✅ 正确 |
+| 后端 `config.py` 用 `env_file=".env"` | ❌ 相对 **cwd** 解析 → 从 `backend/` 启动时找的是 `backend/.env` |
+| 实测结果 | 从 `backend/` 加载 `Settings` → `embedding_model_path = ''`（空） |
 
-| 文件 | 字数 | 子块数 | 中位 token | chunks_in_range |
-|---|---|---|---|---|
-| 02-04-闭包.md（代码块密集） | 11,664 | 96 | 79 | 11.6% |
-| 缺陷反馈_VIP音乐播放能力缺失.md（小标题密集） | 1,769 | 11 | 64 | 0% |
-| 项目实验实训报告（一）.md（长段落） | 3,690 | 12 | 264 | 66.7% |
+**后果**：`embed()` 会因模型路径为空而报错；`DATABASE_URL` 退回默认值（当前恰好能用，属侥幸）。
 
-这不是你写错了，是 ADR 0004 漏了「切完要合并」这一步（§4.7 已补）。
+| 选项 | 做法 |
+|---|---|
+| **A（推荐）** | **只保留根 `.env`**，`config.py` 用**绝对路径**读它（`Path(__file__).resolve().parents[2].parent / ".env"`），与 docker compose 共用一份 |
+| **B** | 分两份（根给 compose、`backend/.env` 给后端）→ 要手工保持一致，必然漂移 |
 
-改 4 处：
+**人家建议 A。** 定了之后派给 ZCode，一行配置改动 + 一条测试。
 
-1. **加同节内合并后处理**（照 ADR §4.7 的伪代码）
-   - 放在 chunk() 主流程末尾、_metrics() 之前
-   - 绝不跨 section 合并（会破坏 heading_path 语义）
-   - 合并后仍须 ≤ HARD_TOKEN_LIMIT
-   - 合并后重算 token_count 与全部硬指标
-
-2. **修 in_range 口径**（ADR §6 已改）
-   - 分母只统计「所在 section 字符数 ≥ MIN_CHARS」的子块
-   - 不加这个修正，小节型笔记（每节一句话）会永久把指标拉到 0，掩盖真问题
-
-3. **修硬编码**：chunker.py 第 532 行 `token_count > 480` 改成 `> HARD_TOKEN_LIMIT`
-
-4. **补测试**（现有 27 个测试全用干净 fixture，所以漏掉了这个）
-   - 新增 fixture：一个「代码块密集 + 小标题密集」的 markdown，模拟闭包.md 的结构
-   - 断言：合并后 in_range ≥ 0.6，且子块数比不合并明显减少
-   - 新增 scripts/chunk_smoke.py --samples <路径>（照 parse_smoke.py 的样子，
-     缺目录就 skip；**不许硬编码 eval/ 路径**）
-
-验收（把原始输出贴进 DELIVERY）：
-- over_limit = 0 且 truncated = 0（不能因合并而破）
-- 02-04-闭包.md：in_range ≥ 0.6，子块数 ≤ 60
-- 项目实验实训报告：in_range 不降
-- 缺陷反馈.md：允许 in_range 偏低（各节本身只有 60-100 字），但要在 DELIVERY 里说明
-  这是「节太小」而非「切得碎」，属于符合预期
-
-不要做：不改 ADR §3 的参数值、不做消融实验、不动 eval/。
-```
+**主人另需做一件事**：`.env` 现在是空的，至少要填 `EMBEDDING_MODEL_PATH`（值抄 `.env.example`）。
 ## 3. 卡住时找谁
 
 **遇到下面「必须停下问」的，停下来把问题写进你目录下的 `DELIVERY.md`，等人回答。不要自己试一堆方案。**
@@ -193,6 +168,7 @@
 | 2026-10-28 | Trae 线 C（`stratified-v2`） | 14 个槽位在 test 各 ≥1、配对样本同 split、代码去重（1197 行）、主动列 3 条已知限制。**遗留**：槽 7 分层仍未细到 (槽位, 判定) 粒度，误拒率 0% 是假象 |
 | 2026-10-28 | ZCode 线 D（数据模型） | **合格**。ADR 0003 的 6 张表全部落地、`halfvec(1024)` + HNSW + trgm GIN、CHECK 约束齐全；人家独立复跑确认 `pytest 15 passed`、DB 实建 6 表、pgvector 0.8.7。**加分**：主动补上了上次遗留的 G0 功能验证（`pytest tests/service/parse` 15 passed；smoke 35 文件 → ok=21 / no_text_expected=9 / unsupported_format=5 / error=0）。**遗留决策**：`embeddings.vec` 的写入需要 pgvector 包或补 bind processor，见 §2 |
 | 2026-10-28 | ZCode 线 E（切块+向量化） | **代码合格但设计有漏**。27 passed、`over_limit=0`/`truncated=0`、`HalfVec`→`HALFVEC` 已换、torch 2.14.1+cu126 上 cuda 52 items/s。**但真实笔记实测碎片化**：闭包.md 96 块/中位 79 token/`in_range` 11.6%。根因是 **ADR 0004 漏写"切完要合并"**（不是实现错误），§4.7 已补，修复任务见 §2 线 E-2。**教训：27 个测试全用合成 fixture，真实样本一个没进测试** |
+| 2026-10-28 | ZCode 线 E-2（切块碎片化） | **修复到位**。真实笔记复跑：闭包.md 96块/79tok/11.6% → **50块/191tok/64.4%**；缺陷反馈 0% → **100%**（口径修正生效）；实训报告 66.7% → 80%；`over_limit=0`/`truncated=0` 仍成立；29 passed。顺带把 594 行写死的 `480` 改成 `HARD_TOKEN_LIMIT` |
 
 ---
 
