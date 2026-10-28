@@ -35,13 +35,51 @@
 4. ZCode 补 `backend/DELIVERY.md`
 5. `fixtures/scan.pdf` 4 MB 缩体积（`.gitignore` 未忽略 fixtures）
 6. 后端 `config.py` 补 `embedding_model_path`
-## 2. 待处理
-
-**暂无。** 今天收工，所有 agent 任务已交付完毕。
-
-下次开工时：先把 §1 的「待处理队列」6 条逐条确认要不要做、谁做，再往这里写指令。
 
 ---
+
+## 2. 待处理
+
+### 给 ZCode（线 B：数据模型落地）
+
+```
+开工先按顺序读三份文档：
+1. baleen/AGENTS.md                              → §3 硬约束、§5 决策、§6 环境事实
+2. baleen/docs/adr/0003-data-model.md            → 本任务的完整规格（6 张表 DDL + 索引）
+3. baleen/docs/adr/0001-architecture-baseline.md → 决策 1/11/12 的背景，可略读
+
+任务：落地数据模型。**只动 baleen/backend/**。
+
+交付 4 样：
+
+1. SQLAlchemy 2.x 模型（app/models/）：sources / review_runs / notes / chunks / embeddings / jobs
+   字段与类型严格照 ADR 0003 §2，不许自行增删列。
+
+2. Alembic 迁移（alembic/versions/0002_*.py，挂在 0001_baseline 之后）：
+   - op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+   - op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+   - 6 张表
+   - ADR 0003 §5 的全部索引（含 chunks 的 trgm GIN、embeddings 的 HNSW halfvec_cosine_ops）
+   - CHECK 约束：枚举列一律用 TEXT + CHECK（不用 PG 原生 ENUM）；
+     chunks 要保证 (parent_id IS NULL) = is_parent
+
+3. app/repo/base.py：Repo(owner_id) 薄封装骨架 —— 以后所有查询的唯一入口
+
+4. app/core/config.py 补 embedding_model_path 字段
+   （.env.example 里已经有这个变量，代码一直没读它，这次一起补上）
+
+不要做：不加 API 端点、不写业务逻辑、不做切块、不动 eval/、不动 eval/samples。
+
+自测（三样都要贴原始输出到 DELIVERY.md）：
+- uv run alembic upgrade head
+- docker compose exec db psql -U baleen -d baleen -c "SELECT extversion FROM pg_extension WHERE extname='vector';"
+- docker compose exec db psql -U baleen -d baleen -c "\d+ chunks"
+
+交付写到 baleen/backend/DELIVERY.md（上次漏了这个文件，这次必须写）。
+```
+
+---
+
 ## 3. 卡住时找谁
 
 **遇到下面「必须停下问」的，停下来把问题写进你目录下的 `DELIVERY.md`，等人回答。不要自己试一堆方案。**
