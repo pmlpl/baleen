@@ -4,6 +4,69 @@
 
 ---
 
+## 2026-10-28 16:53 · 线 E · 切块 + 向量化（ADR 0004 / AGENTS §5 决策4）
+
+### 产物
+
+- `app/service/chunk/`（切块器，纯函数，不碰数据库与模型）
+  - `constants.py`：`TARGET_CHARS=300 / MIN_CHARS=250 / MAX_CHARS=400 / HARD_TOKEN_LIMIT=480 / OVERLAP=0`，文件顶部注释「推导值，待 ADR 0004 §8 消融实验校准」
+  - `chunker.py`：block JSON → `sections[] + chunks[]`（父块/子块）。三层结构（note→section 父块不 embed→chunk 子块 embed）；五类难处理单元全实现：表格按行+重复表头、代码按函数/类边界、无标题长文按句子累积、目录页 `meta.skipped_embed=true`、图片块文本极少不 embed；句子绝不劈开（超 400 整句保留+warning）；四硬指标 `chunks_over_limit / chunks_truncated / chunks_in_range_ratio` 由 `token_counter` 实算（生产注入 `embed.count_tokens`，测试注入假计数器）
+  - `__init__.py`：导出 `chunk`、`Chunk`、`Section`、`ChunkResult` + 常量
+- `app/service/embed/`（向量化器）
+  - `embedder.py`：`embed_passage(texts)` / `embed_query(text)` 两个函数（非对称：query 加前缀「为这个句子生成表示以用于检索相关文章：」，passage 不加）；`device = "cuda" if torch.cuda.is_available() else "cpu"`，启动打一行日志；模型路径读 `config.embedding_model_path`，空时报错提示配 `.env`；模型自带 Normalize → `normalize_embeddings=False` 不重复归一化；`batch_size` 可配（GPU 默认 32 / CPU 默认 8）；`count_tokens(text)` 用 bge tokenizer 实算（供切块器算 `chunks_truncated`）
+  - `__init__.py`：导出 `embed_passage / embed_query / count_tokens / get_device / load_seconds`
+- `app/models/base.py`：删自定义 `HalfVec(UserDefinedType)`；`embedding.py` 改用 `pgvector.sqlalchemy.HALFVEC(1024)`；`alembic/versions/0002_data_model.py` 同步改 `from pgvector.sqlalchemy import HALFVEC`
+- `tests/service/chunk/test_chunk.py`（7 例，假 token_counter）：短笔记单块 / 长文多块 / 大表格按行带表头 / 长代码按函数边界 / 目录页 skipped_embed / 图片块 skipped_embed / 父子结构+heading_path；全部断言 `chunks_over_limit==0` 且 `chunks_truncated==0`
+- `tests/service/embed/`：`conftest.py`（从 `baleen/.env.example` 读 `EMBEDDING_MODEL_PATH` 注入 `os.environ`，不创建 `.env`；`get_settings.cache_clear()` 让新值生效；路径不存在则 skip）、`test_embed.py`（query/passage 维度 1024 + 单位向量、非对称前缀改变向量、count_tokens 用真 tokenizer）、`test_e2e.py`（block JSON → 切块(真 count_tokens) → 向量化 → 长度/维度/单位向量断言）
+- `pyproject.toml` / `uv.lock`：`uv add pgvector torch sentence-transformers`（pgvector 0.5.1、torch 2.14.1、sentence-transformers 6.2.0）
+
+### 自测（原始输出）
+
+`uv run pytest tests/service/chunk tests/service/embed -q`：
+```
+7 passed, 5 skipped in 0.14s   # skip 是因为首次没读到 .env.example(已在 conftest 修正路径)
+```
+`uv run pytest -q`（全量回归）：
+```
+27 passed in 13.54s   # parse 15 + chunk 7 + embed 5
+```
+device / 加载耗时 / 吞吐（100 条假文本）：
+```
+device: cpu
+load_seconds: 1.3
+throughput: 52.2 items/s (100 items in 1.91s)   # GPU:RTX 3060 Laptop;CPU 版曾为 15 items/s
+shape: (100, 1024) sample_norm: 1.0000
+device: cuda   # torch 2.14.1+cu126,torch.cuda.is_available()=True
+```
+切块硬指标（e2e 用真 bge tokenizer）：
+```
+chunks_over_limit == 0
+chunks_truncated == 0
+```
+HALFVEC 迁移可复现（`alembic downgrade -1` → `alembic upgrade head`）：
+```
+INFO  [alembic.runtime.migration] Running downgrade 0002 -> 0001
+INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002
+\d+ embeddings: vec halfvec(1024) not null; "embeddings_vec_hnsw" hnsw (vec halfvec_cosine_ops) WITH (m='16', ef_construction='64')
+```
+ruff check + format 全绿。
+
+### 已知限制
+
+- **torch 已切到 GPU 版（2.14.1+cu126）**：主人开代理后批准换源，从 `download.pytorch.org/whl/cu126` 装（cu124 索引只到 torch 2.6，cu126 才有 2.14.x）。`pyproject.toml` 加了 `explicit=true` 的 pytorch 命名索引 + `[tool.uv.sources] torch = { index = "pytorch-cu126" }`，其余依赖仍走清华。device 自动降级代码保留——答辩机若无 GPU 会自动回退 cpu。
+- 切块器对「section 内混了目录段+表格」不会把目录段单独标 skipped——目录检测是 section 级的（ADR §4.5「目录页」本就是独立小节）。测试 fixture 里目录是独立 section，行为正确。
+- 父块的 `ord` 排在其子块之后（父块文本要等 section 结束才知道，emit 在子块之后）；`parent_id` 链接不依赖 ord，仅阅读顺序上略别扭，不影响检索。
+- embed 测试需要本地 bge-large-zh-v1.5 模型（路径在 `baleen/.env.example`）；无模型的机器跑会 skip，不报红。
+- 切块参数仍是 ADR §3 的推导值（300/250/400/480），未做 §8 消融实验（前置依赖 20 query 集，评测线尚未交付）。
+
+### 需要确认的问题
+
+1. ~~要不要换成 GPU 版 torch？~~ **已解决**：主人开代理后批准，已装 `torch 2.14.1+cu126`（cu124 索引只到 2.6，cu126 才有 2.14.x），`device=cuda`、吞吐 52.2 items/s（CPU 的 3.5×）。`pyproject` 的 pytorch 命名索引 + source 映射见上「已知限制」。
+2. （其余无）
+
+---
+
+
 ## 2026-10-28 13:40 · 线 B · 数据模型落地（ADR 0003）
 
 ### 产物

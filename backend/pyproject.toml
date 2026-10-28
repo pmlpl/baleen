@@ -16,6 +16,9 @@ dependencies = [
     "python-docx>=1.2.0",
     "markdown-it-py>=4.2.0",
     "python-pptx>=1.0.2",
+    "pgvector>=0.5.1",
+    "torch>=2.14.1",
+    "sentence-transformers>=6.2.0",
 ]
 
 [dependency-groups]
@@ -39,3 +42,12 @@ testpaths = ["tests"]
 [[tool.uv.index]]
 url = "https://pypi.tuna.tsinghua.edu.cn/simple"
 default = true
+
+# torch 走 PyTorch 官方 CUDA wheel(HANDOFF §2 已拍板 GPU 版);explicit=true 只对 torch 生效
+[[tool.uv.index]]
+name = "pytorch-cu126"
+url = "https://download.pytorch.org/whl/cu126"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cu126" }

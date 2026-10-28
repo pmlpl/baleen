@@ -11,9 +11,9 @@ chunks 用 CHECK 保证 (parent_id IS NULL) = is_parent。
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+from pgvector.sqlalchemy import HALFVEC
 
 from alembic import op
-from app.models import HalfVec
 
 revision: str = "0002"
 down_revision: str | None = "0001"
@@ -209,7 +209,7 @@ def upgrade() -> None:
         ),
         sa.Column("model", sa.Text, primary_key=True),
         sa.Column("dim", sa.SmallInteger, nullable=False),
-        sa.Column("vec", HalfVec(1024), nullable=False),
+        sa.Column("vec", HALFVEC(1024), nullable=False),
         sa.Column(
             "created_at",
             sa.DateTime(timezone=True),
