@@ -16,6 +16,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from .constants import (
+    HARD_TOKEN_LIMIT,
     MAX_CHARS,
     MIN_CHARS,
     MODEL_MAX_TOKENS,
@@ -27,6 +28,11 @@ from .constants import (
 )
 
 TokenCounter = Callable[[str], int]
+
+
+def _norm_chars(s: str) -> int:
+    return len(re.sub(r"\s+", "", s))
+
 
 _SENT_SPLIT = re.compile(rf"(?<=[{re.escape(SENTENCE_BOUNDARIES)}])")
 _TOC_PATTERN = re.compile(
@@ -519,26 +525,84 @@ def chunk(
 
     ord_n = flush_section(ord_n)
 
-    # 重排 ord 连续(chunk_indices 已在 flush_section 回填)
+    # 同节内相邻合并(ADR §4.7):修碎片化。绝不跨 section;合并后须 ≤ HARD_TOKEN_LIMIT。
+    flat, sections = _merge_within_sections(flat, sections, token_counter)
+
+    # 重排 ord 连续(chunk_indices 已在合并里回填)
     for i, c in enumerate(flat):
         c.ord = i
 
-    metrics = _metrics(flat, token_counter, warnings)
+    metrics = _metrics(flat, sections, token_counter, warnings)
     return ChunkResult(chunks=flat, sections=sections, metrics=metrics)
 
 
-def _metrics(chunks: list[Chunk], token_counter: TokenCounter, warnings: list[str]) -> dict:
+def _merge_adjacent(children: list[Chunk], token_counter: TokenCounter) -> list[Chunk]:
+    """同节内相邻合并(ADR §4.7):上一块太小且合并后不超 MAX_CHARS / HARD_TOKEN_LIMIT 才并。
+
+    skipped_embed(toc/图片)不参与合并;只做相邻拼接,不重新切分。
+    """
+    merged: list[Chunk] = []
+    for c in children:
+        prev = merged[-1] if merged else None
+        if (
+            prev is not None
+            and not prev.meta.get("skipped_embed")
+            and not c.meta.get("skipped_embed")
+            and _norm_chars(prev.text) < MIN_CHARS
+            and _norm_chars(prev.text) + _norm_chars(c.text) <= MAX_CHARS
+        ):
+            cand = prev.text + "\n" + c.text
+            if token_counter(cand) <= HARD_TOKEN_LIMIT:
+                prev.text = cand
+                prev.token_count = token_counter(cand)
+                continue
+        merged.append(c)
+    return merged
+
+
+def _merge_within_sections(
+    flat: list[Chunk],
+    sections: list[Section],
+    token_counter: TokenCounter,
+) -> tuple[list[Chunk], list[Section]]:
+    """对每个 section 内部的子块做相邻合并;父块不动,绝不跨 section(ADR §4.7)。"""
+    new_flat: list[Chunk] = []
+    for sec_idx, sec in enumerate(sections):
+        sec_chunks = [c for c in flat if c.section_idx == sec_idx]
+        parent = next((c for c in sec_chunks if c.is_parent), None)
+        children = [c for c in sec_chunks if not c.is_parent]
+        merged = _merge_adjacent(children, token_counter)
+        sec.chunk_indices = []
+        for c in merged:  # 保持原顺序:子块在前,父块在后
+            c.section_idx = sec_idx
+            new_flat.append(c)
+            sec.chunk_indices.append(len(new_flat) - 1)
+        if parent is not None:
+            parent.section_idx = sec_idx
+            new_flat.append(parent)
+            sec.chunk_indices.append(len(new_flat) - 1)
+    return new_flat, sections
+
+
+def _metrics(
+    chunks: list[Chunk],
+    sections: list[Section],
+    token_counter: TokenCounter,
+    warnings: list[str],
+) -> dict:
     children = [c for c in chunks if not c.is_parent]
-    over_limit = sum(1 for c in children if c.token_count > 480)
+    over_limit = sum(1 for c in children if c.token_count > HARD_TOKEN_LIMIT)
     truncated = sum(1 for c in children if c.token_count > MODEL_MAX_TOKENS)
-    in_range = sum(
-        1
-        for c in children
-        if MIN_CHARS <= len(re.sub(r"\s+", "", c.text)) <= MAX_CHARS
-        and not c.meta.get("skipped_embed")
-    )
-    embeddable = [c for c in children if not c.meta.get("skipped_embed")]
-    ratio = (in_range / len(embeddable)) if embeddable else 1.0
+
+    # in_range 分母(ADR §6):只统计「所在 section 字符数 ≥ MIN_CHARS」的非 skipped 子块。
+    # 小节型笔记(每节一句话)本身的块永远达不到 250 字,排除它们避免永久拉低指标、掩盖真问题。
+    def _section_big(c: Chunk) -> bool:
+        sec = sections[c.section_idx] if c.section_idx < len(sections) else None
+        return _norm_chars(sec.text) >= MIN_CHARS if sec else False
+
+    denom = [c for c in children if not c.meta.get("skipped_embed") and _section_big(c)]
+    in_range = sum(1 for c in denom if MIN_CHARS <= _norm_chars(c.text) <= MAX_CHARS)
+    ratio = (in_range / len(denom)) if denom else 1.0
     if ratio < 0.6:
         warnings.append(f"chunks_in_range 仅 {ratio:.0%},低于 60%(ADR §6)")
     return {

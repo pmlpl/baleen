@@ -135,10 +135,15 @@ class TestCode:
         }
         r = chunk(doc, token_counter=FAKE_TC)
         code_chunks = [c for c in r.chunks if c.meta.get("block_type") == "code"]
-        assert len(code_chunks) == 3, "按函数边界切成 3 块"
+        # 函数边界切过(_chunk_code 阶段按 def 分组);微型函数会被 §4.7 合并并成更少块
+        assert len(code_chunks) <= 3
         for c in code_chunks:
             assert c.text.startswith("# "), "每块带 context 行(ADR §4.3)"
             assert "python" in c.text
+        # 三个函数的内容都没丢(合并不丢语义)
+        joined = "\n".join(c.text for c in code_chunks)
+        for i in range(3):
+            assert f"func_{i}" in joined
         _assert_hard_metrics(r)
 
 
@@ -184,4 +189,64 @@ class TestParentChild:
         # heading_path 回填
         assert r.sections[0].heading_path == "闭包"
         assert children[0].heading_path == "闭包"
+        _assert_hard_metrics(r)
+
+
+class TestMergeAntiFragmentation:
+    """模拟《闭包.md》结构:代码块密集 + 小标题密集,验证 §4.7 合并修碎片化。"""
+
+    def test_dense_code_and_small_headings_merge(self):
+        # 10 个微型代码块塞进一个大节(总字数 ≥ MIN),周围两个一句话小节
+        code_blocks = [
+            {
+                "type": "codeBlock",
+                "attrs": {"language": "python"},
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f'def func_{i}():\n    """第 {i} 个函数说明。"""\n'
+                            f"    x = i * 2\n    return x + 1\n"
+                        ),
+                    }
+                ],
+            }
+            for i in range(10)
+        ]
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "小节A"),
+                _text("一句话说明。"),
+                _heading(1, "工具集"),
+                *code_blocks,
+                _heading(1, "小节B"),
+                _text("又一句话。"),
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        # 不合并会是 10 个代码块 + 2 个小节块;合并后代码块明显减少
+        code_children = [c for c in r.chunks if c.meta.get("block_type") == "code"]
+        assert len(code_children) <= 4, f"合并后代码块应明显减少,实际 {len(code_children)}"
+        # 工具集 section 够大(≥ MIN),其块计入 in_range 分母;合并后应多数落在 250-400
+        assert r.metrics["chunks_in_range_ratio"] >= 0.6, (
+            f"in_range={r.metrics['chunks_in_range_ratio']}"
+        )
+        _assert_hard_metrics(r)
+
+    def test_merge_never_crosses_section(self):
+        # 两个小节各一个超短块:都不够 MIN,但绝不跨 section 合并(heading_path 语义)
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "甲"),
+                _text("甲的一句话。"),
+                _heading(1, "乙"),
+                _text("乙的一句话。"),
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        for sec in r.sections:
+            for ci in sec.chunk_indices:
+                assert r.chunks[ci].heading_path == sec.heading_path
         _assert_hard_metrics(r)

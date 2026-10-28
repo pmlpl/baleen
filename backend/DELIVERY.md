@@ -4,6 +4,54 @@
 
 ---
 
+## 2026-10-28 18:32 · 线 E-2 · 修切块碎片化（ADR 0004 §4.7 / §6）
+
+### 产物
+
+- `app/service/chunk/chunker.py` 改 4 处：
+  1. **加同节内合并后处理**（ADR §4.7）：`chunk()` 主流程末尾、`_metrics()` 之前调 `_merge_within_sections` → `_merge_adjacent`。规则：上一块 `< MIN_CHARS` 且合并后 `≤ MAX_CHARS` 且 `token_count ≤ HARD_TOKEN_LIMIT` 才向右并；`skipped_embed`（目录/图片）不参与；**绝不跨 section**；合并后重算 `token_count` 与全部硬指标。
+  2. **修 in_range 口径**（ADR §6）：`_metrics` 分母只统计「所在 section 字符数 ≥ `MIN_CHARS`」的非 skipped 子块；小节型笔记（每节一句话）本身的块永远达不到 250 字，排除它们避免永久拉低指标、掩盖真问题。
+  3. **修硬编码**：`_metrics` 里 `token_count > 480` → `> HARD_TOKEN_LIMIT`（同时把 `HARD_TOKEN_LIMIT` 补进 constants 导入——原来没导才落了硬编码）。
+  4. 顺带：`_norm_chars` 提成模块级辅助，合并/指标共用。
+- `tests/service/chunk/test_chunk.py`：新增 `TestMergeAntiFragmentation`（2 例）——「代码块密集+小标题密集」fixture 模拟闭包.md，断言合并后代码块 ≤4、in_range ≥0.6、硬指标不破；以及「合并绝不跨 section」（heading_path 一致）。旧的 `test_long_code` 断言从「3 函数=3 块」改成「≤3 块且三函数内容不丢」（微型函数该被合并是 §4.7 的预期）。
+- `scripts/chunk_smoke.py --samples <路径>`：照 parse_smoke 的样子，缺目录 skip，不硬编码 eval/；对每个文件 parse→chunk（真 bge token 计数）报 children/median_tok/in_range/over/trunc/warns。脚本自己从 `baleen/.env.example` 注入 `EMBEDDING_MODEL_PATH`（不经 conftest）。
+
+### 自测（原始输出）
+
+`uv run pytest -q`：
+```
+29 passed in 21.66s   # parse 15 + chunk 9（含 2 个新合并测试）+ embed 5
+```
+`uv run python scripts/chunk_smoke.py --samples ../eval/samples/_inbox`（3 个目标文件）：
+```
+ok   02-04-闭包.md                         children=50  median_tok=188  in_range=0.644  over=0 trunc=0 warns=[]
+ok   缺陷反馈_VIP音乐播放能力缺失.md         children=11  median_tok=64   in_range=1.0    over=0 trunc=0 warns=[]
+ok   项目实验实训报告（一）.md               children=12  median_tok=243  in_range=0.8    over=0 trunc=0 warns=[]
+```
+ruff check + format 全绿。
+
+### 验收对照
+
+| 要求 | 结果 |
+|---|---|
+| `over_limit = 0` 且 `truncated = 0`（合并不能破） | ✅ 三份样本全 0 |
+| 闭包.md：`in_range ≥ 0.6` 且子块数 ≤ 60 | ✅ 0.644 / 50 块（修前 0.116 / 96 块） |
+| 项目实验实训报告：`in_range` 不降 | ✅ 0.8（修前 0.667，反而升了——合并把碎片并进区间） |
+| 缺陷反馈.md：允许偏低但要说明 | ⚠️ 见下「已知限制」 |
+
+### 已知限制
+
+- **缺陷反馈.md 的 `in_range=1.0` 不是真的满分，是「节太小」**：这份笔记每个小节（`### QQ音乐三层防护` 之类）本身就只有 60–100 字，全部 section 字符数 < `MIN_CHARS`(250)，按 ADR §6 新口径被**排除出 in_range 分母**，分母为 0 时 ratio 取 1.0（vacuous）。`median_tok=64` 印证了节本身就小。这是「节太小」而非「切得碎」，符合预期——这类笔记的块就是该按节原样保留，不该硬凑到 300 字。
+- 合并只做相邻拼接、不重新切分；若一个 section 内有一串「大-小-大-小」交错的块，中间的小块会被并进前面的大块，但不会把两个大块合并（大块 ≥ MIN 不触发合并条件）。这是 ADR §4.7 的设计，不是 bug。
+- 真实样本的 token 数是用 bge tokenizer 实算的（`count_tokens`），不是字数估算；`chunks_truncated=0` 可信。
+
+### 需要确认的问题
+
+- （无）
+
+---
+
+
 ## 2026-10-28 16:53 · 线 E · 切块 + 向量化（ADR 0004 / AGENTS §5 决策4）
 
 ### 产物
