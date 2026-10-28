@@ -52,8 +52,6 @@
 
 ---
 
-## 2. 待处理
-
 ### 给 ZCode（线 E：切块 + 向量化）
 
 ```
@@ -101,7 +99,7 @@
 自测（贴原始输出到 DELIVERY.md）：
 - uv run pytest tests/service/chunk tests/service/embed -q
 - 打印当前 device、模型加载耗时、对 100 条假文本的吞吐（条/秒）
-- 确认 channels_truncated=0 / chunks_over_limit=0
+- 确认 chunks_truncated=0 / chunks_over_limit=0
 
 交付写到 baleen/backend/DELIVERY.md。
 ```
