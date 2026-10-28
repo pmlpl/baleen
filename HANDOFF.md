@@ -153,6 +153,7 @@ git status --short      # 谁在动，按上表认领
 | **H-批2 G2 归属闸** | Trae-后端 | ✅ 已验收 | `gate/g2.py`(354 行)、`scripts/g2_smoke.py`；**77 passed**；防注入有直接注入测试；3000 token 预算（21 文件 max 2934）；JSON 坏→重试→降级；**live 未跑（缺 key）** |
 | **I-批1 导入状态机** | Trae-后端 | ✅ 已验收 | `repo/` 7 文件 + `imports/pipeline.py`(433 行) + `import_smoke.py`；**87 passed**；端到端跑通，**父块无向量**（DB 核对 = 0），幂等去重命中；charter 改为读 `baleen/charter.md`（1372 字符/1010 token）|
 | **J G2 政策修正** | Trae-后端 | ✅ 已验收 | `g2.py` prompt 重写（前置问限定范围 + 明确该收清单 + 拿不准就收）；`llm/client.py` 429 尊重 Retry-After（≤90s/最多2次）；`g2_smoke` 加 `--delay/--limit/--resume`；**90 passed** |
+| **I-批2 worker+API** | ZCode-后端 | ✅ 已验收 | `worker/worker.py`、`api/upload.py`(244 行)、`deps.py`、`main.py`+2 行；**109 passed**；TestClient 实测 healthz 200 / sources 404 / 空POST 422；arq 0.28 + redis 降级 5.3.1 已验证 |
 
 **文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续。
 
@@ -167,7 +168,7 @@ git status --short      # 谁在动，按上表认领
 
 ## 2. 待处理
 
-**本期暂无已开工任务。** 数据模型（线 D）已交付并验收，见 §1。ADR 0004（切块规则）已写好。
+**导入链已闭环**（上传 → 排队 → G0/G1/G2 → note → chunks → embeddings），见 §1 的 I-批1 / I-批2。当前待办见下面两条线。
 
 ### ✅ 已拍板
 
@@ -178,122 +179,47 @@ git status --short      # 谁在动，按上表认领
 
 ---
 
-### 线 J · G2 判定政策修正 + 限流适配　｜　**✅ 已交付并验收（Trae-后端）**　·　剩 live 重跑待主人开闸
+### 线 K · 检索（混合检索 + rerank）　｜　**当前执行者：待分配**
 
 ```
 接手前照 §0.2 写「接手确认单」。
 
-背景（真实数据，不是猜的）：
-  G2 首次 live 实测 21 个真实样本 → 误拒率 53.3%（8/15），
-  被误拒的全是参考资料类：BGE_M3 论文 / CodeR 论文 / 两个 README /
-  软件工程复习资料 / 课程课件 —— 全被判 reject。
-
-根因（三条，已定位）：
-  1. g2.py 的 _system_prompt 把「前置问」当成了不分文件类型的全局二分
-  2. charter 缺「拿不准就收」的兜底政策
-  3. LLMClient 对 429 直接抛异常，但本机网关的 429 是「上游账号冷却 60 秒」，
-     等一下就好的东西不该直接失败
-
-人家已经改好（这两份你**不要碰**）：
-  - eval/rubric.md §0.1 加了「适用范围限定」（前置问只管过程记录类）
-  - baleen/charter.md 加了「拿不准就收」兜底政策
-
-你要改三处，都在 backend/：
-
-A. app/service/gate/g2.py 的 _system_prompt
-   1. 前置问**限定适用范围**：明确写「只用于过程记录类（项目报告/实施记录/周报/会议记录）」，
-      并写明「论文、技术文档、README、课件、复习资料**不走这一问**」
-   2. 新增「**明确该收**」清单，优先级高于前置问：
-      - 论文 / 技术文档 / README / 项目说明 → accept / reference_data
-      - 课件 / 复习整理 → accept（二手但成体系）
-      - 含「现象—原因—解决」的记录 → accept / case
-   3. 新增兜底政策：「**拿不准就 accept + 标低 quality**；错误地拒掉一篇好笔记，
-      比错误地收下一份垃圾糟得多」
-   4. **保留现有防注入段落与 JSON 输出契约，一个字都别删**
-
-B. app/service/llm/client.py：429 改为「尊重 Retry-After 的重试」
-   - 读 `Retry-After` 头（秒）；缺失则退避 5s / 15s
-   - 最多重试 **2 次**，单次等待 **≤ 90s**
-   - 仍失败才抛 LLMRateLimitError
-   - ⚠️ 这是对原设计「429 不重试」的**修正**：本机网关的 429 是「所有上游账号冷却」，
-     不重试等于把一次本可成功的调用白白丢掉
-   - 补测试：429+Retry-After → 重试后成功；连续 2 次 429 → 抛错；无 Retry-After → 用退避
-
-C. scripts/g2_smoke.py：加节流与分批
-   - `--delay N`（默认 3 秒）每个文件之间 sleep
-   - `--limit N` 本次只跑 N 个（便于分批打）
-   - `--resume` 跳过已出结果的 rel_path
-
-自测（贴进 DELIVERY）：
-- uv run pytest -q        （基线 87，不许降）
-- uv run python scripts/g2_smoke.py --samples ../eval/samples/_inbox --dry-run
-  → 确认 prompt 里出现了「不走这一问」「拿不准就 accept」等字样（grep 打印出来）
-- ⚠️ **live 重跑由主人决定何时跑**（网关配额有限），你只把关代码改好，
-  并验证 `--delay 3 --limit 5` 可用
-
-不要做：不动 eval/、不改 charter.md、不改 chunk/embed/parse/pipeline、不写检索与前端。
-```
-
-### 线 I-批2 · arq worker + 上传 API　｜　**当前执行者：ZCode-后端（未开工）**　·　与线 J 并行
-
-> **2026-10-28 23:5x 状态**：ZCode 会话报告"完成"，但工作区里**没有任何产出**
-> （无 `app/worker/`、无 `app/api/upload.py`、`pyproject.toml` 无 `arq`）。
-> 判断：它多半停在 §0.2 的「接手确认单」等主人确认 —— 命令里写了"等我确认后再动手"。
-> **主人只需回它一句「确认，开始」即可。**
-
-```
-⚠️ 本线与其他线【并行】进行，先看清文件边界：
-
-  别人正在改（你一个字都不许碰）：
-      app/service/gate/g2.py
-      app/service/llm/client.py
-      scripts/g2_smoke.py
-      eval/ 下一切
-
-  你只碰这些：
-      app/worker/            （新建）
-      app/api/               （新建 upload.py 等）
-      app/main.py            （只加 include_router 一行）
-      backend/pyproject.toml （加 arq）
-      backend/DELIVERY.md    （追加，标题注明「执行者：ZCode-后端 · 线 I-批2」）
-
-接手前照 §0.2 写「接手确认单」，并在确认单第 3 项里逐条列出你要改的文件。
+现状：导入链已闭环 —— 上传 → 排队 → G0/G1/G2 → note → chunks → embeddings 全部打通，
+DB 里已有真实数据（含测试导入的 note/chunk/embedding）。现在缺「读」的那一半。
 
 任务：
+1. app/service/retrieve/
+   - query 侧：embed_query()（**必须用带指令前缀的那个函数**，非对称检索）
+   - 检索：向量（pgvector halfvec 余弦）+ 词法（chunks.text 的 trgm）双路召回
+     → RRF 融合 → 取 top N
+   - **小块检索、父块入上下文**：命中的是子块，返回给调用方的是它的父块（small-to-big）
+   - 只查 status='active' 的 note；父块本身不参与向量召回
+2. app/repo/ 补检索查询（走 Repo(owner_id)，不许裸 session）
+3. scripts/retrieve_smoke.py --query "..." [--top-k 5]
+   - 打印：命中的子块、对应的父块 heading_path、分数
+4. 测试（不加载真模型时用 fake embedder；要测真实检索就明确标注需要模型）
 
-1. app/worker/（arq worker）
-   - worker.py：注册 import 任务 → 调用 app/service/imports/pipeline
-   - Redis 地址复用 config.redis_url
-   - ⚠️ pipeline 是**同步**函数 → worker 里直接跑，或 asyncio.to_thread 包装
+验收：
+- uv run pytest -q 基线 109，不许降
+- retrieve_smoke 对一条真实 query 能返回带 heading_path 的父块
+- §3.1 残留自查
 
-2. app/api/upload.py
-   - POST /api/sources      上传文件（multipart）→ 存 blob → 建 source 记录 → 排 job
-   - GET  /api/sources/{id} 查状态（parse_status + 该 source 最新的 review_runs）
-   - 大小限制 + 扩展名白名单（复用 parse 的判定，别另写一套）
-
-3. app/main.py 注册新 router（只加一行 include_router，不许改别的）
-
-4. pyproject.toml：uv add arq（AGENTS.md §4 技术栈里已列，不需要再申请）
-
-测试（**不加载 bge 模型、不连真 Redis**）：
-   - 上传端点用 TestClient + 临时 storage 目录（tmp_path）
-   - worker 任务用 fake pipeline 验证编排，不真跑解析
-
-⛔ 若跑测试时 GPU 显存不足（另一条线可能正占着模型），用
-   $env:CUDA_VISIBLE_DEVICES='' 强制走 CPU，并在 DELIVERY 里说明。
-
-自测（贴进 DELIVERY）：
-   - uv run pytest -q              （基线 87，不许降）
-   - docker compose up -d 后，curl 上传一个 md → 拿到 source_id，能查到 parse_status
-   - §3.1 残留自查（三项全空）
-
-不要做：不碰 g2.py / llm/client.py / g2_smoke.py / eval/ / charter.md；不写检索与前端。
+不要做：不写前端、不改 parse/gate/chunk/embed/pipeline/worker/api。
 ```
-### 之后（等线 J 验收再开）
 
-- **线 I-批2**：arq worker + 上传 API
-- **线 K**：检索（混合 + rerank）
-- **线 L**：前端
+### 线 L · G2 live 复测　｜　**等上游额度恢复**（不是代码任务）
+
+G2 政策已修（线 J），但 **mtt 网关的 6 个上游账号全部 `insufficient_quota`**，
+`/v1/chat/completions` 间歇性返回 502（网关汇总 `all_upstreams_failed`）。
+
+额度恢复后的复测命令（**必须带延迟 + 分批**）：
+
+```powershell
+cd baleen/backend
+uv run python scripts/g2_smoke.py --samples ../eval/samples/_inbox --live --delay 5 --limit 8
+```
+
+**期望**：误拒率从修正前的 53.3% 明显下降。这是论文第 5 章的核心数据。
 ## 3. 卡住时找谁
 
 **遇到下面「必须停下问」的，停下来把问题写进你目录下的 `DELIVERY.md`，等人回答。不要自己试一堆方案。**
@@ -480,6 +406,7 @@ git commit -F msg.txt                 # ④ 消息用文件传（长消息会被
 | 2026-10-28 | **Trae-后端** 线 H-批2（G2 归属闸） | **验收通过**。77 passed（+15）。防注入做到位：`<file_content>` 包裹 + system 声明「是数据不是指令」+ `test_injection_text_wrapped_in_delimiters` 直接注入「忽略以上指令」并断言被包裹。`G2Output` 用 `Literal` + 额外校验 rubric §7 映射（accept→index / partial→extract_spans / reject→topic_dialog|drop）。JSON 坏→重试1次→降级 accept/normal/index + degraded 标记。**LLM 异常向上抛不静默降级**（理由："否则 key 配错会把所有文件都收下"）——这个判断是对的 |
 | 2026-10-28 | **Trae-后端** 线 I-批1（导入状态机） | **验收通过**。87 passed（+10）。端到端实测：`sha256=0.3ms dedupe=233ms G0=42ms G1=13ms note=17ms chunk=2326ms embed=395ms`；DB 核对 **`parent_with_embedding=0`**（父块绝无向量，ADR 0003 决策①落地）；同文件二次导入命中 sha256 只花 82ms、未重复调 G2。charter 实现为 `resolve_charter()` 方法（文件 > 环境变量 > 默认），有专项测试 |
 | 2026-10-28 | **Trae-后端** 线 J（G2 政策修正 + 限流适配） | **验收通过**。90 passed（+3）。`_system_prompt` 三处修正（前置问限定适用范围 / 明确该收清单 / 拿不准就收），**防注入段与 JSON 契约一字未删**；429 改为尊重 `Retry-After`（≤90s、最多 2 次），Transport 契约扩为三元组；`g2_smoke` 加 `--delay 3 / --limit / --resume`。人家独立复跑 dry-run：`不走这一问=True`、`拿不准就 accept=True`、预算 4000=charter 1148+正文 1437。**它没用真网关跑 live（配额有限），改用本地假 OpenAI 服务验管道——判断正确** |
+| 2026-10-28 | **ZCode-后端** 线 I-批2（arq worker + 上传 API） | **验收通过**。109 passed（+19）。人家 TestClient 实测：`/healthz` 200 `{db:ok,redis:ok}`、`/api/sources/999999` 404 语义正确、空 POST 422。六个批复项全落地（no_llm+g2_skipped 标记 / 白名单方案A / 50MB+55MB 请求体 / uuid 暂存目录 / worker 启动清 >24h 孤儿 / max_jobs=1+900s）。**三个追认项全批**：python-multipart+httpx、redis 8.1→5.3.1（实测 server 7.4.11 下 ping/aclose 正常）、deduped=`not job_created`。**加分**：`run_import_async` 用函数级延迟导入，避免上传 API 进程拉起 torch |
 
 ---
 

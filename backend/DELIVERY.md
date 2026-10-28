@@ -55,6 +55,15 @@ cd backend && uv run pytest -q     →  37 passed
 - **模型路径**：`C:\Users\MOM\Desktop\学习项目\智能笔记库\models\bge-large-zh-v1.5`（1.21 GB，工作区根，**不在仓库内**）
 - **配置**：`baleen/.env`（从 `.env.example` 复制；**已 gitignore，永不提交**）
 - **临时服务器清理**：见 `HANDOFF.md` §3.1（必须 `taskkill /T`，曾留下 17 小时的孤儿 uvicorn）
+- **LLM 上游额度（2026-10-28 深夜实测，重要）**：
+  `LLM_BASE_URL=http://100.83.19.7:8085/v1` 走本机 Tailscale → `mtt-frontend` → `mtt-backend`
+  → 上游账号池（6 个，key 10–16 / provider 7，上游为 `token.sensenova.cn`）。
+  ⚠️ 当时**6 个账号全部 `insufficient_quota`**，网关把 `all_upstreams_failed` 汇总成
+  **HTTP 502（不是 429）**。→ **重试无用**，只能等额度恢复或加账号，**别误判成代码 bug**。
+  ⚠️ 网关每 10 分钟跑 `sweep_degraded_keys`（探测 6 个账号），**本身也在消耗额度**。
+  ⚠️ `glm-5.2` 是**推理模型**：`max_tokens=8` 时 `content` 为空、`finish_reason=length`，
+  思考进 `reasoning_content`。`probe()` 用的正是 `max_tokens=8`，**可能把推理模型误判成
+  chat 不可用**（待额度恢复后验证）。正常调用 `max_tokens=800` 实测 **3.4 秒/次**，JSON 正常。
 
 ---
 ## 2026-10-28 · 线 I-批2 · arq worker + 上传 API · 执行者：ZCode-后端
