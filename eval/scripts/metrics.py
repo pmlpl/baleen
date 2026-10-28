@@ -137,14 +137,32 @@ def main(argv: list[str] | None = None) -> int:
     latency = [int(float(pf(pred, "latency_ms") or 0)) for _, pred in rows]
     slot_counts = Counter((lab.get("slot") or "").strip() or "未填" for lab, _ in rows)
     split_counts = Counter((row.get("split") or "").strip() or "未填" for row in labels)
+
+    # (槽位, 判定) 二维分布 —— stratified-v3 的直接产物：证明「该收 / 该拒」两种失败模式
+    # 在 test 里都有样本，而不是只考了一半（槽 7 就是这么翻车的）。
+    def _pair(row: dict[str, str]) -> tuple[str, str]:
+        return ((row.get("slot") or "").strip() or "未填",
+                (row.get("human_verdict") or "").strip() or "未填")
+
+    pair_keys = sorted({_pair(row) for row in labels},
+                       key=lambda p: (p[0] == "未填", int(p[0]) if p[0].isdigit() else 99, p[1]))
+    pair_split = Counter(
+        (*_pair(row), (row.get("split") or "").strip() or "未填") for row in labels
+    )
+    pairs_in_test = sum(1 for pair in pair_keys if pair_split[(*pair, "test")] > 0)
+
     meta_path = labels_path.with_name("split_meta.json")
     try:
-        split_version = json.loads(meta_path.read_text(encoding="utf-8")).get("version", "未记录")
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        split_version = meta.get("version", "未记录")
+        split_granularity = meta.get("granularity", "未记录")
+        split_ratio_actual = meta.get("test_ratio_actual")
     except (OSError, ValueError):
-        split_version = "未记录"
+        split_version, split_granularity, split_ratio_actual = "未记录", "未记录", None
 
     # --- 报告 -------------------------------------------------------------
-    lines = [f"# 评测报告 · split={args.split}", "", f"split 版本：{split_version}", "",
+    lines = [f"# 评测报告 · split={args.split}", "",
+             f"split 版本：{split_version}（分层粒度：{split_granularity}）", "",
              f"**误拒率 {ratio(false_reject, len(good))}　|　"
              f"误丢率 {ratio(false_drop, len(topic))}**", "", "---", "",
              "## 1. 数据集概况", ""]
@@ -154,10 +172,22 @@ def main(argv: list[str] | None = None) -> int:
         ["参与计算的样本", len(rows)],
         ["缺失预测（preds 无此 rel_path）", len(missing_pred)],
         ["dev / test 分布（全库）", f"{split_counts.get('dev', 0)} / {split_counts.get('test', 0)}"],
+        ["test 实际占比（split_meta.json）",
+         f"{split_ratio_actual:.1%}" if isinstance(split_ratio_actual, (int, float)) else "未记录"],
+        ["(槽位, 判定) 组合数 / test 已覆盖", f"{len(pair_keys)} / {pairs_in_test}"],
     ])
     lines += ["", "槽位分布：", ""]
     lines += table(["slot", "样本数"], [[slot, n] for slot, n in sorted(
         slot_counts.items(), key=lambda kv: (kv[0] == "未填", int(kv[0]) if kv[0].isdigit() else 99))])
+    lines += ["", "### 1.1 (槽位, 判定) 二维分布", "",
+              "v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，"
+              "否则同一个槽里「该收」和「该拒」两种失败模式只会被考到一半。", ""]
+    lines += table(["slot", "判定", "dev", "test", "test 覆盖"], [
+        [slot, verdict, pair_split[(slot, verdict, "dev")], pair_split[(slot, verdict, "test")],
+         "✅" if pair_split[(slot, verdict, "test")] else "⚠️ 缺"]
+        for slot, verdict in pair_keys
+    ])
+    lines += ["", f"合计：{len(pair_keys)} 个组合，test 覆盖 {pairs_in_test} / {len(pair_keys)}。"]
     lines += ["", "## 2. 🔴 误拒率", "",
               f"**误拒率 = {ratio(false_reject, len(good))}**（human ∈ {{accept, partial}} 中 "
               "pred = reject 的比例）—— 好笔记被扔了。", "",

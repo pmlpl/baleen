@@ -1,8 +1,8 @@
 # 评测报告 · split=test
 
-split 版本：stratified-v2
+split 版本：stratified-v3（分层粒度：slot_verdict）
 
-**误拒率 0/7 = 0.0%　|　误丢率 0/1 = 0.0%**
+**误拒率 1/10 = 10.0%　|　误丢率 0/1 = 0.0%**
 
 ---
 
@@ -10,23 +10,25 @@ split 版本：stratified-v2
 
 | 项 | 值 |
 |---|---|
-| 本 split 样本数 | 14 |
-| 标注完成度 | 14 / 14 |
-| 参与计算的样本 | 14 |
+| 本 split 样本数 | 18 |
+| 标注完成度 | 18 / 18 |
+| 参与计算的样本 | 18 |
 | 缺失预测（preds 无此 rel_path） | 0 |
-| dev / test 分布（全库） | 21 / 14 |
+| dev / test 分布（全库） | 17 / 18 |
+| test 实际占比（split_meta.json） | 51.4% |
+| (槽位, 判定) 组合数 / test 已覆盖 | 18 / 18 |
 
 槽位分布：
 
 | slot | 样本数 |
 |---|---|
 | 1 | 1 |
-| 2 | 1 |
+| 2 | 2 |
 | 3 | 1 |
-| 4 | 1 |
-| 5 | 1 |
+| 4 | 2 |
+| 5 | 2 |
 | 6 | 1 |
-| 7 | 1 |
+| 7 | 2 |
 | 8 | 1 |
 | 9 | 1 |
 | 10 | 1 |
@@ -35,9 +37,36 @@ split 版本：stratified-v2
 | 13 | 1 |
 | 14 | 1 |
 
+### 1.1 (槽位, 判定) 二维分布
+
+v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，否则同一个槽里「该收」和「该拒」两种失败模式只会被考到一半。
+
+| slot | 判定 | dev | test | test 覆盖 |
+|---|---|---|---|---|
+| 1 | accept | 3 | 1 | ✅ |
+| 2 | accept | 2 | 1 | ✅ |
+| 2 | partial | 0 | 1 | ✅ |
+| 3 | accept | 1 | 1 | ✅ |
+| 4 | accept | 0 | 1 | ✅ |
+| 4 | reject | 1 | 1 | ✅ |
+| 5 | accept | 0 | 1 | ✅ |
+| 5 | reject | 1 | 1 | ✅ |
+| 6 | accept | 1 | 1 | ✅ |
+| 7 | accept | 1 | 1 | ✅ |
+| 7 | reject | 1 | 1 | ✅ |
+| 8 | reject | 1 | 1 | ✅ |
+| 9 | reject | 0 | 1 | ✅ |
+| 10 | accept | 0 | 1 | ✅ |
+| 11 | reject | 3 | 1 | ✅ |
+| 12 | reject | 0 | 1 | ✅ |
+| 13 | reject | 2 | 1 | ✅ |
+| 14 | accept | 0 | 1 | ✅ |
+
+合计：18 个组合，test 覆盖 18 / 18。
+
 ## 2. 🔴 误拒率
 
-**误拒率 = 0/7 = 0.0%**（human ∈ {accept, partial} 中 pred = reject 的比例）—— 好笔记被扔了。
+**误拒率 = 1/10 = 10.0%**（human ∈ {accept, partial} 中 pred = reject 的比例）—— 好笔记被扔了。
 
 ## 3. 🔴 误丢率
 
@@ -53,26 +82,28 @@ split 版本：stratified-v2
 
 | human \ pred | accept | partial | reject |
 |---|---|---|---|
-| accept | 6 | 0 | 0 |
+| accept | 8 | 0 | 1 |
 | partial | 1 | 0 | 0 |
-| reject | 1 | 0 | 6 |
+| reject | 2 | 0 | 6 |
 
 ## 6. 判定准确率与各类 P / R / F1
 
-- 判定准确率：12/14 = 85.7%
-- macro-F1：0.59
+- 判定准确率：14/18 = 77.8%
+- macro-F1：0.53
 
 | 类别 | support | precision | recall | F1 |
 |---|---|---|---|---|
-| accept | 6 | 0.75 | 1.00 | 0.86 |
+| accept | 9 | 0.73 | 0.89 | 0.80 |
 | partial | 1 | 0.00 | 0.00 | 0.00 |
-| reject | 7 | 1.00 | 0.86 | 0.92 |
+| reject | 8 | 0.86 | 0.75 | 0.80 |
 
 ## 7. 质量分级被低估清单
 
 判据：`human_quality` 比 `pred_quality` 高两档及以上（档次 core > normal > reference > junk）。
 
-无。
+| rel_path | human_quality | pred_quality |
+|---|---|---|
+| _inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg | normal | junk |
 
 ## 8. 全错样本清单（mining list）
 
@@ -80,7 +111,9 @@ split 版本：stratified-v2
 
 | rel_path | human | pred | human_reason |
 |---|---|---|---|
+| _inbox/软件开发项目大综合实训实践授课进度计划表.docx | reject / drop | accept / index | 抽取全文仅8行，全部是授课进度计划表的空白表头与签名栏，没有任何实际进度内容 |
 | _inbox/项目实施记录（一）.md | reject / topic_dialog | accept / index | 实训模板填出来的过程记录，全是按流程执行的汇报，没有技术判断或踩坑结论 |
+| _inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg | accept / index | reject / extract_spans | 手写的AI应用开发知识提纲，四大板块覆盖RAG、大模型原理、Agent编排与鉴权，虽只有关键词无展开，但结构完整可当回顾 |
 | _inbox/软件开发项目大综合实训实践项目指导书.docx | partial / extract_spans | accept / index | 全文约七成是教学安排（适用专业、场地、指导团队、评分要求、预习思考题），可用内容集中在第四部分 |
 
 ## 9. 成本
@@ -90,16 +123,17 @@ split 版本：stratified-v2
 | 总 token | 0 |
 | 均值 token / 文件 | 0.0 |
 | P50 延迟 | 0 ms |
-| P95 延迟 | 47 ms |
+| P95 延迟 | 251 ms |
 
 ## 10. 🔴 非法组合清单
 
 合法映射只有 `accept→index`、`partial→extract_spans`、`reject→topic_dialog`、`reject→drop`；其余组合说明预测器自相矛盾，**计入错误数**。
 
-**非法组合 = 2 条；判定错误 = 2 条；去重后唯一错误 = 4 条（两类可能重叠）。**
+**非法组合 = 3 条；判定错误 = 4 条；去重后唯一错误 = 6 条（两类可能重叠）。**
 
 | rel_path | pred_verdict | pred_action |
 |---|---|---|
 | _inbox/20260906_105322_839e8a44.pdf | reject | extract_spans |
 | _inbox/【哲风壁纸】人物特写-动漫少女.jpg | reject | extract_spans |
+| _inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg | reject | extract_spans |
 

@@ -1,7 +1,22 @@
 {
-  "version": "stratified-v2",
+  "version": "stratified-v3",
   "strategy": "stratified",
   "seed": 42,
+  "granularity": "slot_verdict",
   "test_ratio": 0.4,
-  "rows": 35
+  "test_ratio_actual": 0.5143,
+  "rows": 35,
+  "test": 18,
+  "dev": 17,
+  "slots": 14,
+  "slot_verdict_pairs": 18,
+  "pairs_in_test": 18,
+  "anchored_to_existing": true,
+  "moved_dev_to_test": [
+    "_inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg",
+    "_inbox/情景6 Spring Boot消息服务.pptx",
+    "_inbox/软件开发项目大综合实训实践授课进度计划表.docx",
+    "_inbox/项目实验实训报告（一）.md"
+  ],
+  "moved_test_to_dev": []
 }
