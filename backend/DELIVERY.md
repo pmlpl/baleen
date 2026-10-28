@@ -57,6 +57,126 @@ cd backend && uv run pytest -q     →  37 passed
 - **临时服务器清理**：见 `HANDOFF.md` §3.1（必须 `taskkill /T`，曾留下 17 小时的孤儿 uvicorn）
 
 ---
+## 2026-10-28 · 线 I-批1 · repo 层 + 导入状态机 + CLI 冒烟
+
+> 执行者：**Trae-后端**。已按 §0.2 在回复里给出接手确认单（同执行者续做，未重读已完成模块的实现）。
+
+### 产物
+
+- **`app/repo/` 补真实查询**（仍只走 `Repo(owner_id)`，无裸 SQL）：
+  - `sources.py`：`get / get_by_sha256 / create_or_get_by_sha256 / update_parse / mark_status`
+  - `review_runs.py`：`get(source_id, gate)` / `add(...)`（每闸门一行）
+  - `notes.py`：`get / get_by_source / create / update`
+  - `chunks.py`：`get_by_note / count_by_note / bulk_insert`（先父块 flush 拿 id，再子块挂 `parent_id`）
+  - `embeddings.py`：`existing_chunk_ids / count_by_note / bulk_insert`
+  - `jobs.py`：`get / get_by_dedupe_key / create_or_get / claim / update_status`（成功时清 `last_error`）
+  - `repos.py`：`Repos(session, owner_id)` 聚合，一次构造六个表 Repo；`__init__.py` 导出
+- **`app/service/imports/`（状态机）**：
+  - 目录名叫 `imports` 而不是任务书写的 `import` —— **`import` 是 Python 关键字**，
+    `from app.service.import...` 是语法错误、无法正常导入；按 HANDOFF §3「目录细分可自决」处理。
+  - `pipeline.py`：`run_import()` 同步门面 + `run_import_async()` 异步核心（依赖全可注入）。
+    阶段：**sha256 → 去重 → blob → G0 → G1 →（视情况）G2 → note → 切块 → 向量化 → 落库**。
+    - 每阶段 `commit` 并推进 `jobs.status`；失败先记 `jobs.status=failed + last_error` 再抛。
+    - 幂等：同 sha256 且 `jobs.status=done` → 直接返回已有 source/note 与计数，**不再调 G2**。
+    - 可续跑：`source.doc` / `review_runs`（按 gate 复用）/ `note` / `chunks` 已存在的阶段跳过，
+      只补做缺失的 embeddings（测试里用 embed 抛错验证）。
+    - `--no-llm`：跳过 G2，用 G1 结论产 note；`--dry-run`：只走 G0→G1，不落库、不写 blob。
+    - blob 按 AGENTS §4 存 `baleen/storage/{sha[:2]}/{sha}`（已在 `.gitignore`）。
+- **`scripts/import_smoke.py`**：`--file <path> [--no-llm] [--dry-run]`，打印各阶段耗时、判定、
+  父/子块数、向量数；第二次跑同一文件会打印「去重命中」。
+- **charter 改为优先读文件**（`app/core/config.py`）：
+  - 新增 `DEFAULT_CHARTER` 常量与 `Settings.resolve_charter()`；
+  - 优先级：`baleen/charter.md` 全文 > `CHARTER` 环境变量 > 内置默认；读取失败记 warning 回退，不崩。
+  - **未改 `charter.md` 一个字节**。
+- **G2 预算 3000 → 4000 + 分配可读**（`app/service/gate/g2.py`）：
+  - `PromptBundle` 新增 `charter_chars / charter_tokens / sample_tokens / warnings`；
+  - charter 估算 > **1200 token** 时记 warning；
+  - `G2Result.meta` 增加 `charter_tokens / sample_tokens / warnings`；
+  - `g2_smoke --dry-run` 逐文件打印 `charter=… sample=…`，末尾打印「预算分配」汇总。
+- 测试：`tests/service/import/{conftest,test_pipeline}.py`（6 例）、`tests/test_config.py` +2、
+  `tests/service/gate/test_g2.py` 更新预算断言 +2。
+
+### 自测（原始输出）
+
+```
+uv run pytest -q   →  87 passed in 21.15s      # 原 77 + import 6 + config 2 + g2 2
+uv run ruff check . →  All checks passed!
+```
+
+`import_smoke.py --file <临时 fixture md> --no-llm`（首次，真实 bge + 真实开发库）：
+
+```
+文件: C:\Users\MOM\AppData\Local\Temp\baleen_import_smoke.md
+模式: 落库 / 跳过 G2
+各阶段耗时(ms): sha256=0.3  dedupe=123.6  G0=23.8  G1=10.8  note=12.7  chunk=1536.9  embed=331.2
+parse_status=ok  g1=accept  g2=None  quality=core  action=index
+source_id=17  note_id=10
+chunks: total=8 (父块 4 / 子块 4)  embeddings=4
+```
+
+同一文件再跑（去重命中）：
+
+```
+文件: C:\Users\MOM\AppData\Local\Temp\baleen_import_smoke.md
+模式: 落库 / 跳过 G2
+去重: 命中已有 sha256 —— 未重复处理、未重复调用 G2
+各阶段耗时(ms): sha256=0.3  dedupe=100.3
+parse_status=ok  g1=accept  g2=None  quality=core  action=index
+source_id=17  note_id=10
+chunks: total=8 (父块 4 / 子块 4)  embeddings=4
+```
+
+`g2_smoke.py --samples ../eval/samples/_inbox --dry-run`（新预算分配）：
+
+```
+预算分配: 总预算=4000 | charter=1010 token | 正文采样中位数=1913 token
+prompt token 估算(共 21 个 ok 文件): min=1781 median=3934 p90=3934 max=3935
+超 4000 token 的文件: 0 个;发生截断: 14 个
+```
+
+### HANDOFF §3.1 残留自查（本次未起任何服务器）
+
+```
+Get-NetTCPConnection -LocalPort 8123 -State Listen              → 空
+Get-CimInstance Win32_Process -Filter "Name='uvicorn.exe'"      → 空
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match 'baleen' }             → 空
+```
+
+### 已知限制
+
+- **目录名 `imports` 而非任务书的 `import`**（Python 关键字限制），见上「产物」。
+- **G0 解析的是原始路径而不是 blob**：blob 是内容寻址、无扩展名，G0 按扩展名路由；
+  两者字节完全相同，不影响可重放。续跑时直接用 `sources.doc`，不再解析。
+- **`partial / extract_spans` 暂退化为整篇入库**：本批没有实现「只抽有用片段」，
+  G2 判 partial 时仍创建 note 并按 normal 切块；这是 v1 已知缺口，需在导入状态机批 2 或检索前补。
+- `--no-llm` 模式下没有 G2 质量分级，`notes.quality` 直接用 G1 的 quality（G1 已知恒 core）。
+- 导入测试需要 PostgreSQL（`docker compose up -d`）；不可用时整组 skip。
+  测试用「外层事务 + savepoint + 结束 rollback」隔离，**不污染开发库**；但断言按本次 sha256/source_id 过滤，
+  因为开发库里可能有历史数据。
+- smoke 首次运行在开发库留下了 1 条真实记录（`source_id=17 / note_id=10`，临时 fixture 内容为闭包笔记），
+  用于演示去重；未自动清理。
+- 向量模型名在 pipeline 里写死 `bge-large-zh-v1.5`（维度从向量实际长度取），未抽成配置；
+  若换模型需同时改 `embeddings.model` 口径（ADR 决策 10 要求换模型新建表）。
+- 每阶段独立 commit，失败时 `note`/`chunks` 可能已落库、下次续跑复用；不做跨阶段大事务（长任务不适合）。
+- 还没接 arq / 上传 API（批 2）。
+
+### 需要确认的问题
+
+1. **目录名 `imports` 是否接受**？若必须叫 `import`，只能靠 `importlib.import_module("app.service.import.pipeline")`
+   调用，可读性差；建议保留 `imports`。
+2. **partial / extract_spans 的临时策略**：现在整篇入库。是否改为「partial 不产 note，留给后续片段抽取」？
+   任务书没规定，我按「除 reject 外都产 note」的最简实现，已在已知限制标注。
+3. 开发库里 smoke 产生的 1 条记录（source 17 / note 10）要不要删？未擅自删数据。
+
+### 断点
+
+线 I-批 1 到此为止，**批 2（arq worker + 上传 API）未开始**。下一步接批 2 时：
+`run_import_async` 可直接在 arq job 里 `await`（不要再套 `asyncio.run`）；
+`jobs.claim/update_status`、`dedupe_key=import:<sha256>` 的约定已就位。
+
+---
+
 ## 2026-10-28 · 线 H-批2 · G2 归属闸（LLM + 可降级）
 
 > 执行者：**Trae-后端**（同一执行者续做批 2，未重读/未重构批 1 的 `llm/`，只调用它）。

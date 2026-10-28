@@ -28,7 +28,10 @@ from app.service.parse.blocks import flatten_text
 from app.service.parse.types import ParseResult
 
 # ---- prompt 预算 ----
-PROMPT_TOKEN_BUDGET = 3000  # 总输入(系统 + 用户消息)的估算 token 上限
+# charter.md 有 1373 字符(≈1373 token);3000 总预算下正文只剩约 1450 token,判定信息不足,
+# 主人确认上调到 4000(HANDOFF 线 I-批1 §4b)。
+PROMPT_TOKEN_BUDGET = 4000  # 总输入(系统 + 用户消息)的估算 token 上限
+CHARTER_TOKEN_WARN = 1200  # charter 超过此值 → 记 warning,提示主人精简章程
 MIN_SAMPLE_TOKENS = 200  # 结构化摘要挤压后仍不足此值 → 放弃采样只报 warning
 HEADING_PATH_LIMIT = 20  # 标题路径最多列这么多条
 NOTE_RESERVE_TOKENS = 96  # 截断说明文字的预留(它在采样之后拼接,必须提前扣掉)
@@ -99,6 +102,11 @@ class PromptBundle(BaseModel):
     truncated: bool
     original_chars: int
     kept_chars: int
+    # 预算分配:总预算 = charter + 固定说明 + 正文采样;冒烟脚本要打印这三项
+    charter_chars: int = 0
+    charter_tokens: int = 0
+    sample_tokens: int = 0
+    warnings: list[str] = Field(default_factory=list)
 
 
 def _structure(blocks: dict) -> dict:
@@ -179,6 +187,13 @@ def build_messages(
 ) -> PromptBundle:
     """组装 system + user 两条消息,并把正文采样压进 token 预算。"""
     system = _system_prompt(charter)
+    charter_tokens = estimate_tokens(charter)
+    warnings: list[str] = []
+    if charter_tokens > CHARTER_TOKEN_WARN:
+        warnings.append(
+            f"charter 约 {charter_tokens} token,超过 {CHARTER_TOKEN_WARN};"
+            "正文可用预算被压缩,建议精简 charter.md"
+        )
     structure, text, chars, heading_path = _summary(parse_result)
 
     meta_lines = [
@@ -234,6 +249,10 @@ def build_messages(
         truncated=truncated,
         original_chars=chars,
         kept_chars=len(sample),
+        charter_chars=len(charter),
+        charter_tokens=charter_tokens,
+        sample_tokens=estimate_tokens(sample),
+        warnings=warnings,
     )
 
 
@@ -349,6 +368,9 @@ def judge(
             "prompt_estimated_tokens": bundle.estimated_tokens,
             "original_chars": bundle.original_chars,
             "kept_chars": bundle.kept_chars,
+            "charter_tokens": bundle.charter_tokens,
+            "sample_tokens": bundle.sample_tokens,
+            "warnings": bundle.warnings,
             "degraded": False,
         },
     )

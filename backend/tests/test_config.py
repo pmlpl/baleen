@@ -33,3 +33,18 @@ def test_reads_env_file_from_root_dir(monkeypatch, tmp_path):
         assert s.embedding_model_path == "/fake/model/path-for-test"
     finally:
         cfg.get_settings.cache_clear()
+
+
+def test_resolve_charter_prefers_charter_md(monkeypatch, tmp_path):
+    """charter.md 存在时优先读文件全文。"""
+    (tmp_path / "charter.md").write_text("# 我的章程\n只收自己想明白的东西", encoding="utf-8")
+    monkeypatch.setattr(cfg, "ROOT_DIR", tmp_path)
+    assert cfg.get_settings().resolve_charter() == "# 我的章程\n只收自己想明白的东西"
+
+
+def test_resolve_charter_falls_back_to_builtin(monkeypatch, tmp_path):
+    """没有 charter.md → 用内置默认字符串。"""
+    monkeypatch.setattr(cfg, "ROOT_DIR", tmp_path)
+    settings = cfg.get_settings()
+    assert settings.resolve_charter() == settings.charter
+    assert settings.resolve_charter()  # 非空

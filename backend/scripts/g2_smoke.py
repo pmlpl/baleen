@@ -22,7 +22,7 @@ from app.service.gate.g2 import build_messages, judge  # noqa: E402
 from app.service.llm import LLMClient, LLMError  # noqa: E402
 from app.service.parse import ParseResult, parse_file  # noqa: E402
 
-BUDGET = 3000
+BUDGET = 4000
 # rubric §7 的一致性映射:出现这些组合说明 G2 输出自相矛盾
 INVALID_COMBOS = {
     ("accept", "extract_spans"),
@@ -73,7 +73,10 @@ def _pct(values: list[int], q: float) -> int:
 
 def _dry_run(files, charter: str) -> None:
     tokens: list[int] = []
+    sample_tokens: list[int] = []
     truncated = 0
+    charter_tokens = 0
+    warnings: list[str] = []
     for f, pr in files:
         bundle = build_messages(
             pr,
@@ -83,19 +86,29 @@ def _dry_run(files, charter: str) -> None:
             size_bytes=f.stat().st_size,
         )
         tokens.append(bundle.estimated_tokens)
+        sample_tokens.append(bundle.sample_tokens)
         truncated += bundle.truncated
+        charter_tokens = bundle.charter_tokens
+        warnings = bundle.warnings
         mark = "yes" if bundle.truncated else "no"
         print(
             f"ok   {f.name[:40]:<42} est={bundle.estimated_tokens:<5} "
+            f"charter={bundle.charter_tokens:<5} sample={bundle.sample_tokens:<5} "
             f"chars={bundle.original_chars:<6}→kept={bundle.kept_chars:<5} truncated={mark}"
         )
     over = [t for t in tokens if t > BUDGET]
     print(
-        f"\nprompt token 估算(共 {len(tokens)} 个 ok 文件): "
+        f"\n预算分配: 总预算={BUDGET} | charter={charter_tokens} token | "
+        f"正文采样中位数={_pct(sample_tokens, 0.5)} token"
+    )
+    print(
+        f"prompt token 估算(共 {len(tokens)} 个 ok 文件): "
         f"min={min(tokens, default=0)} median={_pct(tokens, 0.5)} "
         f"p90={_pct(tokens, 0.9)} max={max(tokens, default=0)}"
     )
     print(f"超 {BUDGET} token 的文件: {len(over)} 个;发生截断: {truncated} 个")
+    for w in warnings:
+        print(f"[warn] {w}")
 
 
 def _live(files, charter: str, labels: dict[str, dict], samples_root: Path) -> None:
@@ -191,7 +204,7 @@ def main() -> int:
         print(f"[skip] 目录里没有 ok 文件:{root}")
         return 0
 
-    charter = get_settings().charter
+    charter = get_settings().resolve_charter()
     if dry_run:
         print(f"[dry-run] 只检查 prompt 组装,不调用任何 LLM;charter {len(charter)} 字符")
         _dry_run(files, charter)

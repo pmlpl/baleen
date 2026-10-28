@@ -1,5 +1,6 @@
 """应用配置:全部来自环境变量(可选 .env),不硬编码任何路径与密钥。"""
 
+import logging
 from functools import lru_cache
 from pathlib import Path
 
@@ -7,7 +8,19 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # 绝对路径定位:无论从哪个 CWD 启动,都能找到仓库根的 .env(与 docker compose 共用一份)
 BASE_DIR = Path(__file__).resolve().parents[2]  # backend/
-ROOT_DIR = BASE_DIR.parent  # baleen/  (.env 在这里)
+ROOT_DIR = BASE_DIR.parent  # baleen/  (.env / charter.md 在这里)
+
+log = logging.getLogger(__name__)
+
+# 内置默认 charter(没有 baleen/charter.md 时兜底;CHARTER 环境变量可覆盖)
+DEFAULT_CHARTER = (
+    "我是一名软件过程技术方向的本科生,这个笔记库只收「以后还用得上」的内容。\n"
+    "收:需求与设计文档、测试计划与缺陷记录(含现象/根因/修复)、有实际进展的项目过程记录、"
+    "自写的技术笔记与论文整理、可复现的问题记录(环境配置踩坑、性能排查、bug 复盘)。\n"
+    "不收:无上下文的报错堆栈、纯模板周报、聊天记录、下载的发票与产品说明书、纯截图、"
+    "与个人知识库无关的外部资料。\n"
+    "判据:能留下一句「为什么这么做」的是知识,收;只在汇报「我做了什么」的不是知识,不收。"
+)
 
 
 class Settings(BaseSettings):
@@ -29,14 +42,22 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""  # 真实 key 只进 .env,永不入代码/日志
     llm_model: str = "gpt-4o-mini"
-    charter: str = (
-        "我是一名软件过程技术方向的本科生,这个笔记库只收「以后还用得上」的内容。\n"
-        "收:需求与设计文档、测试计划与缺陷记录(含现象/根因/修复)、有实际进展的项目过程记录、"
-        "自写的技术笔记与论文整理、可复现的问题记录(环境配置踩坑、性能排查、bug 复盘)。\n"
-        "不收:无上下文的报错堆栈、纯模板周报、聊天记录、下载的发票与产品说明书、纯截图、"
-        "与个人知识库无关的外部资料。\n"
-        "判据:能留下一句「为什么这么做」的是知识,收;只在汇报「我做了什么」的不是知识,不收。"
-    )
+    charter: str = DEFAULT_CHARTER
+
+    def resolve_charter(self) -> str:
+        """charter 解析优先级:``baleen/charter.md`` 全文 > `CHARTER` 环境变量 > 内置默认。
+
+        文件存在但读取失败(权限/编码)时记 warning 并回退,绝不抛异常。
+        """
+        path = ROOT_DIR / "charter.md"
+        if not path.exists():
+            return self.charter
+        try:
+            text = path.read_text(encoding="utf-8").strip()
+        except (OSError, UnicodeDecodeError) as exc:
+            log.warning("读取 %s 失败(%s),回退到内置 charter", path, exc)
+            return self.charter
+        return text or self.charter
 
     @property
     def cors_origin_list(self) -> list[str]:
