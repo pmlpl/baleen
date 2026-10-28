@@ -194,6 +194,22 @@
    - --dry-run：只打印组装好的 prompt 与统计，**一次 LLM 都不调**（默认模式）
    - 不带 --dry-run 才真调，且必须打印每条的 token 花费与总花费
 
+### 📌 协调方备注（2026-10-28 · 交付时按此检查）
+
+执行者（Trae-后端）选择**用标准库 `urllib` 而非 httpx** 实现 LLM 调用。
+经核实：`httpx` / `requests` / `aiohttp` **确实都没装**，该判断符合 `AGENTS.md` §3.2「新增依赖需拍板」。
+
+**交付时必须检查这两点**：
+
+1. **是不是一个干净的同步函数**（`def call(...) -> dict`），异步包装在外面
+   → 是的话，以后换 httpx 只改一处，可以接受
+2. **有没有在 async 上下文里直接阻塞调用**
+   → `urllib` 是同步的，后端是 async FastAPI。若在协程里裸调，会卡死事件循环
+   → 正确做法：`await anyio.to_thread.run_sync(llm.sync_call, ...)` 或放到 arq worker 里
+
+**若第 2 点不达标**：允许 `uv add httpx`（纯 Python、几百 KB、FastAPI 生态标配，
+`starlette.testclient` 本来就依赖它）。这不是"引框架"，是"补 HTTP 客户端基建"。
+
 不要做：不写导入状态机、不写检索、不落库、不改 G1。
 
 自测（贴进 DELIVERY）：

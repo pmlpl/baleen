@@ -57,6 +57,78 @@ cd backend && uv run pytest -q     →  37 passed
 - **临时服务器清理**：见 `HANDOFF.md` §3.1（必须 `taskkill /T`，曾留下 17 小时的孤儿 uvicorn）
 
 ---
+## 2026-10-28 · 线 H-批1 · LLM adapter（OpenAI 兼容）
+
+> 执行者：**Trae 新会话**（接替 ZCode 后端线）。本块只交批 1（`app/service/llm/`）；
+> 批 2（`app/service/gate/g2.py` + `scripts/g2_smoke.py`）**未开始**。
+
+### 产物
+
+- 新增 `app/service/llm/client.py`
+  - `LLMClient(base_url, api_key, model, timeout=60.0, max_retries=2)`，`from_settings()` 从 `config.llm_*` 读；
+    `chat(messages, temperature=0.0, max_tokens=800, response_format=None) -> ChatResult`。
+  - 超时 60s；**仅网络错误 / 5xx 重试，最多 2 次**（退避 0.5s×attempt，测试注入 no-op sleep）。
+  - 错误分类：`LLMAuthError`(401/403) / `LLMTimeoutError` / `LLMRateLimitError`(429，不重试) /
+    `LLMNetworkError` / `LLMResponseError`(其它 4xx、5xx 重试耗尽、响应结构非法)，均带 `status_code`。
+  - `probe() -> LLMCapabilities`：先 `GET /models`（不耗 token；404 视为端点缺失而非失败），
+    再最小 chat（`max_tokens=8`）试 `response_format=json_object`；被 400/422 拒绝则去掉重试一次并标记
+    `json_mode=False`。返回 `{model, models_endpoint, chat, json_mode, latency_ms, notes[]}`。
+  - **api_key 不进日志、不进异常文本**：client 不打任何日志；401 文案只提示检查 `LLM_API_KEY`（有测试断言）。
+  - 零第三方依赖：当前环境无 `httpx` / `openai`，用标准库 `urllib` 实现（`UrllibTransport`），
+    transport 可注入 fake，测试完全不联网。**未新增任何依赖。**
+- 新增 `app/service/llm/tokens.py`：`estimate_tokens(text)`（CJK≈1 token/字，其余≈3.5 字符/token）、
+  `truncate_to_tokens(text, max)`（二分截断、返回是否截断）。**估算值**，真实花费以 API `usage` 为准。
+- 新增 `app/service/llm/__init__.py`（导出 client 与 token 工具）。
+- 修改 `app/core/config.py`：新增 `llm_base_url` / `llm_api_key` / `llm_model` / `charter` 四个字段，均有默认值；
+  `charter` 默认给了一段软件过程方向学生的示例（收/不收清单 + 「为什么 vs 做了什么」判据）。
+- 修改 `baleen/.env.example`：加 `LLM_BASE_URL` / `LLM_API_KEY` / `LLM_MODEL` / `CHARTER` 4 个占位变量。
+  ⚠️ 这是任务书第 3 条明确要求的文件，位于 `baleen/` 根而非 `backend/`；除它之外只动了 `backend/`。
+- 新增 `tests/service/llm/test_client.py`（23 例）与 `test_tokens.py`（7 例）。
+
+### 自测（原始输出）
+
+```
+uv run pytest tests/service/llm -q   →  25 passed in 0.25s
+uv run pytest -q                     →  62 passed in 17.02s   # 原基线 37 + 新增 25
+uv run ruff check .                  →  All checks passed!
+```
+
+⚠️ `uv run ruff format --check .` 仍报 `app/service/parse/pptx_parser.py` 需重排——
+**这是本会话之前就存在的未格式化文件，不是本次改动**，按「只碰清单内文件」未动它。
+
+覆盖：正常 JSON / 带 `response_format` / 401 且异常文本不含 key / 429 不重试 / 400 不重试 /
+超时重试 2 次后抛 `LLMTimeoutError` / 网络错误分类 / 500 后重试成功 / 5xx 耗尽 / 响应非 JSON /
+缺 `choices` / probe 三种路径（models 可用、models 404 回退、json_mode 被拒后回退）/ 空 key / 空 messages /
+`from_settings`。
+
+### HANDOFF §3.1 残留自查（本次未起任何服务器）
+
+```
+Get-NetTCPConnection -LocalPort 8123 -State Listen              → 空
+Get-CimInstance Win32_Process -Filter "Name='uvicorn.exe'"      → 空
+Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
+    Where-Object { $_.CommandLine -match 'baleen' }             → 空
+```
+
+### 已知限制
+
+- **同步实现**（与 parse/chunk/embed 一致），未做 async；若后续 arq worker 需要，可在调用侧 `asyncio.to_thread`。
+- **token 是估算**（无 tiktoken 依赖），用于 3000 token 预算，不保证与目标模型 tokenizer 完全一致。
+- `probe()` 会花 1–2 次极小 chat（`max_tokens=8`）；`GET /models` 不耗 token。
+- 429 按任务书**不重试**（只重试网络/5xx）。
+- 服务商扩展字段（如 `reasoning_effort`）未支持——v1 不需要。
+- `LLM_TIMEOUT` / `LLM_MAX_RETRIES` 未做成配置项（任务书只要求 4 个变量），走模块常量。
+
+### 需要确认的问题
+
+1. **`.env.example` 的改动是否越权**？任务书第 3 条明确要求同步，但「只改 `baleen/backend/`」与之字面冲突。
+   已按任务书执行；若不应动，请告知撤销方式。
+2. **G2 的降级边界**（批 2 会碰到，先报备）：任务书只规定「JSON 解析失败 → 重试 → 降级」；
+   LLM 网络/认证/限流异常我倾向于**向上抛**（而不是静默降级成 accept），否则 key 配错会静默收下所有文件。
+   批 2 若无异议即按此实现。
+
+---
+
 ## 2026-10-28 21:38 · 线 G · G1 价值闸（纯启发式）
 
 ### 产物
