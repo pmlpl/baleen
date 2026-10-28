@@ -257,29 +257,79 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 **④ 任何情况下都不许 `kill` 了事** —— Windows 上必须 `taskkill /T /F`。
 
 ---
-## 3.2 Git 提交规矩（连累三次，必须改）
+## 3.2 Git 提交规矩（2026-10-28 定稿）
 
-**不要用 `git add -A`。** 用明确路径。
+### ① 提交边界：**一次可验收的交付 = 一个提交**
 
-**三次事故记录**：
+不按文件类型分，按**交付**分：
 
-| # | 事故 |
-|---|---|
-| 1 | 4 MB 的 `scan.pdf` 在被压缩前就被 `add` 进了暂存区 |
-| 2 | ZCode 正在写的 4 个 gate 文件被收进一条 `docs(handoff)` 提交 |
-| 3 | Trae 批1 的 710 行代码被收进一条 `docs(handoff)` 提交（已 amend 补正） |
+| 提交 | 包含什么 | 消息前缀 |
+|---|---|---|
+| **交付提交** | agent 写的代码 + 测试 + 配置 + **该目录的 `DELIVERY.md`** + 迁移文件 | `feat(backend):` / `fix(backend):` |
+| **协调提交** | `HANDOFF.md`、`docs/adr/*`、`AGENTS.md`、`eval/TASK.md` | `docs(handoff):` / `docs(adr):` |
 
-**正确做法**：
+**`DELIVERY.md` 属于交付提交，不属于协调提交** —— 它是那次交付的说明书。
 
-```powershell
-git status --short          # ① 先看清单
-git add HANDOFF.md          # ② 只加自己改的（按文件或按目录）
-git diff --cached --stat    # ③ 提交前再确认一遍
-git commit -F msg.txt       # ④ 用文件传消息，避免长消息被 shell 拆坏
+### ② 顺序：**先提交交付，再写协调文档**
+
+```
+agent 交付 → 人家验收 → 【提交交付本体】→ 再改 HANDOFF → 【提交协调记录】
 ```
 
-**理由**：别的 agent 可能正在**同一个工作区**写文件。你的「顺手全加」会把它们的半成品
-绑进一个不相干的提交，破坏历史可读性，也让「哪个提交对应哪次交付」再也查不清。
+⚠️ **反过来就会出事**：先改 HANDOFF 时，agent 的代码还躺在工作区里，
+一个 `git add -A` 就混进去了。**2026-10-28 连犯三次，根因都是这个顺序。**
+
+### ③ `git add` 的依据：**`DELIVERY.md` 的「产物」清单**
+
+agent 在 DELIVERY.md 里已经精确列了文件路径。**照清单 add，不靠猜、不用 `-A`。**
+
+```powershell
+git status --short                    # ① 先看有什么
+git add backend/app/service/xxx/ `    # ② 按产物清单逐个加（PowerShell 续行用反引号）
+        backend/tests/service/xxx/ `
+        backend/DELIVERY.md
+git diff --cached --stat              # ③ 提交前再确认一遍清单
+git commit -F msg.txt                 # ④ 消息用文件传（长消息会被 shell 拆坏）
+```
+
+### ④ 谁提交：**只有协调方提交，agent 不提交**
+
+理由：**未验收的代码不该进历史。** 验收不过要 `git revert`，历史就脏了。
+边界清晰度靠「DELIVERY.md 的产物清单」保证，**不靠让 agent 自己 commit**。
+
+### ⑤ 提交消息模板
+
+```
+<type>(<scope>): <这次交付做了什么，一句话>
+
+线: H-批1 · LLM adapter
+执行者: Trae-后端
+验收: pytest 62 passed；错误分类/重试/key 不泄露均有测试
+
+- Transport Protocol 可注入，测试不联网
+- 5 类错误分类，仅网络与 5xx 重试
+- api_key 不进异常文本（有断言）
+
+已知限制:
+- 同步实现，调用侧需 asyncio.to_thread
+```
+
+**目标**：`git log` 读一遍就能回答——每个交付**做了什么、谁做的、验没验过、遗留什么**。
+
+### ⑥ 历史勘误（不重写，仅记录）
+
+以下 3 个提交**内容正确、归类不好**，历史保留不重写，查历史时留意：
+
+| 提交 | 消息说 | 实际内容 | 原因 |
+|---|---|---|---|
+| `871a304` | `docs(handoff): 新增 §3.1` | 含 4 个 gate 代码文件（394 行） | `add -A` 误收 agent 正在写的文件 |
+| `b69ef77` | `feat(backend): G1 价值闸` | **只有 `DELIVERY.md`** | 代码已被上一条吞走 |
+| `340c4a5` | `数据模型落地 + G0 功能验证补遗` | 两个交付合一 | 两次交付之间没提交 |
+
+> `84c13ee` 原为 `293c8dc`，消息已 amend 补正（原仅写 docs，实含 710 行代码）。
+>
+> **这三条不重写历史的理由**：内容都对，只是归类不好；单人仓库无远程，
+> `rebase` 收益低而风险有。记在这里，比把历史翻一遍更划算。
 
 ---
 ## 4. 交付写在哪
