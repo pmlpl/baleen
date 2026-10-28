@@ -83,27 +83,46 @@
 
 ---
 
-### ⏸ 等拍板：`.env` 位置不一致，会挡住下一步
+### 给 ZCode-后端（线 F：修 `.env` 加载路径）
 
-**实测**：主人在 `baleen/.env` 建了文件（**0 字节，空的**），但**后端读不到它**。
+```
+先读 baleen/AGENTS.md §3 硬约束（尤其是第 3 条：不许创建/修改 .env）与 §6 环境事实。
 
-| 事实 | 说明 |
-|---|---|
-| `baleen/.env.example` 在**仓库根** | 8 个变量：POSTGRES_* / DATABASE_URL / REDIS_URL / CORS_ORIGINS / EMBEDDING_MODEL_PATH |
-| docker compose 读**根** `.env` | ✅ 正确 |
-| 后端 `config.py` 用 `env_file=".env"` | ❌ 相对 **cwd** 解析 → 从 `backend/` 启动时找的是 `backend/.env` |
-| 实测结果 | 从 `backend/` 加载 `Settings` → `embedding_model_path = ''`（空） |
+背景：主人在 baleen/.env 建了文件，但后端读不到。
+  实测：从 backend/ 加载 Settings → embedding_model_path = ''（空）
+  原因：config.py 用 env_file=".env"，按【当前工作目录】解析，
+        从 backend/ 启动时找的是 backend/.env，而 .env 在仓库根 baleen/。
 
-**后果**：`embed()` 会因模型路径为空而报错；`DATABASE_URL` 退回默认值（当前恰好能用，属侥幸）。
+已拍板方案 A（只保留根 .env，与 docker compose 共用一份）：
 
-| 选项 | 做法 |
-|---|---|
-| **A（推荐）** | **只保留根 `.env`**，`config.py` 用**绝对路径**读它（`Path(__file__).resolve().parents[2].parent / ".env"`），与 docker compose 共用一份 |
-| **B** | 分两份（根给 compose、`backend/.env` 给后端）→ 要手工保持一致，必然漂移 |
+任务（只动 baleen/backend/）：
 
-**人家建议 A。** 定了之后派给 ZCode，一行配置改动 + 一条测试。
+1. app/core/config.py 改成绝对路径读：
 
-**主人另需做一件事**：`.env` 现在是空的，至少要填 `EMBEDDING_MODEL_PATH`（值抄 `.env.example`）。
+     BASE_DIR = Path(__file__).resolve().parents[2]   # → backend/
+     ROOT_DIR = BASE_DIR.parent                        # → baleen/
+     model_config = SettingsConfigDict(
+         env_file=(ROOT_DIR / ".env", BASE_DIR / ".env"),   # 后者覆盖前者
+         env_file_encoding="utf-8",
+         extra="ignore",
+     )
+
+   顺序是刻意的：根 .env 先读，backend/.env（若存在）覆盖它 —— 便于本地临时调试。
+
+2. 加一条测试（放 tests/test_config.py）：
+   - **绝对不许碰真的 baleen/.env**（硬约束 3）
+   - 用 monkeypatch + tmp_path 造一个临时 .env，monkeypatch 掉 ROOT_DIR 常量，
+     再 get_settings.cache_clear()，断言能读到临时文件里的值
+   - 另加一条：断言 ROOT_DIR 解析出来的路径是绝对的、且父目录里有 .env.example
+
+不要做：不创建/修改真的 `.env`、不改 `.env.example` 里的值、不动其他配置项、不动 eval/。
+
+验收（贴进 DELIVERY）：
+- 在 backend/ 目录下执行 `uv run python -c "from app.core.config import get_settings as g; print(repr(g().embedding_model_path))"`
+  → 输出应是模型绝对路径，不是 ''
+  （前提：主人已按 .env.example 填好根 .env；若未填，如实说明并贴出提示）
+- `uv run pytest -q` 全绿
+```
 ## 3. 卡住时找谁
 
 **遇到下面「必须停下问」的，停下来把问题写进你目录下的 `DELIVERY.md`，等人回答。不要自己试一堆方案。**

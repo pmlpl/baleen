@@ -129,19 +129,22 @@ Docker 29.8.0 + Compose v5.5.1（`psql` 客户端未装，一律走容器）
 | psql | ❌ 未安装 → 用 `docker compose exec db psql` |
 | 系统 | Windows；shell 以 PowerShell 为主，路径用反斜杠 |
 
-**bge 模型本地路径**（标准 HF cache，符号链接完好，可直接加载）：
+**bge 模型本地路径**（已从 `asklaw` 搬到本项目工作区，**自包含**）
 
 ```
-C:\Users\MOM\Desktop\asklaw\models\hf\hub\models--BAAI--bge-large-zh-v1.5\snapshots\79e7739b6ab944e86d6171e44d24c997fc1e0116
+C:\Users\MOM\Desktop\学习项目\智能笔记库\models\bge-large-zh-v1.5
 ```
 
-> 该目录共 **2.43 GB**，因为同一套权重存了两种格式、分在两个快照里：
-> - `snapshots\79e7739b…`（`refs/main` 指向它）→ 用 `pytorch_model.bin`（1241.9 MB）
-> - `snapshots\0cc67d9f…` → 用 `model.safetensors`（1241.8 MB）
+> 1.21 GB / 11 个文件，由 `asklaw` 的 HF 缓存快照**展开符号链接**后复制而来。
+> 之所以搬：`asklaw` 项目随时可能被删或移动，项目不该依赖它。
 >
-> ⚠️ **不要删 79e7739b 里的 `pytorch_model.bin`** —— 那个快照里没有 safetensors，删了模型就加载不了。
-> 要省空间应删另一个快照 `0cc67d9f…` 及其 blob（省 1.24 GB），并确认 `refs/main` 仍指向 79e7739b。
-> **模型路径写进 `.env.example` 的 `EMBEDDING_MODEL_PATH`，代码里不许硬编码这个绝对路径。**
+> ⚠️ **`models/` 在工作区根，不在 `baleen/` 仓库内** —— 1.2 GB 权重永不进 git。
+> 实测：`SentenceTransformer(该路径, device="cuda")` **1.5s 加载**，输出 `(N, 1024)`、L2 模长 `1.0000`、
+> `max_seq_length=512`（确认了 512 token 上限，切块必须 ≤400 字）。
+>
+> **路径写进 `.env` 的 `EMBEDDING_MODEL_PATH`，代码里不许硬编码。**
+
+---
 
 ### 网络（很重要）
 
@@ -255,4 +258,5 @@ chore: 升级 uv 到 0.13
 | 2026-10-28 | 解析栈定稿（ADR 0002）：pymupdf / python-docx / markdown-it-py / python-pptx；`.doc` 不支持；§6 代理条目改为"主人自己的工具、默认关闭" |
 | 2026-10-28 | 解析栈补充：`.txt` 支持（编码探测 UTF-8→GB18030）；纯图片归 `no_text_expected` 而非 unsupported；扫描件判定改用最大页字符数 |
 | 2026-10-28 | 补 ADR 0001（架构基线）+ ADR 0003（数据模型）；§5 改为速查结论，论证移入 ADR 0001 避免重复 |
+| 2026-10-28 | 模型自包含：bge 从 `asklaw` 搬到 `智能笔记库\models\bge-large-zh-v1.5`（展开符号链接，1.21 GB）；§6 路径与说明同步更新 |
 
