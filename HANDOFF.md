@@ -23,9 +23,9 @@
 
 | 角色 | 管哪些目录 | 当前担任 | 历史担任 |
 |---|---|---|---|
-| **后端** | `backend/` | **Trae-后端**（新会话，接手线 H） | `ZCode-后端`（线 A 骨架 / B 解析 / D 数据模型 / E 切块向量化 / F .env / G G1 —— 遇限流） |
-| **评测** | `eval/` | Trae-评测 | Trae-评测（线 C 全阶段 + `stratified-v2`） |
-| **前端** | `frontend/` | （未开） | — |
+| **后端** | `backend/` | **DSH-后端**（线 M：查询 API） | `ZCode-后端`（线 A 骨架 / B 解析 / D 数据模型 / E 切块向量化 / F .env / G G1 / K 检索）· `Trae-后端`（线 H-批1 / H-批2 / I-批1 / J） |
+| **评测** | `eval/` | **DSH-评测**（线 N：20 query 集 + 切块消融） | `Trae-评测`（线 C 全阶段 + `stratified-v2`） |
+| **前端** | `frontend/` | **DSH-前端**（线 L：三页界面） | — |
 
 **核心原则：任务按目录划分，不按 agent 划分。**
 后端这个岗位换人是正常的，唯一要求是**换人时必须走 §0.2 的交接协议**——不允许"新人直接上"。
@@ -107,8 +107,11 @@
 |---|---|---|
 | **线 J** | `app/service/gate/g2.py` · `app/service/llm/client.py` · `scripts/g2_smoke.py` · `tests/service/gate/test_g2.py` · `tests/service/llm/test_client.py` | G2 prompt + 429 重试 + 节流 |
 | **线 I-批2** | `app/worker/` · `app/api/` · `app/main.py` · `backend/pyproject.toml` | arq worker + 上传 API |
-| **协调方** | `HANDOFF.md` · `charter.md` · `docs/adr/` · `eval/rubric.md` · `AGENTS.md` · git 提交 | 只由协调方改 |
-| **已冻结** | `app/service/parse/` · `chunk/` · `embed/` · `imports/pipeline.py` · `app/repo/` · `alembic/` | 已验收，要改先提 ADR |
+| **线 L** | `frontend/` 全目录（含 `frontend/DELIVERY.md`） | 三页界面（导入 / 笔记库 / 检索） |
+| **线 M** | `app/api/library.py`（新）· `app/repo/library.py`（新）· `app/main.py`（只加 2 行）· `tests/api/`（新）· `backend/DELIVERY.md` | 4 个查询 API（`docs/api.md` §3 §4） |
+| **线 N** | `eval/queries/`（新）· `eval/scripts/ablation.py`（新）· `eval/ablation.md`（新）· `eval/scripts/make_split.py` · `eval/metrics.py` · `eval/split_meta.json` · **`eval/labels.csv` 的 `split` 列（主人 2026-10-29 专门批准，仅此一列）** · `eval/DELIVERY.md` | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) |
+| **协调方** | `HANDOFF.md` · `charter.md` · `docs/adr/` · **`docs/api.md`** · `eval/rubric.md` · `eval/labels.csv`（除 `split` 列） · `AGENTS.md` · git 提交 | 只由协调方改 |
+| **已冻结** | `app/service/parse/` · `chunk/` · `embed/` · `imports/pipeline.py` · `app/repo/`（已有文件）· `alembic/` · `eval/samples/` | 已验收，要改先提 ADR |
 
 ### 三秒自查
 
@@ -155,8 +158,21 @@ git status --short      # 谁在动，按上表认领
 | **J G2 政策修正** | Trae-后端 | ✅ 已验收 | `g2.py` prompt 重写（前置问限定范围 + 明确该收清单 + 拿不准就收）；`llm/client.py` 429 尊重 Retry-After（≤90s/最多2次）；`g2_smoke` 加 `--delay/--limit/--resume`；**90 passed** |
 | **I-批2 worker+API** | ZCode-后端 | ✅ 已验收 | `worker/worker.py`、`api/upload.py`(244 行)、`deps.py`、`main.py`+2 行；**109 passed**；TestClient 实测 healthz 200 / sources 404 / 空POST 422；arq 0.28 + redis 降级 5.3.1 已验证 |
 | **K 混合检索** | ZCode-后端 | ✅ 已验收 | `repo/search.py` + `service/retrieve/retriever.py` + `retrieve_smoke.py`；**118 passed**；真实 query 双路命中，RRF=2/(60+1)=0.0328 与公式吻合；small-to-big 生效 |
+| **M 查询 API** | DSH-后端 | ✅ 已验收（协调方独立复跑：139 passed / 32.89s、ruff 干净） | `app/api/library.py`(268) + `app/repo/library.py`(128) + `tests/api/`(532)；**139 passed**；`total` 真 `count(*)`、`chunk_count`/`note_id` 批量查无 N+1、ILIKE 通配符已转义；检索复用线 K 的 retriever，API 层只做契约映射 |
+| **L 前端三页** | DSH-前端 | ✅ 已验收（协调方复核：type-check exit 0、build 772ms、Playwright 13 张、pageerror 0） | `frontend/src/{api,stores,views}` + `styles.css` + `App.vue` + `DELIVERY.md`；**修掉 vite proxy rewrite 真 bug**（原配置让除 `/healthz` 外全部 404）；真联调：笔记库 11 条、检索 5 命中 183ms、点命中真跳详情 |
 
-**文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续。
+**文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续；另有 **`docs/api.md` v2**（前后端唯一契约，枚举值以数据库 CHECK 为准）。
+
+### 线 M / 线 L 暴露出来的真问题（2026-10-29）
+
+1. **`notes.markdown` 实测全是 `null`** —— ADR 0001 决策 2 说「真源是 block JSON，markdown 只是渲染」，
+   但导入侧只落了父块、**没生成 markdown**。详情页正文真源实际是 `parents[]`。要不要补 markdown 生成，等人拍板。
+2. **新上传的 source 在 worker 处理前 `parse_status` 就是 `error`**（`parse_meta={}`、`message=null`），
+   语义不对但库里没有「待处理」这个取值。当前靠前端看 `job.status` 绕过；要根治得加枚举 + migration。
+3. **检索没有相关性阈值** —— 乱输一个库里肯定没有的词，照样返回 `top_k` 条近邻，「空 hits」在真实链路几乎不触发。
+   RRF 分数无绝对量纲，v1 的选择是不设绝对阈值、把两路名次一起返回（`docs/api.md` §4 已写明取舍）。
+4. **`vite.config.ts` 的 proxy rewrite 从线 A 起就是错的** —— 一直没人发现，因为只有 `/healthz` 能通。
+   教训：**契约/配置写完要真的打一次请求**，纸面通不等于链路通。
 
 ### 遗留待处理（不阻塞主干，但要记着）
 
@@ -180,17 +196,27 @@ git status --short      # 谁在动，按上表认领
 
 ---
 
-### ⏭ 下一批（按优先级，尚未派活）
+### ⏭ 下一批
 
-| # | 干什么 | 前置 |
-|---|---|---|
-| **1** | **G2 live 复测** | ⏸ 等上游额度恢复（见 §2 线 L 的说明） |
-| 2 | **前端（线 L）** | 无 —— 后端 API + 检索都已可用 |
-| 3 | **问答生成**（检索→带出处回答） | 检索已就绪 |
-| 4 | 20 个 query 集 + 切块消融实验 | 评测侧 |
-| 5 | 槽 7 分层细到 (槽位, 判定) | 评测侧 |
+**2026-10-29 01:30 已派活**：线 L / 线 M / 线 N 三线并行，互不重叠目录，可同时跑。
 
-**派活前先确认**：`backend/DELIVERY.md` 顶部速览里的模块表还准不准（现在除了前端和问答，后端全绿）。
+| # | 线 | 干什么 | 状态 |
+|---|---|---|---|
+| 1 | **线 M** | 后端 4 个查询 API（`docs/api.md` §3 §4） | ✅ 已验收并提交 `745f47c` |
+| 2 | **线 L** | 前端三页（导入 / 笔记库 / 检索） | ✅ 已验收并提交（见 `git log` 线 L 一条） |
+| 3 | **线 N** | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) | 🔄 DSH-评测 进行中 |
+| 4 | — | **G2 live 复测** | ⏸ 阻塞：**2026-10-29 01:19 复测仍 HTTP 502**（上游 `insufficient_quota`） |
+| 5 | — | **问答生成**（检索 → 带出处回答） | ⏸ 依赖 LLM 额度；前端可复用现有 `POST /api/search` |
+| 6 | — | 补 `notes.markdown` 生成（见 §1「真问题」第 1 条） | 未派，等人拍板 |
+
+**槽位细化的缺口（协调方 2026-10-29 实测）**：`(槽位, 判定)` 共 18 个组合，14 个已在 test 覆盖，
+缺 **(2,accept) (4,reject) (5,accept) (7,accept)** 四个 —— 最少挪 4 条，test 14→18（0.40→0.51）。
+**为什么要做**：现在 test 里槽 7 只有一张扫描发票（reject），两张手写笔记（accept）全在 dev，
+所以「误拒率 0%」在 test 上是**虚的** —— 见到扫描件就无脑喊「拒」的傻瓜系统也能拿 0%。
+
+**派活前先确认**：`backend/DELIVERY.md` 顶部速览里的模块表还准不准（现在**后端 + 前端全绿**，只差问答生成）。
+
+---
 ## 3. 卡住时找谁
 
 **遇到下面「必须停下问」的，停下来把问题写进你目录下的 `DELIVERY.md`，等人回答。不要自己试一堆方案。**
