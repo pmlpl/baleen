@@ -99,6 +99,45 @@
 | 你不知道**上一个人做到哪** | 说明交付记录不全，先问清楚再动手 |
 
 ---
+## 0.3 并行时的文件归属（撞车检查表）
+
+多条线同时在同一仓库工作时，**按路径划领地**。动手前、提交前都该核这张表。
+
+| 线 | 领地路径 | 干什么 |
+|---|---|---|
+| **线 J** | `app/service/gate/g2.py` · `app/service/llm/client.py` · `scripts/g2_smoke.py` · `tests/service/gate/test_g2.py` · `tests/service/llm/test_client.py` | G2 prompt + 429 重试 + 节流 |
+| **线 I-批2** | `app/worker/` · `app/api/` · `app/main.py` · `backend/pyproject.toml` | arq worker + 上传 API |
+| **协调方** | `HANDOFF.md` · `charter.md` · `docs/adr/` · `eval/rubric.md` · `AGENTS.md` · git 提交 | 只由协调方改 |
+| **已冻结** | `app/service/parse/` · `chunk/` · `embed/` · `imports/pipeline.py` · `app/repo/` · `alembic/` | 已验收，要改先提 ADR |
+
+### 三秒自查
+
+```powershell
+cd baleen
+git status --short      # 谁在动，按上表认领
+```
+
+**判断撞车的唯一标准**：同一个文件同时出现在**两条线的领地**里。
+出现就停下问协调方，**不要"我改我的"**。
+
+### 交付记录也分人
+
+两线并行时，`backend/DELIVERY.md` 每个块**标题必须写明执行者与线号**：
+
+```
+## 2026-10-28 · 线 J · G2 政策修正 · 执行者：Trae-后端
+## 2026-10-28 · 线 I-批2 · arq worker + API · 执行者：ZCode-后端
+```
+
+写文件时报「文件已变更」→ **重读一遍再追加，绝不覆盖别人的块**。
+
+### agent 在并行期间不许做的
+
+- ❌ `git add` / `commit` / `checkout` / `clean` / `stash`（提交只由协调方做）
+- ❌ 清理或还原工作区（会毁掉别人未提交的改动）
+- ❌ 动「已冻结」和「协调方」的路径
+
+---
 ## 1. 当前状态
 
 | 线 | 执行者 | 状态 | 最近交付 |
@@ -138,7 +177,7 @@
 
 ---
 
-### 给后端线（线 J：G2 判定政策修正 + 限流适配）
+### 线 J · G2 判定政策修正 + 限流适配　｜　**当前执行者：Trae-后端（进行中）**
 
 ```
 接手前照 §0.2 写「接手确认单」。
@@ -194,7 +233,7 @@ C. scripts/g2_smoke.py：加节流与分批
 不要做：不动 eval/、不改 charter.md、不改 chunk/embed/parse/pipeline、不写检索与前端。
 ```
 
-### 给 ZCode-后端（线 I-批2：arq worker + 上传 API）｜**可与线 J 并行**
+### 线 I-批2 · arq worker + 上传 API　｜　**当前执行者：ZCode-后端（未开工）**　·　与线 J 并行
 
 ```
 ⚠️ 本线与其他线【并行】进行，先看清文件边界：
