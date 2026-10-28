@@ -4,6 +4,60 @@
 
 ---
 
+## 2026-10-28 21:38 · 线 G · G1 价值闸（纯启发式）
+
+### 产物
+
+- `app/service/gate/g1.py`：`judge(parse_result, charter=None) -> GateResult`。`GateResult` 字段与 `review_runs` 表对齐（`gate="G1"` / `verdict`(accept|reject) / `quality`(core|normal|reference|junk) / `score` / `action`(index|drop) / `reasons[]` / `meta`）。`charter` 参数预留（决策 8 的 charter「不收」清单，目前未启用）。
+- 打分信号（每个都落进 `reasons`，可单独解释）：
+  - **直接 junk**：去空白后 `< SHORT_CHARS(30)` 字符；或**短文**（`< BOILERPLATE_MAX_CHARS=200`）里命中样板词（hello world / lorem ipsum / 这是一个测试 / 无标题 / 草稿 / test file / this is a test）→ reject/junk/drop。
+  - **减分**：零结构（无标题/列表/表格/代码 且 段落 ≤1，-0.4）、字符熵偏低（-0.2）、CJK 词型-词例比偏低（-0.2）、自我重复率高（-0.3）。综合得分 `< REJECT_SCORE(0.5)` → reject/junk/drop。
+  - **中文占比只记录不判定**（`meta.cjk_ratio`，避免误伤英文论文）。
+  - 阈值全部模块级常量，注释「推导值，待 eval/labels.csv 35 条人工标注校准」。
+- `tests/service/gate/test_g1.py`（6 例，合成 fixture，不碰 eval/samples）：hello world / 空文件 /「这是一个测试文件」→ reject-junk；613 行正常笔记 → accept；**3 行真实信息 → 必须 accept**（关键反例）；英文论文不能因中文占比 0 被 reject。
+- `scripts/g1_smoke.py --samples <路径>`：照 parse_smoke，缺目录 skip，不硬编码 eval/；labels.csv 默认向上找两级。产出 a) G1 判定分布 b) 与 labels.csv 的混淆矩阵 c) **G1 单独误拒率**（human accept/partial 中被 G1 reject 的比例，论文用）。**只读 eval/，一个字节没改**。
+
+### 自测（原始输出）
+
+`uv run pytest tests/service/gate -q` → `6 passed`；全量 `uv run pytest -q` → `37 passed`（原 31 + G1 6）。ruff 全绿。
+
+`uv run python scripts/g1_smoke.py --samples ../eval/samples/_inbox`：
+```
+a) G1 判定分布(共 21 个 ok 文件): {'accept': 18, 'reject': 3}
+   跳过(非 ok,不走 G1): 14 个(no_text_expected 9 / unsupported_format 5)
+b) 混淆矩阵(行=human_verdict,列=G1_verdict):
+   accept   accept=14  reject=0
+   partial  accept=1   reject=0
+   reject   accept=3   reject=3
+c) G1 误拒率(human accept/partial 中被 G1 reject): 0/15 = 0.0%
+```
+
+### 验收对照
+
+| 要求 | 结果 |
+|---|---|
+| hello/空/「这是一个测试文件」→ reject/junk | ✅ |
+| 613 行正常笔记 → accept | ✅ |
+| 3 行真实信息 → 必须 accept（关键反例） | ✅ |
+| 中文占比只记录不判定（英文不误拒） | ✅（BGE_M3 / CodeR 两篇英文论文都 accept） |
+| **误拒率**（human accept/partial 被 G1 reject） | ✅ **0.0%**（0/15） |
+
+3 个 G1-reject 是 hello.txt / test.txt / 新建文本文档.txt（空），全是 human-reject，判对；3 个 human-reject 被 G1 放过（错误堆栈.txt 等，误收）——符合「误拒代价 ≫ 误收代价」，留给 G2 兜底。
+
+### 已知限制
+
+- 初版误拒率曾到 20%：样板词正则里的 `placeholder`/`占位` 在长技术文里出现一次就触发直接 junk（闭包.md / CodeR.pdf / MyTokenTransfer README 三篇 human-accept 被误拒）。修法：从正则去掉通用词 `占位|placeholder|sample text`，并加「样板词只在短文（<200 字）里才算直接 junk，长文里出现仅 -0.2 减分」的护栏。**这是阈值校准的典型坑，labels.csv 35 条标注下来大概率还要再调。**
+- 信号阈值（熵 2.5 / TTR 0.3 / 重复 0.7 / REJECT_SCORE 0.5）都是推导值；TTR 为避免英文误伤只在 CJK 字符上算（英文无 CJK → 1.0 不罚）。未做消融（任务书要求不做，前置依赖 20 query 集）。
+- G1 不区分 partial（二值 accept/reject）；partial 由 G2 定。rubric §2.1 的 partial 判据需要理解「可复用内容占比」，超出启发式能力。
+- 14 个非 ok 文件（扫描件/图片/.doc/.xlsx）不走 G1：扫描件/图片走 OCR 队列，unsupported/error 另处理。混淆矩阵只覆盖 21 个 ok 文件。
+
+### 需要确认的问题
+
+- （无）
+
+---
+
+
 ## 2026-10-28 19:07 · 线 F · 修 `.env` 加载路径
 
 ### 产物
