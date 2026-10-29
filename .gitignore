@@ -59,8 +59,8 @@ data/blobs/
 # ---------- 模型权重：GB 级二进制，永远不进仓库 ----------
 # 模型是「环境资产」不是「项目代码」。正确的引用方式是 .env 里的 EMBEDDING_MODEL_PATH，
 # 不是把权重塞进仓库。放进来一次，.git 历史里永久留存 1.2GB，再也瘦不下来。
-models/
-**/models/
+# ⚠️ 只锚定仓库根的 /models/：不能写 **/models/ —— 那会误伤 backend/app/models/（ORM 源码）。
+/models/
 *.safetensors
 *.gguf
 *.onnx

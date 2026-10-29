@@ -94,6 +94,9 @@ class ChatResult(BaseModel):
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    # DeepSeek 系:前缀缓存命中/未命中的 prompt token 数(OpenAI 系无此字段 → None)
+    prompt_cache_hit_tokens: int | None = None
+    prompt_cache_miss_tokens: int | None = None
     latency_ms: float = 0.0
 
 
@@ -272,12 +275,25 @@ class LLMClient:
         if not isinstance(content, str):
             raise LLMResponseError("响应 choices[0].message.content 不是字符串")
         usage = data.get("usage") or {}
+        # 缓存字段兼容两种格式(网关上游两种都有):
+        # DeepSeek 风格:usage.prompt_cache_hit_tokens / prompt_cache_miss_tokens
+        # OpenAI 官方风格:usage.prompt_tokens_details.cached_tokens(未命中时上游可能整个不带)
+        hit = usage.get("prompt_cache_hit_tokens")
+        miss = usage.get("prompt_cache_miss_tokens")
+        if hit is None:
+            details = usage.get("prompt_tokens_details") or {}
+            hit = details.get("cached_tokens")
+            if hit is not None and miss is None:
+                prompt = usage.get("prompt_tokens")
+                miss = (prompt - hit) if isinstance(prompt, int) else None
         return ChatResult(
             content=content,
             model=str(data.get("model") or self.model),
             prompt_tokens=usage.get("prompt_tokens"),
             completion_tokens=usage.get("completion_tokens"),
             total_tokens=usage.get("total_tokens"),
+            prompt_cache_hit_tokens=hit,
+            prompt_cache_miss_tokens=miss,
         )
 
 

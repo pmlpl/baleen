@@ -72,6 +72,70 @@ cd backend && uv run pytest -q     →  139 passed
 
 ---
 
+## 2026-10-30 00:55 · 线 Q-批4 · 会话导出 + 两个运行诊断 · 执行者：ZCode
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 改 | `app/api/qa.py` | 新增 `GET /api/qa/sessions/{id}/export`：生成 Markdown（元信息 + 逐条消息含 model/token/缓存命中率 + 出处）→ **写一份到 `tmp/qa_exports/session-{id}.md`**（gitignored，agent 可直接读）→ 同时以附件返回浏览器下载 |
+
+### 两个诊断（重要，主人问的）
+
+1. **缓存命中率显示「—」的根因（已订正）**：初判「网关剥字段」**是错的**——主人（MyTokenTransfer 作者）指正：网关透明转发 usage，只出现 3 字段是因为**那次请求未命中缓存**（上游未命中时本就不带该字段）；call_logs 证实 262/357 次 deepseek-flash 拿到非零 cached_tokens。已修：**client 解析兼容两种格式**（DeepSeek `prompt_cache_hit_tokens` + OpenAI 官方 `prompt_tokens_details.cached_tokens`，miss = prompt−hit）。⚠️ 实测仍待观察：真实两轮（4000+ tok prompt）仍未上报字段——命中与否取决于上游账号池路由/缓存门槛，不再是解析问题，命中即显示。
+2. **「排队中」= arq worker 进程没启动**：Redis 里积压 3 个 `arq:job:import:*` + `arq:queue`，进程列表无 arq。启动命令：`cd backend → uv run arq app.worker.WorkerSettings`（max_jobs=1 串行；每个文件 = G0+G1+G2 一次 LLM 调用+bge 向量化）。⚠️ 网关限流冷却期 G2 会失败，任务可能 failed，等冷却过重试。**已实跑验证**：worker 启动后积压 3 任务全部消费（含等了 31 分钟的 source 333「03-命令速查.md」，12s 处理完 → ok），新上传即到即处理，笔记 11→13 篇。
+3. **新发现的真实体验问题（记入路线图，未修）**：追问型 query（「它有哪几种状态」）指代重、检索脱靶，模型按规则拒答——需要「**问题改写**」（用历史把指代展开后再检索，RAG 标准做法），排阶段 2.5。
+
+### 自测
+- `pytest tests/api/test_qa.py -q` → 6 passed（新增导出用例：附件 + tmp 落盘 + 404）；ruff 全清
+
+---
+
+## 2026-10-30 00:36 · 线 Q-批3 · 主人实测反馈修复（出处过滤）· 执行者：ZCode
+
+主人浏览器实测批2 后反馈 5 点（非流式/单轮/聊天框 UI 属于既有路线图，本块只记代码修复）：
+
+- **「发你好也挂 5 条出处」→ 根因修复**：`answerer.answer()` 现在**只保留答案里真正引用的 [n]**（`re.findall(r"\[(\d{1,2})\]")`），问候/闲聊没有 [n] → citations 为空；幻觉编号（超命中数）剔除。已知取舍：代码块里的 `arr[1]` 会被当成引用（最坏多显示一条检索命中，可接受）。
+- 测试 +3：只引用部分/无标记/越界编号。
+
+### 自测
+- `pytest tests/service/qa tests/api -q` → **50 passed**；ruff 全清。
+- ⚠️ 测试断言改为「前后差值」：主人浏览器测试在 dev 库留下了真实会话（qa_sessions id=9「你好」），**测试不再假设空库**——后续任何人写 API 测试都注意这点。
+
+---
+
+## 2026-10-30 00:09 · 线 Q-批2 · 聊天式多轮问答（会话落库 + 缓存命中率）· 执行者：ZCode（主人批准）
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `app/models/qa.py` | QaSession / QaMessage（TEXT+具名 CHECK 家法；citations JSONB 存检索出处；**cache_hit/miss_tokens** 记前缀缓存原始计数） |
+| 新增 | `alembic/versions/0003_qa_chat.py` | 0002→0003；autogenerate 后按家法整理；**已 `upgrade head` 实跑**，information_schema 确认两表建出 |
+| 改 | `app/models/__init__.py`、`app/repo/repos.py` | 注册新模型 + QaRepo |
+| 新增 | `app/repo/qa.py` | create/list/get/delete_session + list_messages + add_message；**只 flush**，调用方 commit（upload.py 同模式） |
+| 改 | `app/service/llm/client.py` | ChatResult 加 `prompt_cache_hit_tokens / prompt_cache_miss_tokens`（从 usage 解析；provider 无此字段 → None，向后兼容） |
+| 改 | `app/service/qa/answerer.py` | `answer()` 加 **history**（system → 最近 8 条/2000 tok 封顶裁最旧 → 当前 user 带 `<context>`）；短路条件改为「命中与历史**都**空」（追问靠历史不短路）；系统提示适配多轮（指代消解 + [n] 只对当前 context 有效） |
+| 改 | `app/api/qa.py` | **替换**无状态 `POST /api/qa`：`POST /api/qa/chat`（session_id 空自动建会话，title=首问前 30 字；一条提问原子落库两条消息）+ `GET /api/qa/sessions` + `GET /api/qa/sessions/{id}` + `DELETE /api/qa/sessions/{id}`（FK CASCADE） |
+
+### 自测
+
+- `uv run pytest tests/service/qa tests/api -q` → **47 passed**（answerer 12 例含历史裁剪/缓存解析新例；API 6 例走 env 事务隔离夹具，真实落库后回滚不污染库）
+- **真实两轮 e2e（TestClient + 网关，测试会话已删）**：T1「闭包是什么」10.2s 带引用；T2「那它的三个形成条件是什么」**用上历史**正确答三条件带 [1]，17.8s；重开会话 4 条消息；侧栏 total=1；DELETE 204
+- 临时资源自查（§3.1）：全程 TestClient，未起 uvicorn
+
+### 已知限制
+
+- **cache_hit_rate 当前显示 None**：`agnes-3.0-flash`（主人已把 .env 从 DeepSeek 切回内网网关）的 usage 不带 cache 字段；显示管线端到端已接好，**切回 deepseek-flash 即有真实数字**。
+- 多轮历史只带最近 8 条 / 2000 token（超了从最旧丢）——远期上下文不进 LLM。
+- 非流式（「思考中…」→ 整条消息）；会话列表无分页（上限 50）。
+
+### 需要确认的问题
+
+- （无）
+
+---
+
 ## 2026-10-29 23:07 · 线 Q-批1 · 问答 API（检索 → LLM 答 + 出处）· 执行者：ZCode（主人批准）
 
 ### 产物

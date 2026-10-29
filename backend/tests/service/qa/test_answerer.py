@@ -1,7 +1,8 @@
 """问答 answerer 单测:全注入 fake Transport,**绝不真调 LLM**。
 
-覆盖:prompt 组装([n] 编号 + <context> 包裹 + 问题)、命中为空短路(不调 LLM)、
-正常答 + citations 映射、LLM 认证错误向上抛(不静默)。
+覆盖:prompt 组装([n] 编号 + <context> 包裹 + 问题)、多轮历史(进 messages、
+超预算从最旧丢、封顶条数)、命中+历史都空才短路(有历史不短路,追问靠历史)、
+缓存字段解析、LLM 认证错误向上抛(不静默)。
 """
 
 from __future__ import annotations
@@ -11,7 +12,12 @@ import json
 import pytest
 
 from app.service.llm import LLMAuthError, LLMClient
-from app.service.qa.answerer import ContextHit, answer, build_qa_messages
+from app.service.qa.answerer import (
+    HISTORY_MAX_MESSAGES,
+    ContextHit,
+    answer,
+    build_qa_messages,
+)
 
 
 class FakeTransport:
@@ -30,12 +36,23 @@ class FakeTransport:
         return status, {}, raw
 
 
-def _chat(content: str, *, total: int = 15) -> bytes:
+def _chat(
+    content: str,
+    *,
+    total: int = 15,
+    cache_hit: int | None = None,
+    cache_miss: int | None = None,
+) -> bytes:
+    usage: dict = {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": total}
+    if cache_hit is not None:
+        usage["prompt_cache_hit_tokens"] = cache_hit
+    if cache_miss is not None:
+        usage["prompt_cache_miss_tokens"] = cache_miss
     return json.dumps(
         {
             "model": "fake-model",
             "choices": [{"message": {"role": "assistant", "content": content}}],
-            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": total},
+            "usage": usage,
         }
     ).encode()
 
@@ -69,33 +86,65 @@ def _hit(
     )
 
 
+def _history() -> list[dict[str, str]]:
+    return [
+        {"role": "user", "content": "闭包是什么"},
+        {"role": "assistant", "content": "闭包是函数+捕获的外层变量。[1]"},
+    ]
+
+
 class TestPromptAssembly:
     def test_messages_number_hits_and_wrap_context(self) -> None:
         hits = [_hit(note_id=10), _hit(note_id=20, title="Fetch 指南", hp="七、取消请求")]
         msgs, meta = build_qa_messages("闭包是什么", hits)
         assert msgs[0]["role"] == "system"
-        assert msgs[1]["role"] == "user"
-        user = msgs[1]["content"]
+        user = msgs[-1]["content"]
         assert "<context>" in user and "</context>" in user
         assert "[1]" in user and "[2]" in user
         assert "闭包笔记" in user and "Fetch 指南" in user
         assert "闭包是什么" in user
         assert meta["n_hits"] == 2
 
-    def test_empty_hits_still_builds_messages(self) -> None:
-        msgs, meta = build_qa_messages("x", [])
-        assert "<context>" in msgs[1]["content"]
-        assert meta["n_hits"] == 0
+    def test_history_inserted_between_system_and_current(self) -> None:
+        msgs, meta = build_qa_messages("那它的三个条件", [_hit()], history=_history())
+        assert msgs[0]["role"] == "system"
+        assert msgs[1] == {"role": "user", "content": "闭包是什么"}
+        assert msgs[2] == {"role": "assistant", "content": "闭包是函数+捕获的外层变量。[1]"}
+        assert msgs[-1]["role"] == "user" and "那它的三个条件" in msgs[-1]["content"]
+        assert meta["history_kept"] == 2
+
+    def test_history_trimmed_from_oldest_when_over_budget(self) -> None:
+        long_msg = "x" * 2000
+        history = [{"role": "user", "content": f"旧问题{i}:{long_msg}"} for i in range(10)]
+        history.append({"role": "user", "content": "最近的问题"})
+        msgs, meta = build_qa_messages("继续", [], history=history, history_budget=2000)
+        assert 1 <= meta["history_kept"] < len(history)
+        # 最近的一条历史必须保留(在当前 user 消息的前一位)
+        assert "最近的问题" in msgs[-2]["content"]
+
+    def test_history_capped_at_max_messages(self) -> None:
+        history = [{"role": "user", "content": f"问题{i}"} for i in range(20)]
+        msgs, meta = build_qa_messages("继续", [], history=history)
+        assert meta["history_kept"] == HISTORY_MAX_MESSAGES
+        assert "问题19" in msgs[-2]["content"]
 
 
 class TestAnswer:
-    def test_empty_hits_short_circuits_no_llm_call(self) -> None:
+    def test_no_hits_no_history_short_circuits_no_llm_call(self) -> None:
         client, transport = _client([(200, _chat("不该被调用"))])
         result = answer("任意问题", [], client=client)
         assert result.answer == "笔记库里没有找到相关内容。"
         assert result.citations == []
         assert result.cost_tokens == 0
         assert transport.calls == []  # 没调 LLM
+
+    def test_followup_with_history_but_no_hits_still_calls_llm(self) -> None:
+        """追问(「再讲讲」)检索不到新片段时,靠历史答,不短路。"""
+        client, transport = _client([(200, _chat("闭包的三个条件:嵌套/引用/暴露。"))])
+        result = answer("再讲讲", [], history=_history(), client=client)
+        assert len(transport.calls) == 1
+        assert result.answer != "笔记库里没有找到相关内容。"
+        assert result.citations == []  # 本次没检索,没有出处
 
     def test_answer_with_hits_maps_citations(self) -> None:
         hits = [
@@ -113,6 +162,63 @@ class TestAnswer:
         assert result.cost_tokens == 42
         assert result.model == "fake-model"
         assert transport.calls and transport.calls[0]["method"] == "POST"
+
+    def test_citations_filtered_to_referenced_only(self) -> None:
+        """答案只引了 [1] → 出处只留第 1 条,不把没被引用的命中硬挂上。"""
+        hits = [
+            _hit(note_id=10),
+            _hit(note_id=20, title="Fetch 指南", child="用 AbortController 取消"),
+        ]
+        client, _ = _client([(200, _chat("闭包是函数+捕获的外层变量。[1]"))])
+        result = answer("闭包", hits, client=client)
+        assert len(result.citations) == 1
+        assert result.citations[0].n == 1
+        assert result.citations[0].note_id == 10
+
+    def test_citations_empty_when_answer_has_no_markers(self) -> None:
+        """问候/闲聊没有 [n] → 出处为空(修「发你好也挂 5 条不相干出处」)。"""
+        client, _ = _client([(200, _chat("你好!有什么我可以帮你的吗?"))])
+        result = answer("你好", [_hit()], client=client)
+        assert result.citations == []
+
+    def test_citations_drop_out_of_range_markers(self) -> None:
+        """幻觉编号(超过命中数)剔除,不炸。"""
+        client, _ = _client([(200, _chat("闭包是……[9]"))])
+        result = answer("闭包", [_hit()], client=client)
+        assert result.citations == []
+
+    def test_cache_fields_parsed(self) -> None:
+        client, _ = _client([(200, _chat("答案 [1]", total=42, cache_hit=30, cache_miss=10))])
+        result = answer("问题", [_hit()], client=client)
+        assert result.prompt_cache_hit_tokens == 30
+        assert result.prompt_cache_miss_tokens == 10
+
+    def test_cache_fields_none_when_provider_omits(self) -> None:
+        """OpenAI 系 provider 没有 cache 字段 → None,不炸。"""
+        client, _ = _client([(200, _chat("答案 [1]"))])
+        result = answer("问题", [_hit()], client=client)
+        assert result.prompt_cache_hit_tokens is None
+        assert result.prompt_cache_miss_tokens is None
+
+    def test_cache_fields_openai_style_parsed(self) -> None:
+        """OpenAI 官方风格:usage.prompt_tokens_details.cached_tokens 也认(网关 SenseNova 渠道是这种,
+        未命中时上游整个不带该字段 → None)。"""
+        raw = json.dumps(
+            {
+                "model": "fake-model",
+                "choices": [{"message": {"role": "assistant", "content": "答案 [1]"}}],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 5,
+                    "total_tokens": 105,
+                    "prompt_tokens_details": {"cached_tokens": 80},
+                },
+            }
+        ).encode()
+        client, _ = _client([(200, raw)])
+        result = answer("问题", [_hit()], client=client)
+        assert result.prompt_cache_hit_tokens == 80
+        assert result.prompt_cache_miss_tokens == 20  # prompt_tokens - hit
 
     def test_empty_content_falls_back_to_not_found(self) -> None:
         """reasoning 模型偶发 content 为空时,兜底成「库里没有」,不返回空答案。"""
