@@ -68,10 +68,7 @@ def _sse_lines(text_chunks: list[str], *, cache_hit: int, cache_miss: int) -> li
     lines = []
     for t in text_chunks:
         lines.append(
-            "data: "
-            + json.dumps(
-                {"choices": [{"delta": {"content": t}}]}, ensure_ascii=False
-            )
+            "data: " + json.dumps({"choices": [{"delta": {"content": t}}]}, ensure_ascii=False)
         )
     lines.append(
         "data: "
@@ -131,6 +128,7 @@ def qa_setup(env: SimpleNamespace) -> SimpleNamespace:
         responses=[],  # (status, body) 非流式队列;测试按「改写→回答」顺序填入
         stream_lines=[],  # 流式端点的 SSE 行
         queries=[],  # fake_retrieve 收到的检索词
+        search_calls=[],  # fake_search 收到的查询(联网兜底)
         transports=[],
     )
 
@@ -158,9 +156,7 @@ def qa_setup(env: SimpleNamespace) -> SimpleNamespace:
         app.dependency_overrides.pop(qa_module.get_llm_client, None)
 
 
-def test_chat_creates_session_and_persists(
-    env: SimpleNamespace, qa_setup: SimpleNamespace
-) -> None:
+def test_chat_creates_session_and_persists(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
     # 库里可能有主人真实的历史会话(浏览器测试留下的),断言只用「前后差值」,不假设空库
     before = env.client.get("/api/qa/sessions").json()["total"]
     qa_setup.responses.append(
@@ -190,9 +186,7 @@ def test_chat_creates_session_and_persists(
 def test_chat_followup_retrieves_rewritten_query_and_replays_history(
     env: SimpleNamespace, qa_setup: SimpleNamespace
 ) -> None:
-    qa_setup.responses.append(
-        (200, _chat("Promise 是异步操作的结果对象,手写要点如下。[1]"))
-    )
+    qa_setup.responses.append((200, _chat("Promise 是异步操作的结果对象,手写要点如下。[1]")))
     first = env.client.post("/api/qa/chat", json={"question": "什么是 Promise，怎么手写"}).json()
     sid = first["session_id"]
 
@@ -201,9 +195,7 @@ def test_chat_followup_retrieves_rewritten_query_and_replays_history(
     qa_setup.responses.append(
         (200, _chat("手写实现的 Promise 有三种状态:PENDING/FULFILLED/REJECTED。[1]", total=42))
     )
-    second = env.client.post(
-        "/api/qa/chat", json={"session_id": sid, "question": "它有哪几种状态"}
-    )
+    second = env.client.post("/api/qa/chat", json={"session_id": sid, "question": "它有哪几种状态"})
     assert second.status_code == 200, second.text
     body2 = second.json()
     assert body2["search_query"] == "手写实现的 Promise 有哪几种状态"
@@ -229,9 +221,7 @@ def test_chat_rewrite_failure_falls_back_to_original(
     # 改写调用 401(LLMAuthError 立即抛,handler 兜底) → 回答成功
     qa_setup.responses.append((401, b'{"error":{"message":"unauthorized"}}'))
     qa_setup.responses.append((200, _chat("基于历史的回答。[1]", total=30)))
-    second = env.client.post(
-        "/api/qa/chat", json={"session_id": sid, "question": "它有哪几种状态"}
-    )
+    second = env.client.post("/api/qa/chat", json={"session_id": sid, "question": "它有哪几种状态"})
     assert second.status_code == 200, second.text
     body2 = second.json()
     assert body2["search_query"] == "它有哪几种状态"  # 回退原问题
@@ -312,3 +302,140 @@ def test_export_session_writes_file_and_returns_markdown(
 
     # 不存在的会话 → 404
     assert env.client.get("/api/qa/sessions/999999/export").status_code == 404
+
+
+def test_summarizer_creates_import_session(
+    env: SimpleNamespace, qa_setup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """阶段3:导入完成 → 摘要 → 自动建「新导入:xxx」会话(首条 assistant 消息)。"""
+    from app.repo.library import LibraryRepo
+    from app.service.qa import summarizer as summarizer_module
+    from app.service.qa.summarizer import summarize_import
+
+    # 假笔记读取(不种 note 行):monkeypatch 掉 LibraryRepo 的两个读取方法
+    async def fake_get(self, note_id):  # noqa: ANN001
+        return SimpleNamespace(id=note_id, title="Agent 应用开发学习指南", markdown="", doc={})
+
+    async def fake_parents(self, note_id):  # noqa: ANN001
+        return [
+            SimpleNamespace(
+                text="Agent 五阶段:基础认知→Function Calling→记忆→协作→部署。",
+                token_count=30,
+            )
+        ]
+
+    monkeypatch.setattr(LibraryRepo, "get_active_note", fake_get)
+    monkeypatch.setattr(LibraryRepo, "list_parent_chunks", fake_parents)
+    # session_factory 指到 env 的事务工厂(回滚不污染)
+    monkeypatch.setattr(summarizer_module, "session_factory", env.shared["factory"])
+
+    transport = FakeTransport(
+        [(200, _chat("这篇笔记讲 Agent 开发五阶段……建议你问:①最简 Agent 类 ②协调者模式"))],
+        [],
+    )
+    client = LLMClient(
+        base_url="https://api.example.test/v1",
+        api_key="sk-qa-SECRET",
+        model="fake-model",
+        transport=transport,
+        sleep=lambda _s: None,
+    )
+
+    async def _run():
+        return await summarize_import(999, "Agent 指南.md", client=client)
+
+    created = env.client.portal.call(_run)
+    assert created is not None
+    assert created.title.startswith("新导入:Agent 指南")
+
+    detail = env.client.get(f"/api/qa/sessions/{created.id}").json()
+    assert [m["role"] for m in detail["messages"]] == ["assistant"]
+    assert detail["messages"][0]["content"].startswith("这篇笔记")
+
+
+def test_summarizer_note_missing_returns_none(
+    env: SimpleNamespace, qa_setup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.service.qa import summarizer as summarizer_module
+    from app.service.qa.summarizer import summarize_import
+
+    monkeypatch.setattr(summarizer_module, "session_factory", env.shared["factory"])
+
+    async def _run():
+        return await summarize_import(999999, "不存在.md")
+
+    created = env.client.portal.call(_run)
+    assert created is None
+
+
+def test_chat_web_fallback_when_kb_misses(
+    env: SimpleNamespace, qa_setup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """阶段5 工具链:库内没命中 + 配了 Tavily → 自动搜网,回答带 url 出处。"""
+
+    qa_setup.hits = []  # 库内没命中
+
+    async def fake_tavily_key(session):  # noqa: ANN001
+        return "tvly-test"
+
+    def fake_search(query, *, api_key, max_results=5):  # noqa: ANN001
+        qa_setup.search_calls.append(query)
+        return [
+            {
+                "title": "Promise MDN",
+                "url": "https://example.com/promise",
+                "content": "Promise 三种状态……",
+            }
+        ]
+
+    monkeypatch.setattr(qa_module, "resolve_tavily_key", fake_tavily_key)
+    monkeypatch.setattr(qa_module, "search_web", fake_search)
+    qa_setup.responses.append(
+        (200, _chat("根据网络搜索:Promise 有三种状态……(来源见 [W1])", total=30))
+    )
+
+    resp = env.client.post("/api/qa/chat", json={"question": "什么是 WebGPU"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["used_web"] is True
+    assert qa_setup.queries[-1] == "什么是 WebGPU"
+    assert body["assistant_message"]["citations"][0]["url"] == "https://example.com/promise"
+    assert body["assistant_message"]["citations"][0]["note_id"] is None
+    assert qa_setup.search_calls == ["什么是 WebGPU"]
+
+
+def test_save_note_writes_file_and_enqueues_import(
+    env: SimpleNamespace,
+    qa_setup: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """阶段4(D2=B):会话 → LLM 整理 → 落 notes_out/ → no_llm 入队。"""
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    first = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()
+    sid = first["session_id"]
+
+    monkeypatch.setattr(qa_module, "NOTES_OUT_DIR", tmp_path / "notes_out")
+    import app.worker.worker as worker_module
+
+    monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path / "staging")
+    enqueued: list[dict] = []
+
+    async def fake_enqueue(file_path, *, dedupe_key, no_llm=False):  # noqa: ANN001
+        enqueued.append({"file": file_path, "no_llm": no_llm})
+        return dedupe_key
+
+    monkeypatch.setattr(worker_module, "enqueue_import", fake_enqueue)
+    qa_setup.responses.append((200, _chat("# 闭包笔记\n\n要点……")))
+
+    resp = env.client.post(f"/api/qa/sessions/{sid}/save-note")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["import_enqueued"] is True
+    assert enqueued and enqueued[0]["no_llm"] is True
+    files = list((tmp_path / "notes_out").glob("*.md"))
+    assert len(files) == 1
+    assert "闭包" in files[0].read_text(encoding="utf-8")
+
+    # 不存在的会话 → 404
+    assert env.client.post("/api/qa/sessions/999999/save-note").status_code == 404

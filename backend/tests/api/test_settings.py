@@ -43,3 +43,17 @@ def test_put_empty_api_key_keeps_old(env: SimpleNamespace) -> None:
 def test_get_never_returns_full_key(env: SimpleNamespace) -> None:
     body = env.client.get("/api/settings").json()
     assert "llm_api_key" not in body  # 全文永不回显
+
+
+def test_tavily_key_roundtrip(env: SimpleNamespace) -> None:
+    # 默认没有 → set/tail 为空
+    first = env.client.get("/api/settings").json()
+    assert first["tavily_set"] is False
+    assert first["tavily_tail"] == ""
+    # 设置 → 反映
+    resp = env.client.put("/api/settings", json={"tavily_api_key": "tvly-abc12345"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["tavily_set"] is True
+    assert body["tavily_tail"] == "2345"
+    assert env.client.get("/api/settings").json()["tavily_tail"] == "2345"

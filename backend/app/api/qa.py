@@ -13,7 +13,9 @@ LLM 异常向上抛(与 G2 同口径)。一条提问 = 建/找会话 + 存两条
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -28,16 +30,20 @@ from app.api.library import OWNER_ID, RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import QaRepo
 from app.service.llm import LLMClient, LLMError
-from app.service.llm.resolve import resolve_llm_config
+from app.service.llm.resolve import resolve_llm_config, resolve_tavily_key
 from app.service.qa.answerer import (
     _EMPTY_ANSWER,
     ContextHit,
     QaResult,
     answer,
+    answer_web,
     build_citations,
     build_qa_messages,
+    build_web_citations,
 )
 from app.service.qa.rewriter import rewrite_question
+from app.service.qa.summarizer import organize_session_note
+from app.service.qa.websearch import search_web
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
 
@@ -48,6 +54,8 @@ TITLE_CHARS = 30  # 会话标题 = 首问前 30 字
 
 # 导出落盘目录:gitignored 的 backend/tmp/qa_exports/,给协调方/agent 直接读取用
 EXPORT_DIR = Path(__file__).resolve().parents[2] / "tmp" / "qa_exports"
+# 阶段4(D2=B):会话产出的笔记落盘目录(「项目文件夹」愿景的最小落地)
+NOTES_OUT_DIR = Path(__file__).resolve().parents[2] / "notes_out"
 
 
 class ChatRequest(BaseModel):
@@ -68,10 +76,12 @@ class ChatRequest(BaseModel):
 
 class CitationOut(BaseModel):
     n: int
-    note_id: int
+    # None = 联网出处(url 指向来源网页);int = 库内笔记出处
+    note_id: int | None
     note_title: str
     heading_path: str | None
     snippet: str
+    url: str | None = None
 
 
 class MessageOut(BaseModel):
@@ -90,6 +100,7 @@ class ChatResponse(BaseModel):
     user_message: MessageOut
     assistant_message: MessageOut
     search_query: str  # 实际用于检索的词(追问会先经 LLM 改写,与原话可能不同)
+    used_web: bool  # True = 库内没找到,回答基于联网搜索(出处带 url)
     took_ms: int
 
 
@@ -182,7 +193,7 @@ async def chat(
 
     # 4) 检索 top-k + 组装本轮 LLM 消息(拿到含 <context> 的原文,存 llm_content 供下轮重放)
     result = await retrieve(search_query, top_k=payload.top_k, owner_id=OWNER_ID)
-    hits = [
+    kb_hits = [
         ContextHit(
             note_id=h.note_id,
             note_title=h.note_title,
@@ -192,18 +203,31 @@ async def chat(
         )
         for h in result.hits
     ]
-    messages, _build_meta = build_qa_messages(payload.question, hits, history=history)
+    messages, _build_meta = build_qa_messages(payload.question, kb_hits, history=history)
     llm_user_text = messages[-1]["content"]
+
+    # 4.5) 工具链兜底(阶段5 最小实现):库内没命中且配了 Tavily → 联网搜索
+    web_results: list[dict[str, str]] = []
+    tavily_key = await resolve_tavily_key(session)
+    if not kb_hits and tavily_key:
+        try:
+            web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
+        except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
+            web_results = []
 
     # 4) 存 user 消息(两份:content 给人看,llm_content 给下轮 LLM 重放)
     user_msg = await repo.add_message(
         qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
     )
 
-    # 5) LLM(同步 → to_thread,不阻塞事件循环)
-    qa: QaResult = await asyncio.to_thread(
-        answer, payload.question, hits, history=history, client=llm
-    )
+    # 5) LLM(同步 → to_thread,不阻塞事件循环):联网结果走 web 版,否则库内版
+    used_web = bool(web_results)
+    if used_web:
+        qa: QaResult = await asyncio.to_thread(
+            answer_web, payload.question, web_results, history=history, client=llm
+        )
+    else:
+        qa = await asyncio.to_thread(answer, payload.question, kb_hits, history=history, client=llm)
 
     # 5) 存 assistant 消息(出处 + 计费 + 缓存计数),整体 commit(失败全回滚)
     assistant_msg = await repo.add_message(
@@ -225,6 +249,7 @@ async def chat(
         user_message=_message_out(user_msg),
         assistant_message=_message_out(assistant_msg),
         search_query=search_query,
+        used_web=used_web,
         took_ms=took_ms,
     )
 
@@ -272,7 +297,7 @@ async def chat_stream_endpoint(
             search_query = payload.question
 
     result = await retrieve(search_query, top_k=payload.top_k, owner_id=OWNER_ID)
-    hits = [
+    kb_hits = [
         ContextHit(
             note_id=h.note_id,
             note_title=h.note_title,
@@ -282,8 +307,19 @@ async def chat_stream_endpoint(
         )
         for h in result.hits
     ]
-    messages, _build_meta = build_qa_messages(payload.question, hits, history=history)
+    messages, _build_meta = build_qa_messages(payload.question, kb_hits, history=history)
     llm_user_text = messages[-1]["content"]
+
+    # 工具链兜底(阶段5 最小实现):库内没命中且配了 Tavily → 联网搜索
+    web_results: list[dict[str, str]] = []
+    tavily_key = await resolve_tavily_key(session)
+    if not kb_hits and tavily_key:
+        try:
+            web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
+        except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
+            web_results = []
+    used_web = bool(web_results)
+
     user_msg = await repo.add_message(
         qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
     )
@@ -300,29 +336,42 @@ async def chat_stream_endpoint(
                     "session_id": qa_session.id,
                     "session_title": qa_session.title,
                     "search_query": search_query,
+                    "used_web": used_web,
                     "user_message": user_out.model_dump(),
                 },
             )
-            iterator = llm.chat_stream(messages, max_tokens=3000)
-            try:
-                while True:
-                    # 同步生成器逐段推进放线程里,不阻塞事件循环
-                    event = await asyncio.to_thread(next, iterator, None)
-                    if event is None:
-                        break
-                    if event["type"] == "usage":
-                        usage_event = event
-                    elif event["type"] == "content":
-                        accumulated.append(event["text"])
-                        yield _sse("delta", {"text": event["text"]})
-                    # reasoning 增量暂不转发(前端「思考中…」持续到正文开始)
-            finally:
-                close = getattr(iterator, "close", None)
-                if close is not None:
-                    close()
+            if web_results:
+                # 联网兜底走非流式回答(web 上下文结构不同),整段作为一帧 delta 下发
+                qa = await asyncio.to_thread(
+                    answer_web, payload.question, web_results, history=history, client=llm
+                )
+                accumulated.append(qa.answer)
+                yield _sse("delta", {"text": qa.answer})
+            else:
+                iterator = llm.chat_stream(messages, max_tokens=3000)
+                try:
+                    while True:
+                        # 同步生成器逐段推进放线程里,不阻塞事件循环
+                        event = await asyncio.to_thread(next, iterator, None)
+                        if event is None:
+                            break
+                        if event["type"] == "usage":
+                            usage_event = event
+                        elif event["type"] == "content":
+                            accumulated.append(event["text"])
+                            yield _sse("delta", {"text": event["text"]})
+                        # reasoning 增量暂不转发(前端「思考中…」持续到正文开始)
+                finally:
+                    close = getattr(iterator, "close", None)
+                    if close is not None:
+                        close()
 
             answer_text = "".join(accumulated).strip() or _EMPTY_ANSWER
-            citations = build_citations(hits, answer_text)
+            citations = (
+                build_web_citations(web_results, answer_text)
+                if used_web
+                else build_citations(kb_hits, answer_text)
+            )
             usage = usage_event or {}
             assistant_msg = await repo.add_message(
                 qa_session.id,
@@ -439,4 +488,56 @@ async def export_session(session_id: int, session: SessionDep) -> Response:
         content=md,
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="session-{session_id}.md"'},
+    )
+
+
+class SaveNoteResponse(BaseModel):
+    note_file: str
+    organized_chars: int
+    import_enqueued: bool
+    import_job_id: str | None
+
+
+@router.post("/sessions/{session_id}/save-note", response_model=SaveNoteResponse)
+async def save_session_as_note(
+    session_id: int, llm: LLMClientDep, session: SessionDep
+) -> SaveNoteResponse:
+    """阶段4(D2=B):把会话整理成 Markdown 笔记 → 落 notes_out/ → no_llm 入库(异步)。
+
+    直接入库跳过 G2(来源是自家整理产物);G0/G1/切块/向量化照常走,保证可检索。
+    """
+    repo = QaRepo(session, OWNER_ID)
+    qa_session = await repo.get_session(session_id)
+    if qa_session is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
+    messages = await repo.list_messages(session_id)
+    if len(messages) < 2:
+        raise HTTPException(status_code=400, detail="会话还没有可整理的问答内容")
+
+    dialogue = "\n\n".join(
+        f"{'用户' if m.role == 'user' else '助手'}:{m.content}" for m in messages
+    )
+    note_md = await organize_session_note(qa_session.title, dialogue, client=llm)
+
+    NOTES_OUT_DIR.mkdir(parents=True, exist_ok=True)
+    safe = re.sub(r'[<>:"/\\|?*\s]+', "-", qa_session.title).strip("-.")[:40] or "session"
+    if not safe.endswith(".md"):
+        safe += ".md"
+    filename = f"{datetime.now():%Y-%m-%d}-{safe}"
+    (NOTES_OUT_DIR / filename).write_text(note_md, encoding="utf-8")
+
+    # 入库:写暂存区 → no_llm 导入(G0 解析→G1→切块→向量化;跳过 G2,来源是自家整理产物)
+    from app.worker.worker import STAGING_ROOT, enqueue_import
+
+    STAGING_ROOT.mkdir(parents=True, exist_ok=True)
+    staging_path = STAGING_ROOT / filename
+    staging_path.write_text(note_md, encoding="utf-8")
+    dedupe_key = hashlib.sha256(note_md.encode("utf-8")).hexdigest()
+    job_id = await enqueue_import(str(staging_path), dedupe_key=dedupe_key, no_llm=True)
+
+    return SaveNoteResponse(
+        note_file=f"notes_out/{filename}",
+        organized_chars=len(note_md),
+        import_enqueued=job_id is not None,
+        import_job_id=job_id,
     )

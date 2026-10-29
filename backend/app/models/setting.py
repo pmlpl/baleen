@@ -21,6 +21,8 @@ class AppSettings(Base):
     llm_base_url: Mapped[str | None] = mapped_column(Text)
     llm_api_key: Mapped[str | None] = mapped_column(Text)
     llm_model: Mapped[str | None] = mapped_column(Text)
+    # 工具链:库外问题的联网搜索(Tavily 免费档,1000 次/月)
+    tavily_api_key: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

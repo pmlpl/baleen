@@ -18,6 +18,7 @@ class SettingsRepo(Repo):
         llm_base_url: str | None = None,
         llm_api_key: str | None = None,
         llm_model: str | None = None,
+        tavily_api_key: str | None = None,
     ) -> AppSettings:
         """按传入字段更新;None = 保持不变,空串 = 清空(回退 .env)。api_key 仅非空时更新。"""
         row = await self.get()
@@ -30,5 +31,7 @@ class SettingsRepo(Repo):
             row.llm_api_key = llm_api_key
         if llm_model is not None:
             row.llm_model = llm_model or None
+        if tavily_api_key is not None:
+            row.tavily_api_key = tavily_api_key or None
         await self.session.flush()
         return row

@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+import os
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -23,3 +25,11 @@ async def resolve_llm_config(session: AsyncSession) -> tuple[str, str, str]:
         row.llm_api_key or s.llm_api_key,
         row.llm_model or s.llm_model,
     )
+
+
+async def resolve_tavily_key(session: AsyncSession) -> str | None:
+    """Tavily key:app_settings 优先,回退环境变量 TAVILY_API_KEY。"""
+    row = await session.scalar(select(AppSettings).where(AppSettings.id == 1))
+    if row is not None and row.tavily_api_key:
+        return row.tavily_api_key
+    return os.getenv("TAVILY_API_KEY") or None

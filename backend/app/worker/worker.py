@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -22,6 +23,8 @@ from app.core.config import ROOT_DIR, get_settings
 from app.core.db import session_factory
 from app.repo import Repos
 from app.service.parse.blocks import empty_doc
+
+log = logging.getLogger(__name__)
 
 # 暂存目录:上传 API 先把文件落在这里(保留原文件名/扩展名供 G0 路由),
 # blob 由流水线照常按 storage/{sha[:2]}/{sha} 存(AGENTS §4)
@@ -96,6 +99,19 @@ async def import_file(ctx: dict, file_path: str, *, no_llm: bool = False) -> dic
     if no_llm and not result.deduped and result.source_id is not None:
         await _mark_g2_skipped(result.source_id)
     _remove_staging(file_path)
+    # 阶段3(ADR 0005):导入成功 → 摘要 + 自动建「新导入:xxx」会话。
+    # best-effort:失败只记日志,不影响导入结果(ADR §2 验收标准)。
+    if result.note_id is not None and not result.deduped and not no_llm:
+        try:
+            from app.service.qa.summarizer import summarize_import
+
+            qa_session = await summarize_import(result.note_id, Path(file_path).name)
+            if qa_session is not None:
+                log.info(
+                    "导入后摘要会话已建: qa_sessions #%s(笔记 #%s)", qa_session.id, result.note_id
+                )
+        except Exception as exc:  # noqa: BLE001 —— 摘要是锦上添花,静默跳过(ADR 0005 §2)
+            log.warning("导入后摘要生成失败(不影响导入): %s", exc)
     return asdict(result)
 
 
