@@ -13,7 +13,6 @@ import pytest
 
 from app.service.llm import LLMAuthError, LLMClient
 from app.service.qa.answerer import (
-    HISTORY_MAX_MESSAGES,
     ContextHit,
     answer,
     build_qa_messages,
@@ -125,7 +124,7 @@ class TestPromptAssembly:
     def test_history_capped_at_max_messages(self) -> None:
         history = [{"role": "user", "content": f"问题{i}"} for i in range(20)]
         msgs, meta = build_qa_messages("继续", [], history=history)
-        assert meta["history_kept"] == HISTORY_MAX_MESSAGES
+        assert meta["history_kept"] == 20  # 远小于安全网上限 → 原样全量重放(缓存对齐的前提)
         assert "问题19" in msgs[-2]["content"]
 
 

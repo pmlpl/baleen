@@ -26,7 +26,7 @@ from app.api.library import OWNER_ID, RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import QaRepo
 from app.service.llm import LLMClient
-from app.service.qa.answerer import ContextHit, QaResult, answer
+from app.service.qa.answerer import ContextHit, QaResult, answer, build_qa_messages
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
 
@@ -141,14 +141,18 @@ async def chat(
         if qa_session is None:
             raise HTTPException(status_code=404, detail=f"会话不存在:{payload.session_id}")
 
-    # 2) 历史(在插入新消息之前读,天然不含本条)
+    # 2) 历史(在插入新消息之前读,天然不含本条;user 消息按 llm_content 原样重放
+    #    —— 会话内 prompt 前缀逐轮对齐,上游前缀缓存才能命中)
     prior = await repo.list_messages(qa_session.id)
-    history = [{"role": m.role, "content": m.content} for m in prior]
+    history = [
+        {
+            "role": m.role,
+            "content": (m.llm_content or m.content) if m.role == "user" else m.content,
+        }
+        for m in prior
+    ]
 
-    # 3) 存 user 消息
-    user_msg = await repo.add_message(qa_session.id, role="user", content=payload.question)
-
-    # 4) 检索 top-k + LLM(同步 → to_thread,不阻塞事件循环)
+    # 3) 检索 top-k + 组装本轮 LLM 消息(拿到含 <context> 的原文,存 llm_content 供下轮重放)
     result = await retrieve(payload.question, top_k=payload.top_k, owner_id=OWNER_ID)
     hits = [
         ContextHit(
@@ -160,6 +164,15 @@ async def chat(
         )
         for h in result.hits
     ]
+    messages, _build_meta = build_qa_messages(payload.question, hits, history=history)
+    llm_user_text = messages[-1]["content"]
+
+    # 4) 存 user 消息(两份:content 给人看,llm_content 给下轮 LLM 重放)
+    user_msg = await repo.add_message(
+        qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
+    )
+
+    # 5) LLM(同步 → to_thread,不阻塞事件循环)
     qa: QaResult = await asyncio.to_thread(
         answer, payload.question, hits, history=history, client=llm
     )

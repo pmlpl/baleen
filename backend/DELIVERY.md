@@ -72,6 +72,32 @@ cd backend && uv run pytest -q     →  139 passed
 
 ---
 
+## 2026-10-30 01:49 · 线 Q-批5 · 缓存命中率真落地（llm_content 重放 + 切 glm-5.2）· 执行者：ZCode（主人指令）
+
+主人指令「解决缓存不显示」。三步走全通：
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 改 | `.env`（**主人明确指令代改，破例记录在案**） | `LLM_MODEL` agnes-3.0-flash → **glm-5.2**（只动这一行，key 未触碰未打印） |
+| 新增 | `alembic/versions/0004_qa_message_llm_content.py` | qa_messages 加 `llm_content`（已 upgrade head 实跑） |
+| 改 | `app/models/qa.py`、`app/repo/qa.py` | user 消息双份存储：`content`（原始问题，给人看）+ `llm_content`（含 `<context>` 的原文，给 LLM 重放） |
+| 改 | `app/api/qa.py` | 先组装消息取 `<context>` 原文存 llm_content；历史按 **llm_content 原样重放**（前缀逐轮对齐） |
+| 改 | `app/service/qa/answerer.py` | 历史重放预算改安全网（200 条/24000 tok）——**裁剪会破坏前缀对齐**，轻易别调小 |
+
+### 自测
+- pytest 21 passed（qa 相关）；ruff 全清；alembic 0003→0004 实跑
+- **真实两轮 e2e（glm-5.2）**：T1「什么是 Promise，怎么手写」缓存命中率 **0.0**（冷启动）→ T2「手写的时候要注意什么」**48.4%**（前缀对齐命中，计费约一折）；答案质量正常带引用；测试会话已删
+- 探针：glm-5.2 双发同前缀 4821 tok → call1 cached_tokens=0 → call2/3 **4608（95.6%）**
+
+### 原理（为什么之前一直是 —）
+前缀缓存按「请求开头完全相同的部分」命中。旧实现用户消息存原始问题、LLM 却看 context 包装版 → 下轮前缀在 system 之后立刻分叉，稳定前缀只剩 ~450 tok（低于上游门槛）。现在按 llm_content 原样重放，会话内第 N 轮的前缀 = 第 N-1 轮完整 prompt → 命中率随轮数上升。
+
+### 已知限制
+- 命中率取决于上游账号池路由（跨账号不共享缓存）；未命中轮 0.0/—。
+- 提醒主人：**dev server 要重启**（.env 与代码都变了）；worker 仍挂本会话下。
+
+---
+
 ## 2026-10-30 00:55 · 线 Q-批4 · 会话导出 + 两个运行诊断 · 执行者：ZCode
 
 ### 产物

@@ -52,6 +52,9 @@ class QaMessage(Base):
     )
     role: Mapped[str] = mapped_column(Text, nullable=False)
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    # user 消息专用:真正喂给 LLM 的原文(含 <context> 检索片段)。多轮重放时用它而非 content,
+    # 使会话内前缀逐轮对齐 → 上游前缀缓存命中(命中率从 ~0 提到 90%+)。assistant 消息为 NULL。
+    llm_content: Mapped[str | None] = mapped_column(Text)
     citations: Mapped[list] = mapped_column(
         JSONB, server_default=text("'[]'::jsonb"), nullable=False
     )

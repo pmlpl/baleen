@@ -24,9 +24,11 @@ from app.service.llm import LLMClient, estimate_tokens, truncate_to_tokens
 # 喂给 LLM 的上下文(检索到的父块正文)token 上限。DeepSeek 上下文很大(64K+),
 # 这里 cap 主要是控制成本;top_k=5 × 父块正文极少超此值。
 CONTEXT_TOKEN_BUDGET = 8000
-# 多轮历史:只带最近 N 条消息,且 token 封顶(超了从最旧开始丢,至少保最近一轮)。
-HISTORY_MAX_MESSAGES = 8
-HISTORY_TOKEN_BUDGET = 2000
+# 多轮历史:**原样重放**是上游前缀缓存命中的前提(user 消息按 llm_content 重放,
+# 会话内 prompt 前缀逐轮对齐 → 命中率 90%+,命中部分计费约一折)。
+# 下面两个只是超长会话的安全网,正常永远触不到;裁剪会破坏前缀对齐,轻易别调小。
+HISTORY_MAX_MESSAGES = 200
+HISTORY_TOKEN_BUDGET = 24000
 # reasoning 模型会先吃 token 思考,completion 预算要留够(reasoning + 答案)。
 DEFAULT_MAX_TOKENS = 3000
 # 答案温度:略高于 0 让表述自然,但不致编造(忠实于上下文靠 system prompt 约束)。
