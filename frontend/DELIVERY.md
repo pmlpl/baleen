@@ -23,6 +23,16 @@
 
 ---
 
+## 2026-10-30 02:50 · 线 Q-批8 · 设置页（模型配置热生效）· 执行者：ZCode（主人批准）
+
+- `src/api/settings.ts`：getSettings / updateSettings（PUT；api_key 空串=保持不变）
+- `src/views/SettingsView.vue`：三字段（网关地址/模型/API Key 密码框）+ 已设置末四位提示 + 保存即生效；nav 加「设置」；router 加 /settings
+- `src/api/http.ts`：加 `put()` 方法
+
+自测：`pnpm build` 1.08s 通过（vue-tsc 零错误）。
+
+---
+
 ## 2026-10-30 02:30 · 线 Q-批7 · 问答页流式渲染（fetch 流读取 + 打字机）· 执行者：ZCode（主人批准）
 
 - `src/api/qa.ts`：`streamChat(sessionId, question, handlers)`——fetch + ReadableStream 手工解析 SSE 帧（EventSource 不支持 POST）；流式读取在 api 层实现，组件不直接 fetch
