@@ -153,6 +153,8 @@ def test_chat_second_turn_sends_history(
     msgs = req["messages"]
     assert msgs[0]["role"] == "system"
     assert len(msgs) == 4
+    # 历史 user 消息按 llm_content 原样重放(含 <context>) —— 前缀对齐才能命中缓存
+    assert msgs[1]["content"].startswith("<context>")
     assert any("闭包是什么" in m["content"] for m in msgs[1:3])
     assert any("闭包是函数" in m["content"] for m in msgs[1:3])
 
