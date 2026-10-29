@@ -288,6 +288,12 @@
 
 **`cache_hit_rate` 口径**：prompt 前缀缓存命中占比 = hit/(hit+miss)；上游未命中时不下发字段 → `null`（前端显示「—」）。字段双格式归一：DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`。
 
+**联网兜底**：库内未命中且设置页配了 Tavily key → 自动搜网，回答基于搜索结果、citations 带 `url`（`note_id=null`，前端渲染外链）、`used_web=true`；未配 key 或搜索失败 → 维持「没找到」口径。
+
+### `POST /api/qa/sessions/{id}/save-note`（阶段4）
+
+会话整理成结构化 Markdown：LLM 组织 → 落 `notes_out/` 文件 + **no_llm 入库**（跳过 G2，走 G0/G1/切块/向量化，可检索）。响应 `{note_file, organized_chars, import_enqueued, import_job_id}`。会话不足 2 条消息 → 400。
+
 ---
 
 ## 6. 设置（**已实现 · 线 Q**）

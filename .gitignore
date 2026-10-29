@@ -53,6 +53,7 @@ eval/*.tmp
 *.db
 pgdata/
 storage/
+notes_out/
 uploads/
 data/blobs/
 
