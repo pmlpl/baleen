@@ -1384,3 +1384,83 @@ Referenced by:
 ### 需要确认的问题
 
 - （无）
+
+---
+
+## 2026-10-30 03:10 · 线 Q-批9 · 阶段3 导入后主动总结 · 执行者：ZCode（主人批准，D1=A）
+
+### 产物
+- `app/service/qa/summarizer.py`：`summarize_import(note_id, filename)`——读笔记父块 → LLM 摘要（要点+3 建议问题）→ 自动建「新导入:xxx」会话（摘要=首条 assistant 消息）；含 `organize_session_note`（阶段4 整理器）
+- `app/worker/worker.py`：import_file 成功后挂摘要步骤（`note_id 存在 且 非 dedupe 且 非 no_llm` 才触发；**失败仅 warning，不影响导入**——ADR 0005 §2 验收标准）
+
+### 自测
+- 单测 2 例（monkeypatch LibraryRepo 读取 + env 事务工厂；note 缺失返回 None）
+- **真实 e2e（glm-5.2）**：对笔记 #297（03-命令速查.md）触发 → 会话 #179「新导入:03-命令速查.md」自动创建，摘要准确覆盖 uv run 规范/测试流程/Git 规范（测试会话已删）
+
+### 已知限制
+- dedupe 命中的旧笔记不补摘要（原导入早于本功能）
+- no_llm 导入不生成摘要（口径一致：无 LLM 全程无 LLM）
+
+---
+
+## 2026-10-30 03:25 · 线 Q-批10 · 阶段4 会话产出笔记 + 工具链 Tavily 兜底 · 执行者：ZCode（主人批准，D2=B / D4=Tavily）
+
+### 产物
+- `app/api/qa.py`：`POST /api/qa/sessions/{id}/save-note`——LLM 把会话整理成结构化 Markdown → 落 `notes_out/` → **no_llm 入队**（G0/G1/切块/向量化照常，跳过 G2——D2=B 直接入库）；CitationOut 加 url/note_id 可空（联网出处）
+- `app/service/qa/websearch.py`：Tavily 搜索（免费档 1000 次/月）
+- `app/api/qa.py` chat/chat-stream：**库内未命中 + 配了 Tavily → 自动搜网**，回答带 [W n] 来源标注（citations.url 外链）；未配 key 或搜索失败 → 维持「没找到」口径
+- `app/api/settings.py`：tavily_api_key 只写不读（tavily_set/tavily_tail）
+- 前端：存为笔记按钮（chat 工具栏）、citations 渲染内链/外链双形态、设置页 Tavily 字段
+
+### 自测
+- `pytest tests/service/qa tests/api -q` → **68 passed**（新增 web 兜底/save-note/导出等 7 例）；ruff 全清；build 808ms
+- **真实 e2e（glm-5.2）**：阶段4 对会话 #179 save-note → `notes_out/2026-10-30-新导入-03-命令速查.md.md`（1114 字，结构化准确）+ no_llm 入队成功
+
+### 已知限制
+- 联网兜底仅库内零命中触发；命中但内容不相关时不搜（需相关性判断，后续可做）
+- 代码块 `arr[1]` 会被出处过滤误认为引用（可接受）
+- save-note 的入库走队列异步完成,前端不跟踪其进度
+
+---
+
+## 2026-10-30 02:50 · 线 Q-批8 · 模型配置 API（设置页后端，热生效）· 执行者：ZCode（主人批准）
+
+---
+
+## 2026-10-30 03:10 · 线 Q-批9 · 阶段3 导入后主动总结 · 执行者：ZCode（主人批准，D1=A）
+
+### 产物
+- `app/service/qa/summarizer.py`：`summarize_import(note_id, filename)`——读笔记父块 → LLM 摘要（要点+3 建议问题）→ 自动建「新导入:xxx」会话（摘要=首条 assistant 消息）；含 `organize_session_note`（阶段4 整理器）
+- `app/worker/worker.py`：import_file 成功后挂摘要步骤（`note_id 存在 且 非 dedupe 且 非 no_llm` 才触发；**失败仅 warning，不影响导入**——ADR 0005 §2 验收标准）
+
+### 自测
+- 单测 2 例（monkeypatch LibraryRepo 读取 + env 事务工厂；note 缺失返回 None）
+- **真实 e2e（glm-5.2）**：对笔记 #297（03-命令速查.md）触发 → 会话「新导入:03-命令速查.md」自动创建，摘要准确覆盖 uv run 规范/测试流程/Git 规范（测试会话已删）
+
+### 已知限制
+- dedupe 命中的旧笔记不补摘要（原导入早于本功能）
+- no_llm 导入不生成摘要（口径一致：无 LLM 全程无 LLM）
+
+---
+
+## 2026-10-30 03:25 · 线 Q-批10 · 阶段4 会话产出笔记 + 工具链 Tavily 兜底 · 执行者：ZCode（主人批准，D2=B / D4=Tavily）
+
+### 产物
+- `app/api/qa.py`：`POST /api/qa/sessions/{id}/save-note`——LLM 把会话整理成结构化 Markdown → 落 `notes_out/` → **no_llm 入队**（G0/G1/切块/向量化照常，跳过 G2——D2=B 直接入库）；CitationOut 加 url/note_id 可空（联网出处）
+- `app/service/qa/websearch.py`：Tavily 搜索（免费档 1000 次/月）
+- `app/api/qa.py` chat/chat-stream：**库内未命中 + 配了 Tavily → 自动搜网**，回答带 [W n] 来源标注（citations.url 外链）；未配 key 或搜索失败 → 维持「没找到」口径
+- `app/api/settings.py`：tavily_api_key 只写不读（tavily_set/tavily_tail）
+- 前端：存为笔记按钮（chat 工具栏）、citations 渲染内链/外链双形态、设置页 Tavily 字段
+
+### 自测
+- `pytest tests/service/qa tests/api -q` → **68 passed**（新增 web 兜底/save-note/导出等 7 例）；ruff 全清；build 808ms
+- **真实 e2e（glm-5.2）**：阶段4 对会话 #179 save-note → `notes_out/2026-10-30-新导入-03-命令速查.md.md`（1114 字，结构化准确）+ no_llm 入队成功
+
+### 已知限制
+- 联网兜底仅库内零命中触发；命中但内容不相关时不搜（需相关性判断，后续可做）
+- 代码块 `arr[1]` 会被出处过滤误认为引用（可接受）
+- save-note 的入库走队列异步完成,前端不跟踪其进度
+
+---
+
+## 2026-10-30 02:50 · 线 Q-批8 · 模型配置 API（设置页后端，热生效）· 执行者：ZCode（主人批准）
