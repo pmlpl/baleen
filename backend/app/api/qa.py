@@ -25,8 +25,9 @@ from app.api.deps import SessionDep
 from app.api.library import OWNER_ID, RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import QaRepo
-from app.service.llm import LLMClient
+from app.service.llm import LLMClient, LLMError
 from app.service.qa.answerer import ContextHit, QaResult, answer, build_qa_messages
+from app.service.qa.rewriter import rewrite_question
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
 
@@ -78,6 +79,7 @@ class ChatResponse(BaseModel):
     session_title: str
     user_message: MessageOut
     assistant_message: MessageOut
+    search_query: str  # 实际用于检索的词(追问会先经 LLM 改写,与原话可能不同)
     took_ms: int
 
 
@@ -141,8 +143,9 @@ async def chat(
         if qa_session is None:
             raise HTTPException(status_code=404, detail=f"会话不存在:{payload.session_id}")
 
-    # 2) 历史(在插入新消息之前读,天然不含本条;user 消息按 llm_content 原样重放
-    #    —— 会话内 prompt 前缀逐轮对齐,上游前缀缓存才能命中)
+    # 2) 历史两版(在插入新消息之前读,天然不含本条):
+    #    llm_content 重放版给 answer(会话内前缀对齐 → 缓存命中);
+    #    content 可读版给改写器(它只需要「聊了什么」,不带旧检索片段)。
     prior = await repo.list_messages(qa_session.id)
     history = [
         {
@@ -151,9 +154,20 @@ async def chat(
         }
         for m in prior
     ]
+    history_chat = [{"role": m.role, "content": m.content} for m in prior]
 
-    # 3) 检索 top-k + 组装本轮 LLM 消息(拿到含 <context> 的原文,存 llm_content 供下轮重放)
-    result = await retrieve(payload.question, top_k=payload.top_k, owner_id=OWNER_ID)
+    # 3) 检索词:追问先经 LLM 改写成独立完整的问题(best-effort,改写失败回退原问题)
+    search_query = payload.question
+    if history:
+        try:
+            search_query = await asyncio.to_thread(
+                rewrite_question, payload.question, history_chat, client=llm
+            )
+        except LLMError:
+            search_query = payload.question
+
+    # 4) 检索 top-k + 组装本轮 LLM 消息(拿到含 <context> 的原文,存 llm_content 供下轮重放)
+    result = await retrieve(search_query, top_k=payload.top_k, owner_id=OWNER_ID)
     hits = [
         ContextHit(
             note_id=h.note_id,
@@ -196,6 +210,7 @@ async def chat(
         session_title=qa_session.title,
         user_message=_message_out(user_msg),
         assistant_message=_message_out(assistant_msg),
+        search_query=search_query,
         took_ms=took_ms,
     )
 

@@ -1,8 +1,12 @@
-"""问答 API 测试(阶段2:会话/消息)。
+"""问答 API 测试(阶段2/2.5:会话/消息/问题改写)。
 
 TestClient + env 夹具(外层事务 + savepoint 事务隔离,需 PostgreSQL,不可用自动 skip)
-+ 假检索 + 假 LLM(FakeTransport),不联网。qa 现在落库(qa_sessions/qa_messages),
-建会话→提问→落库→重开→删除全链路都在事务里,结束回滚不污染开发库。
++ 假检索 + 假 LLM(FakeTransport),不联网。
+
+假 LLM 的响应走 ``state.responses`` 队列,按调用顺序消费:
+- 首轮(无历史):1 次调用 = 回答,不改写
+- 追问(有历史):2 次调用 = 先改写后回答
+fake_retrieve 记录每次检索词,供断言「改写后的 query 真的用于检索」。
 """
 
 from __future__ import annotations
@@ -20,8 +24,10 @@ from app.service.llm import LLMClient
 
 
 class FakeTransport:
+    """持共享响应队列的引用(测试可在轮次间追加);按调用顺序弹出。"""
+
     def __init__(self, responses: list[tuple]) -> None:
-        self._responses = list(responses)
+        self._responses = responses
         self.calls: list[dict] = []
 
     def request(self, method, url, headers, body, timeout):
@@ -63,33 +69,20 @@ def _hit(note_id: int, title: str, hp: str, child: str) -> SimpleNamespace:
 
 @pytest.fixture
 def qa_setup(env: SimpleNamespace) -> SimpleNamespace:
-    """env(TestClient + 事务隔离)+ 可控假检索 / 假 LLM(带调用记录)。"""
+    """env(TestClient + 事务隔离)+ 可控假检索(记录检索词)/ 假 LLM(响应队列)。"""
     state = SimpleNamespace(
         hits=[_hit(10, "闭包笔记", "一、闭包", "闭包是函数+捕获的外层变量。")],
-        llm_content="闭包是函数+捕获的外层变量。[1]",
-        llm_total=20,
-        llm_cache_hit=30,
-        llm_cache_miss=10,
+        responses=[],  # (status, body) 队列;测试按「改写→回答」顺序填入
+        queries=[],  # fake_retrieve 收到的检索词
         transports=[],
     )
 
     async def fake_retrieve(query: str, *, top_k: int = 5, owner_id: int = 1, **_kw: Any):
+        state.queries.append(query)
         return SimpleNamespace(query=query, hits=list(state.hits))
 
     def fake_llm() -> LLMClient:
-        transport = FakeTransport(
-            [
-                (
-                    200,
-                    _chat(
-                        state.llm_content,
-                        total=state.llm_total,
-                        cache_hit=state.llm_cache_hit,
-                        cache_miss=state.llm_cache_miss,
-                    ),
-                )
-            ]
-        )
+        transport = FakeTransport(state.responses)
         state.transports.append(transport)
         return LLMClient(
             base_url="https://api.example.test/v1",
@@ -113,16 +106,20 @@ def test_chat_creates_session_and_persists(
 ) -> None:
     # 库里可能有主人真实的历史会话(浏览器测试留下的),断言只用「前后差值」,不假设空库
     before = env.client.get("/api/qa/sessions").json()["total"]
+    qa_setup.responses.append(
+        (200, _chat("闭包是函数+捕获的外层变量。[1]", total=42, cache_hit=30, cache_miss=10))
+    )
     resp = env.client.post("/api/qa/chat", json={"question": "闭包是什么"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     session_id = body["session_id"]
     assert body["session_title"] == "闭包是什么"
-    assert body["user_message"]["role"] == "user"
+    assert body["search_query"] == "闭包是什么"  # 首轮不改写
     assert body["user_message"]["cache_hit_rate"] is None  # user 消息没有缓存数据
-    assert body["assistant_message"]["content"].startswith("闭包是函数")
     assert body["assistant_message"]["cache_hit_rate"] == 0.75  # 30/(30+10)
     assert body["assistant_message"]["citations"][0]["note_id"] == 10
+    # 首轮只调 1 次 LLM(回答),没有改写调用
+    assert len(qa_setup.transports[-1].calls) == 1
 
     # 落库:侧栏列表 + 重开详情
     listing = env.client.get("/api/qa/sessions").json()
@@ -133,30 +130,56 @@ def test_chat_creates_session_and_persists(
     assert detail["messages"][0]["content"] == "闭包是什么"
 
 
-def test_chat_second_turn_sends_history(
+def test_chat_followup_retrieves_rewritten_query_and_replays_history(
     env: SimpleNamespace, qa_setup: SimpleNamespace
 ) -> None:
-    first = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()
+    qa_setup.responses.append(
+        (200, _chat("Promise 是异步操作的结果对象,手写要点如下。[1]"))
+    )
+    first = env.client.post("/api/qa/chat", json={"question": "什么是 Promise，怎么手写"}).json()
     sid = first["session_id"]
-    qa_setup.llm_content = "三个条件:嵌套/引用/暴露。[1]"
 
+    # 追问:先改写(「它」→「手写实现的 Promise」)再用改写词检索,最后回答
+    qa_setup.responses.append((200, _chat("手写实现的 Promise 有哪几种状态")))
+    qa_setup.responses.append(
+        (200, _chat("手写实现的 Promise 有三种状态:PENDING/FULFILLED/REJECTED。[1]", total=42))
+    )
     second = env.client.post(
-        "/api/qa/chat", json={"session_id": sid, "question": "那它的三个条件"}
+        "/api/qa/chat", json={"session_id": sid, "question": "它有哪几种状态"}
     )
     assert second.status_code == 200, second.text
     body2 = second.json()
-    assert body2["session_id"] == sid
-    assert body2["assistant_message"]["content"].startswith("三个条件")
+    assert body2["search_query"] == "手写实现的 Promise 有哪几种状态"
+    # 改写后的 query 真的用于检索(而不是原话「它有哪几种状态」)
+    assert qa_setup.queries[-1] == "手写实现的 Promise 有哪几种状态"
 
-    # LLM 收到的 messages = system + 历史 2 条 + 当前 1 条
-    req = json.loads(qa_setup.transports[-1].calls[0]["body"])
-    msgs = req["messages"]
+    # 回答那次 LLM 调用:system + 历史 2 条(llm_content 原样重放) + 当前 1 条
+    answer_call = qa_setup.transports[-1].calls[-1]
+    msgs = json.loads(answer_call["body"])["messages"]
     assert msgs[0]["role"] == "system"
     assert len(msgs) == 4
-    # 历史 user 消息按 llm_content 原样重放(含 <context>) —— 前缀对齐才能命中缓存
-    assert msgs[1]["content"].startswith("<context>")
-    assert any("闭包是什么" in m["content"] for m in msgs[1:3])
-    assert any("闭包是函数" in m["content"] for m in msgs[1:3])
+    assert msgs[1]["content"].startswith("<context>")  # llm_content 原样重放 → 前缀对齐
+    assert "它有哪几种状态" in msgs[-1]["content"]
+
+
+def test_chat_rewrite_failure_falls_back_to_original(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    qa_setup.responses.append((200, _chat("Promise 是异步操作的结果对象。[1]")))
+    first = env.client.post("/api/qa/chat", json={"question": "什么是 Promise"}).json()
+    sid = first["session_id"]
+
+    # 改写调用 401(LLMAuthError 立即抛,handler 兜底) → 回答成功
+    qa_setup.responses.append((401, b'{"error":{"message":"unauthorized"}}'))
+    qa_setup.responses.append((200, _chat("基于历史的回答。[1]", total=30)))
+    second = env.client.post(
+        "/api/qa/chat", json={"session_id": sid, "question": "它有哪几种状态"}
+    )
+    assert second.status_code == 200, second.text
+    body2 = second.json()
+    assert body2["search_query"] == "它有哪几种状态"  # 回退原问题
+    assert qa_setup.queries[-1] == "它有哪几种状态"
+    assert body2["assistant_message"]["content"].startswith("基于历史")
 
 
 def test_chat_unknown_session_404(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
@@ -166,6 +189,7 @@ def test_chat_unknown_session_404(env: SimpleNamespace, qa_setup: SimpleNamespac
 
 def test_delete_session(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
     before = env.client.get("/api/qa/sessions").json()["total"]
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
     first = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()
     sid = first["session_id"]
     resp = env.client.delete(f"/api/qa/sessions/{sid}")
@@ -186,9 +210,8 @@ def test_export_session_writes_file_and_returns_markdown(
     tmp_path: Any,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.api import qa as qa_module
-
     monkeypatch.setattr(qa_module, "EXPORT_DIR", tmp_path / "exports")
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
     first = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()
     sid = first["session_id"]
 

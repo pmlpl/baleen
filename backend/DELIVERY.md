@@ -72,6 +72,30 @@ cd backend && uv run pytest -q     →  139 passed
 
 ---
 
+## 2026-10-30 02:14 · 线 Q-批6 · 阶段2.5 问题改写（追问检索脱靶根因修复）· 执行者：ZCode（主人批准）
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `app/service/qa/rewriter.py` | `rewrite_question`（condense question）：LLM + 对话历史把追问改写成独立检索问题（「它有哪几种状态」→「Promise 有哪几种状态」）；**best-effort**——LLM 异常向上抛由 handler 兜底回退原问题（与 answer 的「向上抛不降级」口径不同，改写是锦上添花）；防注入同款；无历史不调 LLM |
+| 改 | `app/api/qa.py` | chat 接入：历史两版（llm_content 重放版给 answer / content 可读版给改写器）→ 有历史先改写（失败回退）→ `retrieve(search_query)` → answer 仍用原问题+llm 重放历史；ChatResponse 加 `search_query`（实际检索词透出） |
+| 测试 | `tests/service/qa/test_rewriter.py`、`tests/api/test_qa.py` | rewriter 6 例；API 重构为响应队列夹具，新增改写命中/失败回退/首轮不改写 3 例 |
+
+### 自测
+- `pytest tests/service/qa tests/api -q` → **58 passed**；ruff 全清；`pnpm build` 682ms
+- **真实 e2e（glm-5.2，复现主人当时失败的场景）**：T1「什么是 Promise，怎么手写」→ T2「它有哪几种状态」→ 改写检索词 =「Promise 有哪几种状态」→ 正确答出三状态带引用（当时是「没找到」）；**T2 缓存命中率 46.3%**（llm_content 重放生效）；测试会话已删
+
+### 已知限制
+- 每轮追问多 1 次 LLM 调用（glm-5.2 约 2-6s；改写 prompt 的历史前缀逐轮相同 → 缓存摊薄成本）
+- `search_query` 不落库：重开历史会话不回放检索词（要落库需加列，价值低）
+- 改写质量依赖模型；极端改写错误由「回退原问题」兜底
+
+### 需要确认的问题
+- （无）
+
+---
+
 ## 2026-10-30 01:49 · 线 Q-批5 · 缓存命中率真落地（llm_content 重放 + 切 glm-5.2）· 执行者：ZCode（主人指令）
 
 主人指令「解决缓存不显示」。三步走全通：
