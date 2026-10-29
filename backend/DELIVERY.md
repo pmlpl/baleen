@@ -71,6 +71,49 @@ cd backend && uv run pytest -q     →  139 passed
   chat 不可用**（待额度恢复后验证）。正常调用 `max_tokens=800` 实测 **3.4 秒/次**，JSON 正常。
 
 ---
+
+## 2026-10-29 23:07 · 线 Q-批1 · 问答 API（检索 → LLM 答 + 出处）· 执行者：ZCode（主人批准）
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `app/service/qa/__init__.py`、`app/service/qa/answerer.py` | `build_qa_messages`（命中片段编号塞 `<context>`、按 token 预算截断、防注入声明）+ `answer`（**命中为空短路不调 LLM**；同步，调用方 `asyncio.to_thread`） |
+| 新增 | `app/api/qa.py` | `POST /api/qa`：`RetrieveDep`（复用线 M 的延迟导入模式，启动不拉 torch）→ `asyncio.to_thread(answer)` → `{question, answer, citations[n/note_id/note_title/heading_path/snippet], took_ms, cost_tokens, model}` |
+| 改 | `app/main.py` | 注册 qa router（+2 行） |
+| 新增 | `tests/service/qa/test_answerer.py`、`tests/api/test_qa.py` | FakeTransport **不联网**；answerer 6 例 + API 3 例 |
+
+**没碰的**：冻结区（`chunk/`/`embed/`/`parse/`/`imports/`/`repo/`）、`g2.py`（阶段0 验活结论：DeepSeek 下无需改动）。
+
+### 自测
+
+- `uv run pytest tests/service/qa tests/api/test_qa.py -q` → **9 passed**
+- `uv run pytest tests/api -q` → **34 passed**（qa router 加入后无回归）
+- `uv run ruff check`（新文件 + main.py）→ 全清
+- **真实端到端（TestClient，不起服务器）**：问「闭包是什么」→ 200，答案带 `[2]`/`[3]` 内联引用 + 代码块 + 三条形成条件，5 条出处全指向笔记 #156 的具体小节，took 4.6s / 2169 tokens / deepseek-flash
+- 临时资源自查（HANDOFF §3.1）：全程 TestClient，未起 uvicorn，端口/进程清零
+
+### 顺带：阶段0 —— G2 在 DeepSeek 上验活
+
+主人把 `.env` 换成 DeepSeek 云（`https://api.deepseek.com/v1` / `deepseek-flash`）后：
+`scripts/g2_smoke.py --samples ../eval/samples/_inbox --live --limit 1` →
+**verdict=accept / quality=normal / action=index / score=4，cost 3793 tok，3.4s，降级 0**；`probe()` 报 `json_mode=True`。
+**结论：reasoning 模型下 G2 无需改动**（`max_tokens=800` 够出 JSON）。
+⚠️ `deepseek-flash` 是推理模型，reasoning 先吃 completion token；G2 的 800 够用，**问答侧已把 `max_tokens` 提到 3000**。
+
+### 已知限制
+
+- **非流式**：整个答案一次返回（前后端都无 SSE 基建，流式是后续优化）。
+- **无状态**：不记问答历史（多轮会话是路线图阶段2，需新表 + Alembic migration）。
+- LLM 异常**向上抛**（与 G2 同口径）：endpoint 挂了 → HTTP 500，前端 `describeApiError` 翻译成可读文案。
+- 答案里的 `[n]` 是 LLM 写的，citations 是检索命中全量（不做 `[n]`↔citation 严格对齐校验）。
+
+### 需要确认的问题
+
+- （无）
+
+---
+
 ## 2026-10-29 · 线 M · 后端查询 API · 执行者：DSH-后端
 
 > 开工前按 §0.2 读完全部交接材料（`AGENTS.md` 全文 / `HANDOFF.md` §0·§0.1·§0.2·§3·§3.1·§3.2 /
