@@ -13,12 +13,14 @@ LLM 异常向上抛(与 G2 同口径)。一条提问 = 建/找会话 + 存两条
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import SessionDep
@@ -26,7 +28,14 @@ from app.api.library import OWNER_ID, RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import QaRepo
 from app.service.llm import LLMClient, LLMError
-from app.service.qa.answerer import ContextHit, QaResult, answer, build_qa_messages
+from app.service.qa.answerer import (
+    _EMPTY_ANSWER,
+    ContextHit,
+    QaResult,
+    answer,
+    build_citations,
+    build_qa_messages,
+)
 from app.service.qa.rewriter import rewrite_question
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
@@ -212,6 +221,131 @@ async def chat(
         assistant_message=_message_out(assistant_msg),
         search_query=search_query,
         took_ms=took_ms,
+    )
+
+
+def _sse(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+@router.post("/chat/stream")
+async def chat_stream_endpoint(
+    payload: ChatRequest, retrieve: RetrieveDep, llm: LLMClientDep, session: SessionDep
+) -> StreamingResponse:
+    """流式问答:SSE 事件流 meta → delta* → done(error 兜底)。
+
+    改写与检索在流开始**之前**完成(客户端等待期间显示「思考中」);
+    轮次开始即 commit 用户消息(回答失败它也不丢),回答完成再 commit 助手消息。
+    """
+    started = time.perf_counter()
+    repo = QaRepo(session, OWNER_ID)
+
+    if payload.session_id is None:
+        qa_session = await repo.create_session(payload.question[:TITLE_CHARS])
+    else:
+        qa_session = await repo.get_session(payload.session_id)
+        if qa_session is None:
+            raise HTTPException(status_code=404, detail=f"会话不存在:{payload.session_id}")
+
+    prior = await repo.list_messages(qa_session.id)
+    history = [
+        {
+            "role": m.role,
+            "content": (m.llm_content or m.content) if m.role == "user" else m.content,
+        }
+        for m in prior
+    ]
+    history_chat = [{"role": m.role, "content": m.content} for m in prior]
+
+    search_query = payload.question
+    if history:
+        try:
+            search_query = await asyncio.to_thread(
+                rewrite_question, payload.question, history_chat, client=llm
+            )
+        except LLMError:
+            search_query = payload.question
+
+    result = await retrieve(search_query, top_k=payload.top_k, owner_id=OWNER_ID)
+    hits = [
+        ContextHit(
+            note_id=h.note_id,
+            note_title=h.note_title,
+            heading_path=h.heading_path,
+            parent_text=h.parent_text,
+            child_text=h.child_text,
+        )
+        for h in result.hits
+    ]
+    messages, _build_meta = build_qa_messages(payload.question, hits, history=history)
+    llm_user_text = messages[-1]["content"]
+    user_msg = await repo.add_message(
+        qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
+    )
+    await session.commit()  # 轮次开始落库;回答完成后再 commit 助手消息
+    user_out = _message_out(user_msg)
+
+    async def gen():
+        accumulated: list[str] = []
+        usage_event: dict | None = None
+        try:
+            yield _sse(
+                "meta",
+                {
+                    "session_id": qa_session.id,
+                    "session_title": qa_session.title,
+                    "search_query": search_query,
+                    "user_message": user_out.model_dump(),
+                },
+            )
+            iterator = llm.chat_stream(messages, max_tokens=3000)
+            try:
+                while True:
+                    # 同步生成器逐段推进放线程里,不阻塞事件循环
+                    event = await asyncio.to_thread(next, iterator, None)
+                    if event is None:
+                        break
+                    if event["type"] == "usage":
+                        usage_event = event
+                    elif event["type"] == "content":
+                        accumulated.append(event["text"])
+                        yield _sse("delta", {"text": event["text"]})
+                    # reasoning 增量暂不转发(前端「思考中…」持续到正文开始)
+            finally:
+                close = getattr(iterator, "close", None)
+                if close is not None:
+                    close()
+
+            answer_text = "".join(accumulated).strip() or _EMPTY_ANSWER
+            citations = build_citations(hits, answer_text)
+            usage = usage_event or {}
+            assistant_msg = await repo.add_message(
+                qa_session.id,
+                role="assistant",
+                content=answer_text,
+                citations=[c.model_dump() for c in citations],
+                model=llm.model,
+                cost_tokens=usage.get("total_tokens") or 0,
+                cache_hit_tokens=usage.get("prompt_cache_hit_tokens") or 0,
+                cache_miss_tokens=usage.get("prompt_cache_miss_tokens") or 0,
+            )
+            await session.commit()
+            yield _sse(
+                "done",
+                {
+                    "assistant_message": _message_out(assistant_msg).model_dump(),
+                    "took_ms": int(round((time.perf_counter() - started) * 1000)),
+                },
+            )
+        except LLMError as exc:
+            yield _sse("error", {"detail": str(exc)})
+        except Exception:
+            yield _sse("error", {"detail": "流式回答中断,请重试"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

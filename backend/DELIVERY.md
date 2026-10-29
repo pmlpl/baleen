@@ -96,6 +96,26 @@ cd backend && uv run pytest -q     →  139 passed
 
 ---
 
+## 2026-10-30 02:30 · 线 Q-批7 · SSE 流式问答（打字机效果）· 执行者：ZCode（主人批准）
+
+### 产物
+
+- `app/service/llm/client.py`：Transport 加 `request_stream`（Urllib 流式实现）；`LLMClient.chat_stream` 同步生成器——SSE 逐行解析，reasoning/content/usage 三类事件分流，缓存双格式归一复用 `_cache_fields`；流式不重试（中途无法续传），打开失败即抛
+- `app/api/qa.py`：`POST /api/qa/chat/stream`——改写与检索在流开始前完成；轮次开始即 commit 用户消息，流结束 commit 助手消息（含出处/缓存）；事件流 meta → delta* → done，LLMError 以 error 事件透出
+- 无状态 POST /api/qa/chat 保留（非流式兜底）
+
+### 自测
+
+- `pytest tests/service/qa tests/api/test_qa.py -q` → **28 passed**（新增 SSE 端点用例：meta/delta/done 帧序、OpenAI 风格 cached_tokens 归一 0.6、流后落库断言）；ruff 全清
+- **真实流式 e2e（glm-5.2）**：**126 个 delta 帧**、拼接 2096 字、done 缓存命中率 **82.9%** + 2 条出处、落库 [user, assistant]；测试会话已删
+
+### 已知限制
+
+- reasoning（思考过程）增量暂不转发——思考期间前端显示「思考中…」，正文开始后打字机
+- 客户端中途断开：用户消息已落库、无助手消息（语义可接受）
+
+---
+
 ## 2026-10-30 01:49 · 线 Q-批5 · 缓存命中率真落地（llm_content 重放 + 切 glm-5.2）· 执行者：ZCode（主人指令）
 
 主人指令「解决缓存不显示」。三步走全通：

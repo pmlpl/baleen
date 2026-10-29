@@ -176,6 +176,22 @@ def build_qa_messages(
     return messages, meta
 
 
+def build_citations(hits: list[ContextHit], answer_text: str) -> list[QaCitation]:
+    """只保留答案里真正引用的 [n]:问候/闲聊没有 [n] → 不挂出处;幻觉编号(超命中数)剔除。"""
+    referenced = {int(m) for m in re.findall(r"\[(\d{1,2})\]", answer_text)}
+    return [
+        QaCitation(
+            n=i,
+            note_id=h.note_id,
+            note_title=h.note_title,
+            heading_path=h.heading_path,
+            snippet=h.child_text[:SNIPPET_CHARS],
+        )
+        for i, h in enumerate(hits, start=1)
+        if i in referenced
+    ]
+
+
 def answer(
     question: str,
     hits: list[ContextHit],
@@ -200,20 +216,7 @@ def answer(
     elapsed = (time.perf_counter() - started) * 1000
 
     answer_text = chat.content.strip() or _EMPTY_ANSWER
-    # 只保留答案里真正引用的 [n]:问候/闲聊没有 [n] → 不挂出处(别把不相干命中硬塞给用户);
-    # 编号以本次检索命中为准,越界的幻觉编号剔除。
-    referenced = {int(m) for m in re.findall(r"\[(\d{1,2})\]", answer_text)}
-    citations = [
-        QaCitation(
-            n=i,
-            note_id=h.note_id,
-            note_title=h.note_title,
-            heading_path=h.heading_path,
-            snippet=h.child_text[:SNIPPET_CHARS],
-        )
-        for i, h in enumerate(hits, start=1)
-        if i in referenced
-    ]
+    citations = build_citations(hits, answer_text)
     return QaResult(
         question=question,
         answer=answer_text,

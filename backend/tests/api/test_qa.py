@@ -1,11 +1,12 @@
-"""问答 API 测试(阶段2/2.5:会话/消息/问题改写)。
+"""问答 API 测试(阶段2/2.5/流式:会话/消息/问题改写/SSE)。
 
 TestClient + env 夹具(外层事务 + savepoint 事务隔离,需 PostgreSQL,不可用自动 skip)
-+ 假检索 + 假 LLM(FakeTransport),不联网。
++ 假检索 + 假 LLM(FakeTransport,不联网)。
 
 假 LLM 的响应走 ``state.responses`` 队列,按调用顺序消费:
 - 首轮(无历史):1 次调用 = 回答,不改写
 - 追问(有历史):2 次调用 = 先改写后回答
+流式端点用 ``state.stream_lines``(SSE 行列表)走 request_stream。
 fake_retrieve 记录每次检索词,供断言「改写后的 query 真的用于检索」。
 """
 
@@ -24,16 +25,21 @@ from app.service.llm import LLMClient
 
 
 class FakeTransport:
-    """持共享响应队列的引用(测试可在轮次间追加);按调用顺序弹出。"""
+    """非流式走 responses 队列;流式走 stream_lines(逐行 SSE)。"""
 
-    def __init__(self, responses: list[tuple]) -> None:
+    def __init__(self, responses: list[tuple], stream_lines: list[str]) -> None:
         self._responses = responses
+        self._stream_lines = stream_lines
         self.calls: list[dict] = []
 
     def request(self, method, url, headers, body, timeout):
         self.calls.append({"url": url, "body": body})
         status, raw = self._responses.pop(0)
         return status, {}, raw
+
+    def request_stream(self, method, url, headers, body, timeout):
+        self.calls.append({"url": url, "body": body, "stream": True})
+        return 200, {}, iter([(line + "\n").encode() for line in self._stream_lines])
 
 
 def _chat(
@@ -57,6 +63,56 @@ def _chat(
     ).encode()
 
 
+def _sse_lines(text_chunks: list[str], *, cache_hit: int, cache_miss: int) -> list[str]:
+    """构造上游流式响应的 SSE 行:正文增量若干 + usage 块 + [DONE]。"""
+    lines = []
+    for t in text_chunks:
+        lines.append(
+            "data: "
+            + json.dumps(
+                {"choices": [{"delta": {"content": t}}]}, ensure_ascii=False
+            )
+        )
+    lines.append(
+        "data: "
+        + json.dumps(
+            {
+                "choices": [],
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 40,
+                    "total_tokens": 140,
+                    "prompt_tokens_details": {"cached_tokens": cache_hit},
+                },
+            },
+            ensure_ascii=False,
+        )
+    )
+    lines.append("data: [DONE]")
+    return lines
+
+
+def _parse_sse(text: str) -> dict[str, Any]:
+    """把 SSE 响应文本解析成 {event: data};同 event 多帧时 delta 拼接正文。"""
+    events: dict[str, Any] = {"deltas": []}
+    for frame in text.split("\n\n"):
+        event, data = None, None
+        for line in frame.split("\n"):
+            if line.startswith("event: "):
+                event = line[7:].strip()
+            elif line.startswith("data: "):
+                data = line[6:]
+        if event is None or data is None:
+            continue
+        parsed = json.loads(data)
+        if event == "delta":
+            events["deltas"].append(parsed["text"])
+        else:
+            events[event] = parsed
+    events["delta_text"] = "".join(events["deltas"])
+    return events
+
+
 def _hit(note_id: int, title: str, hp: str, child: str) -> SimpleNamespace:
     return SimpleNamespace(
         note_id=note_id,
@@ -69,10 +125,11 @@ def _hit(note_id: int, title: str, hp: str, child: str) -> SimpleNamespace:
 
 @pytest.fixture
 def qa_setup(env: SimpleNamespace) -> SimpleNamespace:
-    """env(TestClient + 事务隔离)+ 可控假检索(记录检索词)/ 假 LLM(响应队列)。"""
+    """env(TestClient + 事务隔离)+ 可控假检索(记录检索词)/ 假 LLM(队列+流式)。"""
     state = SimpleNamespace(
         hits=[_hit(10, "闭包笔记", "一、闭包", "闭包是函数+捕获的外层变量。")],
-        responses=[],  # (status, body) 队列;测试按「改写→回答」顺序填入
+        responses=[],  # (status, body) 非流式队列;测试按「改写→回答」顺序填入
+        stream_lines=[],  # 流式端点的 SSE 行
         queries=[],  # fake_retrieve 收到的检索词
         transports=[],
     )
@@ -82,7 +139,7 @@ def qa_setup(env: SimpleNamespace) -> SimpleNamespace:
         return SimpleNamespace(query=query, hits=list(state.hits))
 
     def fake_llm() -> LLMClient:
-        transport = FakeTransport(state.responses)
+        transport = FakeTransport(state.responses, state.stream_lines)
         state.transports.append(transport)
         return LLMClient(
             base_url="https://api.example.test/v1",
@@ -180,6 +237,32 @@ def test_chat_rewrite_failure_falls_back_to_original(
     assert body2["search_query"] == "它有哪几种状态"  # 回退原问题
     assert qa_setup.queries[-1] == "它有哪几种状态"
     assert body2["assistant_message"]["content"].startswith("基于历史")
+
+
+def test_chat_stream_endpoint_metas_deltas_and_persists(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    qa_setup.stream_lines = _sse_lines(
+        ["手写实现的 ", "Promise 有三种状态。[1]"], cache_hit=60, cache_miss=40
+    )
+    resp = env.client.post("/api/qa/chat/stream", json={"question": "闭包是什么"})
+    assert resp.status_code == 200, resp.text
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    events = _parse_sse(resp.text)
+    assert events["meta"]["search_query"] == "闭包是什么"  # 首轮不改写
+    assert events["meta"]["user_message"]["content"] == "闭包是什么"
+    assert events["delta_text"] == "手写实现的 Promise 有三种状态。[1]"
+    # usage 块走 OpenAI 风格 cached_tokens → 归一后 60/(60+40)
+    assert events["done"]["assistant_message"]["cache_hit_rate"] == 0.6
+    assert events["done"]["assistant_message"]["content"] == "手写实现的 Promise 有三种状态。[1]"
+    assert events["done"]["assistant_message"]["citations"][0]["note_id"] == 10
+
+    # 落库:流结束后助手消息已 commit
+    sid = events["meta"]["session_id"]
+    detail = env.client.get(f"/api/qa/sessions/{sid}").json()
+    assert [m["role"] for m in detail["messages"]] == ["user", "assistant"]
+    assert detail["messages"][1]["content"] == "手写实现的 Promise 有三种状态。[1]"
 
 
 def test_chat_unknown_session_404(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:

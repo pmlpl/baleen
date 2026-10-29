@@ -15,8 +15,8 @@ import json
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
-from typing import Any, Protocol
+from collections.abc import Callable, Iterator
+from typing import Any, Protocol, cast
 from urllib.parse import urljoin
 
 from pydantic import BaseModel, Field
@@ -84,6 +84,18 @@ class UrllibTransport:
                 return resp.status, dict(resp.headers.items()), resp.read()
         except urllib.error.HTTPError as exc:  # 4xx/5xx 也是合法响应,由上层分类
             return exc.code, dict((exc.headers or {}).items()), exc.read()
+
+    def request_stream(
+        self, method: str, url: str, headers: dict[str, str], body: bytes | None, timeout: float
+    ) -> tuple[int, dict[str, str], Any]:
+        """流式请求:第三元素是**未读尽的响应对象**(可逐行迭代),调用方负责 close。"""
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            resp = urllib.request.urlopen(req, timeout=timeout)
+            return resp.status, dict(resp.headers.items()), resp
+        except urllib.error.HTTPError as exc:
+            # 流式的 HTTP 错误也在打开阶段暴露;exc 自身可 read,交上层分类
+            return exc.code, dict((exc.headers or {}).items()), exc
 
 
 class ChatResult(BaseModel):
@@ -172,6 +184,90 @@ class LLMClient:
         result = self._parse_chat(raw)
         result.latency_ms = round((time.perf_counter() - started) * 1000, 1)
         return result
+
+    # ---- 对外:流式 chat ----
+    def chat_stream(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.3,
+        max_tokens: int = DEFAULT_MAX_TOKENS,
+    ) -> Iterator[dict[str, Any]]:
+        """流式 chat:逐段 yield 事件字典,消费方按 ``type`` 分流。
+
+        - {"type": "reasoning", "text": ...} —— 推理模型的思考过程(不想展示可忽略)
+        - {"type": "content", "text": ...}   —— 正文增量
+        - {"type": "usage", ...}             —— 末尾计费/缓存块(上游未命中可能缺席)
+
+        流式不做重试(中途重试无法续传);打开失败(认证/限流/5xx)在首个 yield 前抛出。
+        同步生成器;async 调用方用 to_thread 逐段推进或自行包任务。
+        """
+        if not messages:
+            raise LLMError("messages 不能为空")
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stream": True,
+            "stream_options": {"include_usage": True},
+        }
+        url = urljoin(self.base_url, "chat/completions")
+        headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+        stream_fn = getattr(self._transport, "request_stream", None)
+        if stream_fn is None:  # 旧自定义 Transport 未实现流式
+            raise LLMError("当前 Transport 不支持流式(request_stream 缺失)")
+        status, _headers, resp = cast(Any, stream_fn("POST", url, headers, body, self.timeout))
+        if status in (401, 403):
+            raw = resp.read() if hasattr(resp, "read") else b""
+            raise LLMAuthError(
+                f"认证失败(HTTP {status}):请检查 LLM_API_KEY", status_code=status
+            )
+        if status == 429:
+            raise LLMRateLimitError("触发限流(HTTP 429)", status_code=status)
+        if not (200 <= status < 300):
+            raw = resp.read() if hasattr(resp, "read") else b""
+            raise LLMResponseError(f"服务端错误(HTTP {status}):{_short(raw)}", status_code=status)
+
+        try:
+            for raw_line in resp:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data: "):
+                    continue
+                data_str = line[len("data: "):]
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue  # 半行/心跳,忽略
+                usage = chunk.get("usage")
+                if usage:  # 末尾计费块(choices 为空)
+                    hit, miss = _cache_fields(usage)
+                    yield {
+                        "type": "usage",
+                        "prompt_tokens": usage.get("prompt_tokens"),
+                        "total_tokens": usage.get("total_tokens"),
+                        "prompt_cache_hit_tokens": hit,
+                        "prompt_cache_miss_tokens": miss,
+                    }
+                    continue
+                choices = chunk.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                reasoning = delta.get("reasoning_content")
+                if reasoning:
+                    yield {"type": "reasoning", "text": reasoning}
+                piece = delta.get("content")
+                if piece:
+                    yield {"type": "content", "text": piece}
+        finally:
+            close = getattr(resp, "close", None)
+            if close is not None:
+                close()
 
     # ---- 对外:能力探测 ----
     def probe(self) -> LLMCapabilities:
@@ -275,17 +371,7 @@ class LLMClient:
         if not isinstance(content, str):
             raise LLMResponseError("响应 choices[0].message.content 不是字符串")
         usage = data.get("usage") or {}
-        # 缓存字段兼容两种格式(网关上游两种都有):
-        # DeepSeek 风格:usage.prompt_cache_hit_tokens / prompt_cache_miss_tokens
-        # OpenAI 官方风格:usage.prompt_tokens_details.cached_tokens(未命中时上游可能整个不带)
-        hit = usage.get("prompt_cache_hit_tokens")
-        miss = usage.get("prompt_cache_miss_tokens")
-        if hit is None:
-            details = usage.get("prompt_tokens_details") or {}
-            hit = details.get("cached_tokens")
-            if hit is not None and miss is None:
-                prompt = usage.get("prompt_tokens")
-                miss = (prompt - hit) if isinstance(prompt, int) else None
+        hit, miss = _cache_fields(usage)
         return ChatResult(
             content=content,
             model=str(data.get("model") or self.model),
@@ -306,6 +392,22 @@ def _retry_after_seconds(headers: dict[str, str], attempt: int) -> float:
         except (TypeError, ValueError):
             pass  # HTTP-date 等非数字格式 → 退回固定退避
     return RATE_LIMIT_BACKOFF[min(attempt, len(RATE_LIMIT_BACKOFF) - 1)]
+
+
+def _cache_fields(usage: dict[str, Any]) -> tuple[int | None, int | None]:
+    """缓存字段双格式归一:DeepSeek prompt_cache_* / OpenAI prompt_tokens_details.cached_tokens。
+
+    上游未命中时可能整个不带字段 → (None, None)。
+    """
+    hit = usage.get("prompt_cache_hit_tokens")
+    miss = usage.get("prompt_cache_miss_tokens")
+    if hit is None:
+        details = usage.get("prompt_tokens_details") or {}
+        hit = details.get("cached_tokens")
+        if hit is not None and miss is None:
+            prompt = usage.get("prompt_tokens")
+            miss = (prompt - hit) if isinstance(prompt, int) else None
+    return hit, miss
 
 
 def _short(raw: bytes, limit: int = 200) -> str:
