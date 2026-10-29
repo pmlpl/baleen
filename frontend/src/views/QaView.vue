@@ -20,7 +20,9 @@ const router = useRouter()
 
 const sessions = ref<QaSessionItem[]>([])
 const currentSessionId = ref<number | null>(null)
-const messages = ref<QaMessage[]>([])
+/** 本地消息 = 后端消息 + 检索词(当轮响应才有,不落库 → 重开历史会话不回放) */
+type ChatMessage = QaMessage & { search_query?: string }
+const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const sending = ref(false)
 const loadingSession = ref(false)
@@ -122,7 +124,10 @@ async function send(): Promise<void> {
     const res = await sendQuestion(currentSessionId.value, text, TOP_K)
     const idx = messages.value.findIndex((m) => m.id === tempId)
     if (idx !== -1) messages.value.splice(idx, 1, res.user_message)
-    messages.value.push(res.assistant_message)
+    messages.value.push({
+      ...res.assistant_message,
+      search_query: res.search_query,
+    })
     currentSessionId.value = res.session_id
     scrollBottom()
     void refreshSessions()
@@ -201,6 +206,10 @@ function openNote(noteId: number): void {
               <p v-if="m.role === 'user'" class="user-text">{{ m.content }}</p>
               <!-- 渲染器内部已先 HTML 转义,输出只含自己拼的标签,不是原文直接插进 DOM -->
               <article v-else class="md answer-md" v-html="rendered[i]" />
+
+              <p v-if="m.search_query" class="search-hint muted">
+                检索词:{{ m.search_query }}
+              </p>
 
               <details
                 v-if="m.role === 'assistant' && m.citations.length > 0"
@@ -404,6 +413,11 @@ function openNote(noteId: number): void {
 
 .bubble--pending {
   color: var(--ink-3);
+}
+
+.search-hint {
+  margin: 12px 0 0;
+  font-size: 12.5px;
 }
 
 .cite-fold {

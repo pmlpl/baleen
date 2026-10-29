@@ -36,6 +36,8 @@ export interface ChatResponse {
   session_title: string
   user_message: QaMessage
   assistant_message: QaMessage
+  /** 实际用于检索的词(追问会先经 LLM 改写,与原话可能不同) */
+  search_query: string
   took_ms: number
 }
 
