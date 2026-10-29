@@ -3,6 +3,49 @@
 > 岗位制：每个交付块标题写明「执行者」，同一个岗位换人不换记录。
 > 历届担任：`Trae-评测`（线 C 全阶段 + `stratified-v2`）→ `DSH-评测`（线 N）。
 
+## 2026-10-29 15:48 · 线 N-追加 · heading 前缀 A/B · 执行者：ZCode（主人批准）
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `eval/scripts/prefix_ablation.py` | 三变体 A/B（V1 生产 / V2 text/table 补 §5 前缀 / V3 全量统一），纯内存、只读库、**不碰 `chunk/`** |
+| 新增 | `eval/prefix_ablation.md` | 报告：结论先行 + 三变体指标表 + 逐条名次 + 「R@5 掉 / MRR 升不是矛盾」的解释 + 局限 + 复现 |
+| 改 | `eval/scripts/ablation.py` | `ChildEntry` 加 `block_type` 字段 + `build_corpus` 填入（~2 行，**向后兼容**；既有 chunk 尺度消融数字不变） |
+| 改 | `eval/ablation.md` §9.1 | 末尾加一行指向 `prefix_ablation.md`（A/B 已做） |
+
+**没碰的**：`chunk/`（冻结区，零改动）、`backend/` 生产代码、`pipeline.py`、生产 embedding、`eval/samples/`、`labels.csv`。前缀注入在评测侧后处理 `child.text`。
+
+### 自测
+
+1. `uv run python ../eval/scripts/prefix_ablation.py` → exit=0，三变体出表。
+2. **回归断言通过**：V1 = identity 变换，R@5=100.0% / MRR=0.653，与 `ablation.md` §11 宽松版 300 档逐位一致 → 「未改 chunker」得证。
+3. 还原性断言：chunker 常量 = 300/250/400 ✓。
+4. 子块 block_type 分布（309）：text 103 / code 178 / table 28。
+5. 临时资源自查（HANDOFF §3.1）：不起服务器（纯内存检索 + 只读 `select`）；db/redis 是 `docker compose up -d` 起的常驻容器，非本次会话进程。
+
+### 结果（主表）
+
+| 变体 | R@5 | R@10 | MRR | ΔR@5 vs V1 |
+|---|---|---|---|---|
+| V1（生产） | 100.0% (18/18) | 100.0% | 0.653 | — |
+| V2（text/table 补前缀） | 88.9% (16/18) | 100.0% | 0.730 | **−11.1pt** |
+| V3（全量统一 §5） | 88.9% (16/18) | 100.0% | 0.660 | **−11.1pt** |
+
+**结论**：给 text/table 裸加 ADR §5 前缀 **R@5 反掉 2 条**（q06 3→7、q15 4→8）；MRR 升是「已命中的排更前」（q04/q10/q16 跳到第 1 名），不是「多找到」。**ADR §5「显著提升判别力」断言不成立，不改生产**。V3 不比 V2 好 → code 现有 `# {hp} ({lang})` 前缀别动。详见 `eval/prefix_ablation.md`。
+
+### 已知限制
+
+- n=18，2 条 = 11.1pt，小样本；但方向（R@5 不升反降）足以否决「裸加前缀」。
+- 只测纯向量路（生产是 trgm+RRF）；词法路可能救回 q06/q15——留作后续变体。
+- 若以后想推进：试 query 侧加同构前缀对冲非对称副作用、或只给 table 加、或在混合检索下复测。
+
+### 需要确认的问题
+
+- （无）
+
+---
+
 ## 2026-10-29 03:54 · 线 N-追加 · 人工复核落地 + q04 修订 + 消融重算 · 执行者：ZCode（主人批准）
 
 ### 产物

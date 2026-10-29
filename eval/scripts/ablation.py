@@ -86,6 +86,9 @@ class ChildEntry:
     tokens: int
     # 所在小节(父块)的字符数:块长统计要按 ADR §6 口径把「小到装不下一个字块的小节」摘出去
     section_chars: int
+    # 子块类型(code/text/table/...),来自 chunk.meta;前缀 A/B(eval/scripts/prefix_ablation.py)用。
+    # 默认空串,向后兼容:既有 chunk 尺度消融不读它,数字不变。
+    block_type: str = ""
 
 
 @dataclass
@@ -182,6 +185,7 @@ def build_corpus(notes: list[dict], tier: Tier) -> Corpus:
                             chars=_norm_chars(child.text),
                             tokens=child.token_count,
                             section_chars=sec_chars,
+                            block_type=child.meta.get("block_type") or "",
                         )
                     )
     return corpus
