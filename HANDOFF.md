@@ -161,6 +161,7 @@ git status --short      # 谁在动，按上表认领
 | **M 查询 API** | DSH-后端 | ✅ 已验收（协调方独立复跑：139 passed / 32.89s、ruff 干净） | `app/api/library.py`(268) + `app/repo/library.py`(128) + `tests/api/`(532)；**139 passed**；`total` 真 `count(*)`、`chunk_count`/`note_id` 批量查无 N+1、ILIKE 通配符已转义；检索复用线 K 的 retriever，API 层只做契约映射 |
 | **L 前端三页** | DSH-前端 | ✅ 已验收（协调方复核：type-check exit 0、build 772ms、Playwright 13 张、pageerror 0） | `frontend/src/{api,stores,views}` + `styles.css` + `App.vue` + `DELIVERY.md`；**修掉 vite proxy rewrite 真 bug**（原配置让除 `/healthz` 外全部 404）；真联调：笔记库 11 条、检索 5 命中 183ms、点命中真跳详情 |
 | **N query 集 + 消融 + 槽位细化** | DSH-评测 | ✅ 已验收（协调方独立复跑 `make_split --dry-run`：**(槽位,判定) 18/18 覆盖、待改 0 条**） | `eval/queries/`(20 条) + `ablation.py` + `ablation.md` + `make_split.py`(v3) + `metrics.py` + `labels.csv`(仅 split 列 4 行)；三档消融 **R@5 88.9 / 94.4 / 88.9%**，结论「**没有证据支持改 300**」（差异仅 1 条 query）；槽位细化后 **误拒率 0% → 10%，旧的 0% 果然是虚的** |
+| **Q 问答+聊天+设置** | ZCode | ✅ 已验收（主人逐批） | 批1-8：单轮问答 → 聊天多轮（0003/0004 落库 + llm_content 重放缓存对齐，T2 命中率 48.4%）→ SSE 流式（126 delta 实测）→ 设置页热生效 → 问题改写（追问脱靶根因修复）→ 会话导出；全量 **171 passed** |
 
 **文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续；另有 **`docs/api.md` v2**（前后端唯一契约，枚举值以数据库 CHECK 为准）。
 
@@ -218,9 +219,10 @@ git status --short      # 谁在动，按上表认领
 | 2 | **线 L** | 前端三页（导入 / 笔记库 / 检索） | ✅ 已验收并提交 `f80df35` |
 | 3 | **线 N** | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) | ✅ 已验收并提交（见 `git log` 线 N 一条） |
 | 4 | — | **G2 live 复测** | ⏸ 阻塞：**2026-10-29 01:19 复测仍 HTTP 502**（上游 `insufficient_quota`） |
-| 5 | — | **问答生成**（检索 → 带出处回答） | ⏸ 依赖 LLM 额度；前端可复用现有 `POST /api/search` |
+| 5 | 线 Q | **问答生成** → 已实现并升级为聊天式多轮 + SSE 流式 + 设置页热生效 | ✅ 线 Q 批1-8（见 backend/DELIVERY 线 Q） |
 | 6 | — | **人工复核 20 条 query 的期望** —— 工具已经备好：**`eval/queries/复核单.md`**（每条 query 下面直接抄出「我认为答案在的那一节」的真实正文，只需判断答案在不在那儿；⭐ 标记的 6 条是重点） | ✅ **已完成（2026-10-29，主人逐条判定）**：15 对 / 2 勉强（q07、q09）/ 1 不对（q04）/ 负例维持 2；q04 经主人批准改问法（monkeypatch 前提与原文不符），指标已按复核后标签重算——**300 档 R@5 = 100%**（宽松 n=18 / 严格 n=16 一致），见 `eval/ablation.md` §11 |
 | 7 | — | 补 `notes.markdown` 生成 / 代码块超限 / heading 前缀 A/B（见 §1「真问题」1/5/6） | 未派，等人拍板 |
+| 8 | — | **工具链 + 阶段3/4**（联网搜索 / 写笔记 / 导入后主动总结 / 会话产出笔记） | 📋 **ADR 0005 提案已出（f051998），3 个决策点待主人拍板后动工** |
 
 **槽位细化的缺口（协调方 2026-10-29 实测）**：`(槽位, 判定)` 共 18 个组合，14 个已在 test 覆盖，
 缺 **(2,accept) (4,reject) (5,accept) (7,accept)** 四个 —— 最少挪 4 条，test 14→18（0.40→0.51）。

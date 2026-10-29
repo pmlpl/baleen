@@ -7,7 +7,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-10-29 · 线 M 交付后
+**最后更新**：2026-10-30 · 线 Q 批1-8 交付后
 
 ### 已完成模块
 
@@ -23,16 +23,18 @@
 | **arq worker + 上传 API** | `app/worker/`、`app/api/upload.py` | ✅ I-批2；新建 201 / dedupe 200 / 轮询可用 |
 | **混合检索 + RRF** | `app/repo/search.py`、`app/service/retrieve/` | ✅ 线 K；真实 query 双路命中，RRF 与公式吻合 |
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
-| **API 端点总览** | `app/main.py` | ✅ 7 个：`/healthz` · 上传 2 个 · 查询/检索 4 个 |
-| **前端** | `frontend/` | ❌ 未开始（线 L，接口已就绪） |
+| **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
+| **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效 |
+| **API 端点总览** | `app/main.py` | ✅ 15 个：`/healthz` · 上传 2 · 列表/详情/检索 4 · 问答/会话/导出 6 · 设置 2 |
+| **前端** | `frontend/` | ✅ 线 L 三页 + 线 Q 问答（流式）/设置页 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  139 passed
+cd backend && uv run pytest -q     →  171 passed
 ```
 
-基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → **139**（线 M）
+基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ **171**（线 Q 批1-8）
 
 **任何新任务都不许把这个数降下来。**
 
@@ -43,6 +45,8 @@ cd backend && uv run pytest -q     →  139 passed
 3. **embeddings.vec 是 HALFVEC(1024)** —— 换不同维度的模型必须**新建表**，不能改配置
 4. `.doc` / `.xlsx` / 纯图片**不支持**（ADR 0002 §2.1）；扫描件 → `no_text_expected`，**不做 OCR**
 5. **所有单测都用合成 fixture**，真实样本只在 `scripts/*_smoke.py` 里验 —— 真实数据曾抓出「27 测试全绿但 in_range 只剩 11.6%」
+6. **问答严格只用库内内容**（防瞎编，刻意选择）；追问检索脱靶已由问题改写缓解（线 Q 批6）；库外问题需联网搜索工具链（主人会话实测提出，设计待排）
+7. **设置页（热生效）暂只影响问答/改写链路** —— worker（导入 G2）仍走 .env，统一排下一步
 
 ### 累计的未决问题
 
@@ -69,6 +73,9 @@ cd backend && uv run pytest -q     →  139 passed
   ⚠️ `glm-5.2` 是**推理模型**：`max_tokens=8` 时 `content` 为空、`finish_reason=length`，
   思考进 `reasoning_content`。`probe()` 用的正是 `max_tokens=8`，**可能把推理模型误判成
   chat 不可用**（待额度恢复后验证）。正常调用 `max_tokens=800` 实测 **3.4 秒/次**，JSON 正常。
+- **2026-10-30 更新**：`LLM_MODEL=glm-5.2`（主人切换，现走设置页可热改）；**arq worker 必须单独启动**
+  （`uv run arq app.worker.WorkerSettings`，`start.bat` 已带）——没起 worker 导入永远「排队中」；
+  问答/改写走 SSE 流式（`POST /api/qa/chat/stream`），契约见 `docs/api.md` §5。
 
 ---
 

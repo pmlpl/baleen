@@ -1,4 +1,4 @@
-# API 契约 v1
+# API 契约 v3
 
 > **这份文件是前后端并行的唯一接口依据。** 前端按它写调用，后端按它实现，任何一方要改先找协调方。
 > 变更要改版本号并写进文末「变更记录」，不许悄悄改字段名。
@@ -33,6 +33,7 @@
 | `action` | `review_runs` | `index` · `extract_spans` · `topic_dialog` · `drop`（可空） |
 | `status` | `notes` | `active` · `archived` |
 | `lang` | `notes` | `zh` · `en` · `mixed`（可空） |
+| `role` | `qa_messages` | `user` · `assistant` |
 
 **说明**：
 - `parse_status = error` 是**解析失败**（不是 `failed`）；`pending_ocr` 表示等着走 OCR，前端画成「排队中」别画成错误。
@@ -245,14 +246,78 @@
 
 ---
 
-## 5. 明确不做（前端别要，后端别加）
+## 5. 问答与会话（**已实现 · 线 Q**）
+
+聊天式多轮问答：会话落库（`qa_sessions`/`qa_messages`），追问先经 LLM 改写检索词（best-effort，失败回退原话），回答基于库内检索片段 + 对话历史，**不编造库外内容**。出处只保留答案真正引用的 `[n]`。
+
+### `POST /api/qa/chat`（非流式）
+
+```json
+{ "session_id": 9, "question": "它有哪几种状态", "top_k": 5 }
+```
+
+- `session_id` 缺省/null = 自动建会话（title = 首问前 30 字）
+- 追问先经 LLM 改写检索词；`search_query` 透出实际使用的检索词
+- 原子落库 user/assistant 两条消息；user 消息另存 `llm_content`（含检索上下文，多轮前缀对齐用）
+
+```json
+{
+  "session_id": 9, "session_title": "闭包是什么",
+  "user_message": { "id": 1, "role": "user", "content": "…", "citations": [], "model": null, "cost_tokens": 0, "cache_hit_rate": null },
+  "assistant_message": { "id": 2, "role": "assistant", "content": "…[1]", "citations": [{ "n": 1, "note_id": 156, "note_title": "…", "heading_path": "…", "snippet": "…" }], "model": "glm-5.2", "cost_tokens": 2169, "cache_hit_rate": 0.4843 },
+  "search_query": "Promise 有哪几种状态", "took_ms": 7115
+}
+```
+
+### `POST /api/qa/chat/stream`（SSE 流式，同请求体）
+
+响应 `text/event-stream`，事件序：`meta` → `delta`* → `done`；LLM 失败 → `error`（用户消息已落库）。
+
+- `meta`：`{session_id, session_title, search_query, user_message}`
+- `delta`：`{text}`（正文增量；推理模型的思考过程不下发）
+- `done`：`{assistant_message, took_ms}`（完整消息含出处与 cache_hit_rate，已落库）
+
+### 会话管理
+
+| 端点 | 说明 |
+|---|---|
+| `GET /api/qa/sessions?limit=50` | 会话列表（最新在前），`{total, items:[{id,title,created_at}]}` |
+| `GET /api/qa/sessions/{id}` | 重开会话，`{id,title,created_at,messages:[Message]}` |
+| `DELETE /api/qa/sessions/{id}` | 删会话（消息 CASCADE），204 |
+| `GET /api/qa/sessions/{id}/export` | 导出 Markdown（浏览器下载；同时在 `tmp/qa_exports/` 落一份） |
+
+**`cache_hit_rate` 口径**：prompt 前缀缓存命中占比 = hit/(hit+miss)；上游未命中时不下发字段 → `null`（前端显示「—」）。字段双格式归一：DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`。
+
+---
+
+## 6. 设置（**已实现 · 线 Q**）
+
+模型与网关配置存 `app_settings` 单行（字段 NULL 回退 .env 对应项），LLM 调用前现读 → **保存后热生效**（无需重启）。api_key 只写不读。
+
+### `GET /api/settings`
+
+```json
+{ "llm_base_url": "http://…", "llm_model": "glm-5.2", "api_key_set": true, "api_key_tail": "abcd" }
+```
+
+### `PUT /api/settings`
+
+```json
+{ "llm_base_url": "…", "llm_model": "…", "llm_api_key": "…" }
+```
+
+- 三字段均可省略（= 保持不变）；`llm_api_key` 传空串 = 保持不变，传新值 = 覆盖
+- 已知边界：worker（导入 G2）暂仍读 .env，设置页当前只影响问答/改写链路
+
+---
+
+## 7. 明确不做（前端别要，后端别加）
 
 | 不做 | 原因 |
 |---|---|
 | 登录 / 注册 / token | 单用户，AGENTS §8 |
 | 站内编辑笔记（PUT/PATCH） | 真源是 block JSON，v2 再说 |
 | 删除 | 单用户演示不需要；误删演示事故风险 > 收益 |
-| 流式 SSE 回答 | 问答生成是下一批（需要 LLM 额度），先只做检索 |
 | 分页以外的复杂搜索（排序、过滤组合） | 20 个 query 的评测还没出来，先别过度设计 |
 
 ---
@@ -261,5 +326,6 @@
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-30 | v3 | 线 Q 交付后新增：**§5 问答与会话**（chat 非流式 / SSE 流式 / 会话管理 / Markdown 导出）、**§6 设置**（app_settings 热生效）；§0 补 `role` 枚举；原 §5「明确不做」顺延为 §7 并**移除「流式 SSE 回答」行**（已实现）。同日修复 `.gitignore` 的 `**/models/` 误伤 ORM 源码问题（backend/app/models 首次入库） |
 | 2026-10-29 | v1 | 首版：把已实现的 `/healthz`、`POST /api/sources`、`GET /api/sources/{id}` 固化，并定下待实现的 4 个查询接口，供线 L（前端）与线 M（后端）并行开发 |
 | 2026-10-29 | v2 | 线 M / 线 L 交付后按**真实返回**订正，补齐 §0 枚举表。**v1 凭记忆写的枚举有 6 处与数据库 CHECK 不符**：`verdict` 写 `pass`（实为 `accept/partial/reject/skip`）、`quality` 写 `high`（实为 `core/normal/reference/junk`）、`action` 写 `accept`（实为 `index/extract_spans/topic_dialog/drop`）、`parse_status` 写 `failed`（实为 `error`）且漏了 `pending_ocr`、`job.status` 写 `cancelled`（实为 `dead`）、`ext` 写成无点。另补：`markdown`/`lang` 实测为 `null`、`parse_status` 只在 `job.status=done` 时有意义、`took_ms` 冷启动语义、检索无相关性阈值的取舍。**教训：契约里的枚举必须从数据库 CHECK 抄，不能凭记忆编。** |
