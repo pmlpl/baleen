@@ -62,6 +62,9 @@ onBeforeUnmount(() => {
           <RouterLink class="nav-link" :to="{ name: 'search' }" active-class="nav-link--active">
             检索
           </RouterLink>
+          <RouterLink class="nav-link" :to="{ name: 'qa' }" active-class="nav-link--active">
+            问答
+          </RouterLink>
         </nav>
         <span class="health" :class="backendOk ? 'health--ok' : 'health--bad'">
           <i class="health-dot" />

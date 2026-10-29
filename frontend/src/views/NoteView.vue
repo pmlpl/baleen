@@ -13,6 +13,7 @@ import { RouterLink } from 'vue-router'
 import { describeApiError } from '../api/http'
 import { getNote } from '../api/notes'
 import type { NoteDetail } from '../api/notes'
+import { renderMarkdown } from '../utils/markdown'
 
 const props = defineProps<{ id: string }>()
 
@@ -20,113 +21,7 @@ const note = ref<NoteDetail | null>(null)
 const loading = ref(false)
 const errorText = ref('')
 
-function escapeHtml(raw: string): string {
-  return raw
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-function renderInline(raw: string): string {
-  return escapeHtml(raw)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*([^*]+)\*/g, '<em>$1</em>')
-}
-
-function renderMarkdown(markdown: string): string {
-  const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
-  const out: string[] = []
-  let listTag: 'ul' | 'ol' | null = null
-  let inCode = false
-  let codeLines: string[] = []
-  let paragraph: string[] = []
-
-  const flushParagraph = (): void => {
-    if (paragraph.length === 0) return
-    out.push(`<p>${renderInline(paragraph.join(' '))}</p>`)
-    paragraph = []
-  }
-
-  const closeList = (): void => {
-    if (listTag === null) return
-    out.push(`</${listTag}>`)
-    listTag = null
-  }
-
-  for (const line of lines) {
-    if (line.trimStart().startsWith('```')) {
-      if (inCode) {
-        out.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
-        codeLines = []
-        inCode = false
-      } else {
-        flushParagraph()
-        closeList()
-        inCode = true
-      }
-      continue
-    }
-
-    if (inCode) {
-      codeLines.push(line)
-      continue
-    }
-
-    if (line.trim() === '') {
-      flushParagraph()
-      closeList()
-      continue
-    }
-
-    const heading = /^(#{1,6})\s+(.*)$/.exec(line)
-    if (heading !== null) {
-      flushParagraph()
-      closeList()
-      const level = heading[1].length
-      out.push(`<h${level}>${renderInline(heading[2])}</h${level}>`)
-      continue
-    }
-
-    if (/^\s*([-*_])\1{2,}\s*$/.test(line)) {
-      flushParagraph()
-      closeList()
-      out.push('<hr />')
-      continue
-    }
-
-    const ordered = /^\s*\d+\.\s+(.*)$/.exec(line)
-    const bullet = /^\s*[-*+]\s+(.*)$/.exec(line)
-    const listItem = ordered ?? bullet
-    if (listItem !== null) {
-      flushParagraph()
-      const tag = ordered === null ? 'ul' : 'ol'
-      if (listTag !== tag) {
-        closeList()
-        out.push(`<${tag}>`)
-        listTag = tag
-      }
-      out.push(`<li>${renderInline(listItem[1])}</li>`)
-      continue
-    }
-
-    const quote = /^>\s?(.*)$/.exec(line)
-    if (quote !== null) {
-      flushParagraph()
-      closeList()
-      out.push(`<blockquote>${renderInline(quote[1])}</blockquote>`)
-      continue
-    }
-
-    paragraph.push(line.trim())
-  }
-
-  if (inCode) out.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
-  flushParagraph()
-  closeList()
-  return out.join('\n')
-}
+// markdown 渲染器抽到 ../utils/markdown.ts(NoteView 与 QaView 共用)
 
 const renderedMarkdown = computed(() => (note.value === null ? '' : renderMarkdown(note.value.markdown)))
 

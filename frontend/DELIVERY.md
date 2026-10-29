@@ -23,6 +23,37 @@
 
 ---
 
+## 2026-10-29 23:07 · 线 Q-批1 · 问答页（提问 → 答案 + 出处）· 执行者：ZCode（主人批准）
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `src/api/qa.ts` | `askQuestion(q, topK)` via `http.post('/qa')`，字段照后端 `QaResponse` |
+| 新增 | `src/views/QaView.vue` | 照 SearchView：问题输入 → loading → 答案（markdown 渲染）→ 出处列表（**可点跳笔记详情**）；本地 ref 无 store（SearchView 同惯例） |
+| 新增 | `src/utils/markdown.ts` | **从 NoteView 抽出的**手写 markdown 渲染器（无第三方依赖），NoteView 与 QaView 共用 |
+| 改 | `src/views/NoteView.vue` | 内联渲染器换成 import `utils/markdown`（纯移动，行为不变） |
+| 改 | `src/router/index.ts` | 加 `{ path: '/qa', name: 'qa' }`；注释「三页」→「四页」 |
+| 改 | `src/App.vue` | nav 加「问答」链接 |
+
+### 自测
+
+- `pnpm build`（= `vue-tsc --noEmit && vite build`）→ **type-check 通过，built in 938ms**（58 modules）
+- 后端 API 已用真实 DeepSeek 端到端验证（见 backend/DELIVERY 线 Q-批1）；点出处跳详情的 `router.push('/notes/{id}')` 与 SearchView 的 openNote 同一实现
+- 未起 dev server（HANDOFF §3.1）；`pnpm dev` 手动点一遍留给主人验收
+
+### 已知限制
+
+- **非流式**：loading → 整段答案（与后端同口径；SSE 流式是后续）。
+- 答案里的 `[n]` 是纯文本标记，不做成可点链接（出处列表已可点跳详情）。
+- 无问答历史（单问单答；多轮会话是路线图阶段2）。
+
+### 需要确认的问题
+
+- （无）
+
+---
+
 ## 2026-10-29 · 线 L · 三页界面 · 执行者：DSH-前端
 
 ### 产物
