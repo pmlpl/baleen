@@ -6,12 +6,15 @@
 import { BASE_URL, http } from './http'
 
 export interface QaCitation {
-  /** 出处编号,对应答案里的 [n] */
+  /** 出处编号,对应答案里的 [n](联网来源为 [W n]) */
   n: number
-  note_id: number
+  /** 库内笔记出处;联网来源为 null(用 url) */
+  note_id: number | null
   note_title: string
   heading_path: string | null
   snippet: string
+  /** 联网来源的网页链接;库内出处为 null */
+  url: string | null
 }
 
 export interface QaMessage {
@@ -38,7 +41,21 @@ export interface ChatResponse {
   assistant_message: QaMessage
   /** 实际用于检索的词(追问会先经 LLM 改写,与原话可能不同) */
   search_query: string
+  /** True = 库内没命中,回答基于联网搜索(citations 带 url) */
+  used_web: boolean
   took_ms: number
+}
+
+export interface SaveNoteResponse {
+  note_file: string
+  organized_chars: number
+  import_enqueued: boolean
+  import_job_id: string | null
+}
+
+/** POST /api/qa/sessions/{id}/save-note —— 会话整理成 Markdown:落 notes_out/ + no_llm 入库 */
+export function saveSessionNote(sessionId: number): Promise<SaveNoteResponse> {
+  return http.post<SaveNoteResponse>(`/qa/sessions/${sessionId}/save-note`, {})
 }
 
 export interface QaSessionItem {

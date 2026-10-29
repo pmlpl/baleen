@@ -10,7 +10,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { deleteSession, getSession, listSessions, streamChat } from '../api/qa'
+import { deleteSession, getSession, listSessions, saveSessionNote, streamChat } from '../api/qa'
 import type { QaMessage, QaSessionItem } from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
 
@@ -26,6 +26,8 @@ const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const sending = ref(false)
 const loadingSession = ref(false)
+const savingNote = ref(false)
+const savedNote = ref('')
 const errorText = ref('')
 
 const msgListEl = ref<HTMLElement | null>(null)
@@ -183,6 +185,30 @@ async function send(): Promise<void> {
 function openNote(noteId: number): void {
   void router.push(`/notes/${noteId}`)
 }
+
+/** 阶段4(D2=B):把当前会话整理成 Markdown 笔记,落 notes_out/ 并提交入库 */
+async function saveAsNote(): Promise<void> {
+  if (savingNote.value || currentSessionId.value === null) return
+  savingNote.value = true
+  savedNote.value = ''
+  try {
+    const r = await saveSessionNote(currentSessionId.value)
+    savedNote.value = `已存 ${r.note_file}(整理 ${r.organized_chars} 字,已提交入库)`
+  } catch (error) {
+    savedNote.value = describeApiError(error)
+  } finally {
+    savingNote.value = false
+  }
+}
+
+/** 库内出处跳笔记详情;联网出处开新窗口 */
+function openCitation(c: { note_id: number | null; url: string | null }): void {
+  if (c.url !== null) {
+    window.open(c.url, '_blank', 'noopener')
+    return
+  }
+  if (c.note_id !== null) openNote(c.note_id)
+}
 </script>
 
 <template>
@@ -230,6 +256,17 @@ function openNote(noteId: number): void {
       </aside>
 
       <div class="chat-main">
+        <div class="chat-toolbar">
+          <button
+            class="btn btn--ghost"
+            type="button"
+            :disabled="savingNote || currentSessionId === null || messages.length < 2"
+            @click="saveAsNote"
+          >
+            {{ savingNote ? '整理中…' : '存为笔记' }}
+          </button>
+          <span v-if="savedNote !== ''" class="muted">{{ savedNote }}</span>
+        </div>
         <div ref="msgListEl" class="msg-list">
           <p v-if="messages.length === 0 && !sending" class="empty">
             问一句,比如「闭包是什么」;再追问「那怎么用」——它记得上文。
@@ -264,12 +301,13 @@ function openNote(noteId: number): void {
                     class="cite-item"
                     role="link"
                     tabindex="0"
-                    @click="openNote(c.note_id)"
-                    @keydown.enter="openNote(c.note_id)"
+                    @click="openCitation(c)"
+                    @keydown.enter="openCitation(c)"
                   >
-                    <span class="cite-n mono">[{{ c.n }}]</span>
+                    <span class="cite-n mono">{{ c.url !== null ? `[W${c.n}]` : `[${c.n}]` }}</span>
                     <span class="cite-title">{{ c.note_title }}</span>
                     <span v-if="c.heading_path !== null" class="cite-path">{{ c.heading_path }}</span>
+                    <span v-if="c.url !== null" class="cite-path">{{ c.url }}</span>
                   </li>
                 </ul>
               </details>
@@ -404,6 +442,13 @@ function openNote(noteId: number): void {
   flex: 1;
   min-width: 0;
   flex-direction: column;
+}
+
+.chat-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
 }
 
 .msg-list {

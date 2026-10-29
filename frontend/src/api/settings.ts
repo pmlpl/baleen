@@ -1,6 +1,6 @@
 /**
  * 设置接口封装。GET/PUT /api/settings —— 运行时模型配置(热生效,无需重启)。
- * api_key 只写不读:GET 只回「是否已设置 + 末 4 位」,永不回显全文。
+ * api_key / tavily_api_key 只写不读:GET 只回「是否已设置 + 末 4 位」。
  */
 import { http } from './http'
 
@@ -9,6 +9,8 @@ export interface AppSettingsView {
   llm_model: string
   api_key_set: boolean
   api_key_tail: string
+  tavily_set: boolean
+  tavily_tail: string
 }
 
 export interface SettingsUpdate {
@@ -16,6 +18,7 @@ export interface SettingsUpdate {
   llm_base_url?: string | null
   llm_api_key?: string | null
   llm_model?: string | null
+  tavily_api_key?: string | null
 }
 
 export function getSettings(): Promise<AppSettingsView> {
@@ -24,4 +27,10 @@ export function getSettings(): Promise<AppSettingsView> {
 
 export function updateSettings(payload: SettingsUpdate): Promise<AppSettingsView> {
   return http.put<AppSettingsView>('/settings', payload)
+}
+
+/** Tavily(联网搜索)key 的掩码视图 */
+export interface TavilyStatus {
+  tavily_set: boolean
+  tavily_tail: string
 }
