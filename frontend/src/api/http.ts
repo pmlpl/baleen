@@ -1,6 +1,6 @@
 /** 统一 fetch 封装:组件里不许直接 fetch(AGENTS.md §9),一律从这里走。 */
 
-const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
+export const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 /** 少数不带 /api 前缀的端点:docs/api.md §1,/healthz 是历史原因,别改 */
 const OUTSIDE_PREFIX: readonly string[] = ['/healthz']

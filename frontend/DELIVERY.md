@@ -23,6 +23,16 @@
 
 ---
 
+## 2026-10-30 02:30 · 线 Q-批7 · 问答页流式渲染（fetch 流读取 + 打字机）· 执行者：ZCode（主人批准）
+
+- `src/api/qa.ts`：`streamChat(sessionId, question, handlers)`——fetch + ReadableStream 手工解析 SSE 帧（EventSource 不支持 POST）；流式读取在 api 层实现，组件不直接 fetch
+- `src/views/QaView.vue`：发送走流式——meta 替换乐观消息并挂空气泡（显示「…」），delta 增量打字机，done 用最终消息（含出处/缓存命中率）替换；错误事件走 errorText
+- `src/api/http.ts`：导出 BASE_URL（流式 fetch 复用同一基址）
+
+自测：`pnpm build` 701ms 通过；后端流式 e2e 已验（126 delta 帧）。
+
+---
+
 ## 2026-10-30 00:55 · 线 Q-批4 · 会话导出按钮 + 文案去模型名 · 执行者：ZCode
 
 - 会话列表每项加「↓」导出按钮（`<a href download>`，走后端 export 端点，浏览器下载 .md；后端同时在 tmp/qa_exports/ 落一份给 agent 读）。

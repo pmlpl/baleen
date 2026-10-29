@@ -10,7 +10,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { deleteSession, getSession, listSessions, sendQuestion } from '../api/qa'
+import { deleteSession, getSession, listSessions, streamChat } from '../api/qa'
 import type { QaMessage, QaSessionItem } from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
 
@@ -107,7 +107,7 @@ async function send(): Promise<void> {
   }
   sending.value = true
   errorText.value = ''
-  // 乐观显示:你这条消息立刻上屏(临时 id),响应回来换成真实 id;失败就撤下并还你输入内容
+  // 乐观显示:你的消息立刻上屏;回答经 SSE 流式增量打进一条助手气泡(打字机效果)
   const tempId = -Date.now()
   messages.value.push({
     id: tempId,
@@ -120,20 +120,59 @@ async function send(): Promise<void> {
   })
   input.value = ''
   scrollBottom()
+  let streamingIdx: number | null = null
+  let usedSearchQuery = ''
   try {
-    const res = await sendQuestion(currentSessionId.value, text, TOP_K)
-    const idx = messages.value.findIndex((m) => m.id === tempId)
-    if (idx !== -1) messages.value.splice(idx, 1, res.user_message)
-    messages.value.push({
-      ...res.assistant_message,
-      search_query: res.search_query,
-    })
-    currentSessionId.value = res.session_id
-    scrollBottom()
-    void refreshSessions()
+    await streamChat(
+      currentSessionId.value,
+      text,
+      {
+        onMeta: (meta) => {
+          usedSearchQuery = meta.search_query
+          currentSessionId.value = meta.session_id
+          const idx = messages.value.findIndex((m) => m.id === tempId)
+          if (idx !== -1) messages.value.splice(idx, 1, meta.user_message)
+          messages.value.push({
+            id: -1,
+            role: 'assistant',
+            content: '',
+            citations: [],
+            model: null,
+            cost_tokens: 0,
+            cache_hit_rate: null,
+            search_query: meta.search_query,
+          })
+          streamingIdx = messages.value.length - 1
+          scrollBottom()
+        },
+        onDelta: (t) => {
+          if (streamingIdx !== null && messages.value[streamingIdx] !== undefined) {
+            messages.value[streamingIdx].content += t
+            scrollBottom()
+          }
+        },
+        onDone: (d) => {
+          if (streamingIdx !== null && messages.value[streamingIdx] !== undefined) {
+            messages.value[streamingIdx] = {
+              ...d.assistant_message,
+              search_query: usedSearchQuery,
+            }
+          }
+          void refreshSessions()
+        },
+        onError: (detail) => {
+          errorText.value = detail
+        },
+      },
+      TOP_K,
+    )
   } catch (error) {
+    // 流没建立起来(网络/后端未起):撤下乐观消息与空气泡,还原文输入
     const idx = messages.value.findIndex((m) => m.id === tempId)
     if (idx !== -1) messages.value.splice(idx, 1)
+    if (streamingIdx !== null && messages.value[streamingIdx]?.content === '') {
+      messages.value.splice(streamingIdx, 1)
+    }
     input.value = text
     errorText.value = describeApiError(error)
   } finally {
@@ -204,6 +243,7 @@ function openNote(noteId: number): void {
           >
             <div class="bubble" :class="m.role === 'user' ? 'bubble--user' : 'bubble--assistant'">
               <p v-if="m.role === 'user'" class="user-text">{{ m.content }}</p>
+              <p v-else-if="m.content === ''" class="muted">…</p>
               <!-- 渲染器内部已先 HTML 转义,输出只含自己拼的标签,不是原文直接插进 DOM -->
               <article v-else class="md answer-md" v-html="rendered[i]" />
 
