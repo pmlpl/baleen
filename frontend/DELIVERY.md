@@ -43,6 +43,15 @@
 
 ---
 
+## 2026-10-30 02:14 · 线 Q-批6 · 检索词显示（阶段2.5 配套）· 执行者：ZCode（主人批准）
+
+- `src/api/qa.ts`：ChatResponse 加 `search_query`（改写后的实际检索词）
+- `src/views/QaView.vue`：助手消息内出处折叠上方显示「检索词：xxx」（muted 小字；本地暂存自当轮响应，重开历史会话不回放）
+
+自测：`pnpm build` 682ms 通过；后端改写 e2e 已验（见 backend/DELIVERY 线 Q-批6）。
+
+---
+
 ## 2026-10-30 00:55 · 线 Q-批4 · 会话导出按钮 + 文案去模型名 · 执行者：ZCode
 
 - 会话列表每项加「↓」导出按钮（`<a href download>`，走后端 export 端点，浏览器下载 .md；后端同时在 tmp/qa_exports/ 落一份给 agent 读）。
