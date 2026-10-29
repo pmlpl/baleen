@@ -96,6 +96,30 @@ cd backend && uv run pytest -q     →  139 passed
 
 ---
 
+## 2026-10-30 02:50 · 线 Q-批8 · 模型配置 API（设置页后端，热生效）· 执行者：ZCode（主人批准）
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `app/models/setting.py` | AppSettings 单行表（id=1；字段 NULL = 回退 .env 对应项） |
+| 新增 | `alembic/versions/0005_app_settings.py` | 已 upgrade head 实跑 |
+| 新增 | `app/repo/settings.py` | SettingsRepo.save（None=保持/空串=清空回退；api_key 仅非空时更新） |
+| 新增 | `app/service/llm/resolve.py` | `resolve_llm_config(session)`：DB 优先 → 回退 .env，返回 (base_url, api_key, model) |
+| 新增 | `app/api/settings.py` | GET（生效值 + api_key 只回「已设置+末4位」，**永不回显全文**）/ PUT（热生效） |
+| 改 | `app/api/qa.py` | `get_llm_client` 改为读 DB 设置（每次请求现读 → 热生效）；测试 override 兼容 |
+| 改 | `app/main.py` | 注册 settings router |
+
+### 自测
+
+- `pytest tests/api/test_settings.py -q` → **4 passed**（回退/往返/空 key 保持/key 不回显）；全量 63 passed；ruff 全清；alembic 0004→0005 实跑
+
+### 已知边界
+
+- **worker（导入 G2）暂仍走 .env**——设置页当前只影响问答/改写链路；worker 侧统一排下一步
+
+---
+
 ## 2026-10-30 02:30 · 线 Q-批7 · SSE 流式问答（打字机效果）· 执行者：ZCode（主人批准）
 
 ### 产物

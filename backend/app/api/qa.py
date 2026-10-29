@@ -28,6 +28,7 @@ from app.api.library import OWNER_ID, RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import QaRepo
 from app.service.llm import LLMClient, LLMError
+from app.service.llm.resolve import resolve_llm_config
 from app.service.qa.answerer import (
     _EMPTY_ANSWER,
     ContextHit,
@@ -110,9 +111,13 @@ class SessionDetail(BaseModel):
     messages: list[MessageOut]
 
 
-def get_llm_client() -> LLMClient:
-    """LLM client 工厂;测试用 ``dependency_overrides`` 换成带 FakeTransport 的假 client。"""
-    return LLMClient.from_settings()
+async def get_llm_client(session: SessionDep) -> LLMClient:
+    """LLM client 工厂:设置页(DB 单行)优先,回退 .env;每次请求现读 → 热生效。
+
+    测试用 ``dependency_overrides`` 换成带 FakeTransport 的假 client。
+    """
+    base_url, api_key, model = await resolve_llm_config(session)
+    return LLMClient(base_url=base_url, api_key=api_key, model=model)
 
 
 LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]

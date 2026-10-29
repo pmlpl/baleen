@@ -11,9 +11,11 @@ from .job import Job
 from .note import Note
 from .qa import QaMessage, QaSession
 from .review_run import ReviewRun
+from .setting import AppSettings
 from .source import Source
 
 __all__ = [
+    "AppSettings",
     "Base",
     "Chunk",
     "Embedding",
