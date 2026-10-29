@@ -109,6 +109,12 @@ export const http = {
     })
     return parseResponse<T>(response)
   },
+  /** HTTP DELETE。204 No Content 没有响应体,返回 null;其余 2xx 照常解析 JSON。 */
+  async del<T>(path: string): Promise<T | null> {
+    const response = await send(path, { method: 'DELETE', headers: { Accept: 'application/json' } })
+    if (response.status === 204) return null
+    return parseResponse<T>(response)
+  },
 }
 
 /**

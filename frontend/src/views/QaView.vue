@@ -1,50 +1,138 @@
 <script setup lang="ts">
 /**
- * 问答页:POST /api/qa —— 检索命中 → LLM 用笔记库内容答 + 出处。
- * 答案里的 [n] 对应下方「出处」列表的第 n 条;点出处跳笔记详情。
- * 无状态:问一次答一次,不记历史(多轮会话是后续路线图)。
+ * 问答页(阶段2:聊天式多轮)。
+ * 左侧会话列表(历史可重开/删除),中部消息流(用户右/助手左),底部输入。
+ * assistant 消息渲染 markdown,出处折叠在消息下方;「缓存 xx%」是 DeepSeek
+ * 前缀缓存命中率(hit/(hit+miss)),首问没有缓存数据时不显示。
+ * 数据全部来自 API(会话/消息已落库),本地 ref 不用 store,不引第三方库。
  */
-import { computed, ref } from 'vue'
+import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { askQuestion } from '../api/qa'
-import type { QaResponse } from '../api/qa'
+import { deleteSession, getSession, listSessions, sendQuestion } from '../api/qa'
+import type { QaMessage, QaSessionItem } from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
 
 const TOP_K = 5
 
 const router = useRouter()
 
-const question = ref('')
-const loading = ref(false)
+const sessions = ref<QaSessionItem[]>([])
+const currentSessionId = ref<number | null>(null)
+const messages = ref<QaMessage[]>([])
+const input = ref('')
+const sending = ref(false)
+const loadingSession = ref(false)
 const errorText = ref('')
-const result = ref<QaResponse | null>(null)
-/** 是否问过:区分「还没问」和「问了但没拿到答案」 */
-const asked = ref(false)
 
-const renderedAnswer = computed(() =>
-  result.value === null ? '' : renderMarkdown(result.value.answer),
+const msgListEl = ref<HTMLElement | null>(null)
+
+/** 与 messages 一一对应的 assistant 消息 HTML(渲染器内部先 HTML 转义) */
+const rendered = computed(() =>
+  messages.value.map((m) => (m.role === 'assistant' ? renderMarkdown(m.content) : '')),
 )
 
-async function submit(): Promise<void> {
-  if (loading.value) return
-  const text = question.value.trim()
+/** 最新一条助手消息的缓存命中率;null = 当前模型没返回缓存数据 */
+const lastCacheRate = computed<number | null>(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const m = messages.value[i]
+    if (m.role === 'assistant') return m.cache_hit_rate
+  }
+  return null
+})
+
+const hasAssistantMessage = computed(() => messages.value.some((m) => m.role === 'assistant'))
+
+async function refreshSessions(): Promise<void> {
+  try {
+    sessions.value = (await listSessions()).items
+  } catch {
+    /* 侧栏拉取失败不打断聊天主流程 */
+  }
+}
+
+onMounted(() => {
+  void refreshSessions()
+})
+
+function scrollBottom(): void {
+  void nextTick(() => {
+    const el = msgListEl.value
+    if (el !== null) el.scrollTop = el.scrollHeight
+  })
+}
+
+function startNew(): void {
+  currentSessionId.value = null
+  messages.value = []
+  errorText.value = ''
+}
+
+async function openSession(id: number): Promise<void> {
+  if (sending.value) return
+  loadingSession.value = true
+  errorText.value = ''
+  try {
+    const detail = await getSession(id)
+    currentSessionId.value = detail.id
+    messages.value = detail.messages
+    scrollBottom()
+  } catch (error) {
+    errorText.value = describeApiError(error)
+  } finally {
+    loadingSession.value = false
+  }
+}
+
+async function removeSession(id: number): Promise<void> {
+  if (!window.confirm('删除这个会话?消息一并删除,不可恢复。')) return
+  try {
+    await deleteSession(id)
+    if (currentSessionId.value === id) startNew()
+    await refreshSessions()
+  } catch (error) {
+    errorText.value = describeApiError(error)
+  }
+}
+
+async function send(): Promise<void> {
+  if (sending.value) return
+  const text = input.value.trim()
   if (text === '') {
     errorText.value = '请输入要问的问题'
     return
   }
-  loading.value = true
+  sending.value = true
   errorText.value = ''
+  // 乐观显示:你这条消息立刻上屏(临时 id),响应回来换成真实 id;失败就撤下并还你输入内容
+  const tempId = -Date.now()
+  messages.value.push({
+    id: tempId,
+    role: 'user',
+    content: text,
+    citations: [],
+    model: null,
+    cost_tokens: 0,
+    cache_hit_rate: null,
+  })
+  input.value = ''
+  scrollBottom()
   try {
-    result.value = await askQuestion(text, TOP_K)
-    asked.value = true
+    const res = await sendQuestion(currentSessionId.value, text, TOP_K)
+    const idx = messages.value.findIndex((m) => m.id === tempId)
+    if (idx !== -1) messages.value.splice(idx, 1, res.user_message)
+    messages.value.push(res.assistant_message)
+    currentSessionId.value = res.session_id
+    scrollBottom()
+    void refreshSessions()
   } catch (error) {
-    result.value = null
-    asked.value = true
+    const idx = messages.value.findIndex((m) => m.id === tempId)
+    if (idx !== -1) messages.value.splice(idx, 1)
+    input.value = text
     errorText.value = describeApiError(error)
   } finally {
-    loading.value = false
+    sending.value = false
   }
 }
 
@@ -54,119 +142,307 @@ function openNote(noteId: number): void {
 </script>
 
 <template>
-  <section class="page">
+  <section class="page qa-page">
     <header class="page-head">
       <h1 class="page-title">问答</h1>
       <p class="page-desc">
-        问一句,它用你笔记库里的内容答,并标出出自哪条笔记哪一节。答案里的 [n] 对应下方出处。
+        和笔记库对话:它用笔记内容答、标出处,多轮追问记得上文。「缓存命中率」是模型前缀缓存的命中占比,显示在输入框下方。
       </p>
     </header>
 
-    <form class="search-bar" @submit.prevent="submit">
-      <input
-        v-model="question"
-        class="input"
-        type="search"
-        placeholder="例:闭包是什么?怎么取消一个 axios 请求?"
-        aria-label="问题"
-      />
-      <button class="btn btn--primary" type="submit" :disabled="loading">
-        {{ loading ? '思考中…' : '提问' }}
-      </button>
-    </form>
-
-    <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
-
-    <template v-if="result !== null">
-      <p class="result-meta muted">
-        耗时 {{ result.took_ms }} ms · {{ result.citations.length }} 条出处 · {{ result.model }}
-      </p>
-
-      <!-- 渲染器内部已先 HTML 转义,输出只含自己拼的标签,不是原文直接插进 DOM -->
-      <article class="card md answer" v-html="renderedAnswer" />
-
-      <section v-if="result.citations.length > 0" class="cites">
-        <h2 class="cites-title">出处</h2>
-        <ul class="cite-list">
+    <div class="qa-layout">
+      <aside class="session-side">
+        <button class="btn btn--primary new-btn" type="button" @click="startNew">+ 新对话</button>
+        <p v-if="sessions.length === 0" class="muted side-empty">还没有历史会话</p>
+        <ul class="session-list">
           <li
-            v-for="c in result.citations"
-            :key="c.n"
-            class="card cite"
-            role="link"
-            tabindex="0"
-            @click="openNote(c.note_id)"
-            @keydown.enter="openNote(c.note_id)"
+            v-for="s in sessions"
+            :key="s.id"
+            class="session-item"
+            :class="{ 'session-item--active': s.id === currentSessionId }"
           >
-            <div class="cite-head">
-              <span class="cite-n mono">[{{ c.n }}]</span>
-              <span class="cite-title">{{ c.note_title }}</span>
-            </div>
-            <p v-if="c.heading_path !== null" class="cite-path">{{ c.heading_path }}</p>
-            <p class="cite-snippet">{{ c.snippet }}</p>
+            <button class="session-open" type="button" :title="s.title" @click="openSession(s.id)">
+              {{ s.title }}
+            </button>
+            <a
+              class="session-export"
+              :href="`/api/qa/sessions/${s.id}/export`"
+              download
+              title="导出为 Markdown"
+              @click.stop
+            >
+              ↓
+            </a>
+            <button
+              class="session-del"
+              type="button"
+              aria-label="删除会话"
+              @click.stop="removeSession(s.id)"
+            >
+              ×
+            </button>
           </li>
         </ul>
-      </section>
-    </template>
+      </aside>
 
-    <p v-else-if="asked && !loading && errorText === ''" class="empty">
-      没拿到答案。换个问法再试,或先去「导入」页补几篇笔记。
-    </p>
+      <div class="chat-main">
+        <div ref="msgListEl" class="msg-list">
+          <p v-if="messages.length === 0 && !sending" class="empty">
+            问一句,比如「闭包是什么」;再追问「那怎么用」——它记得上文。
+          </p>
 
-    <p v-else-if="!asked" class="empty">
-      输入一句中文问题,这里会用笔记库里的内容回答,并标出出处。
-    </p>
+          <div
+            v-for="(m, i) in messages"
+            :key="m.id"
+            class="msg-row"
+            :class="m.role === 'user' ? 'msg-row--user' : 'msg-row--assistant'"
+          >
+            <div class="bubble" :class="m.role === 'user' ? 'bubble--user' : 'bubble--assistant'">
+              <p v-if="m.role === 'user'" class="user-text">{{ m.content }}</p>
+              <!-- 渲染器内部已先 HTML 转义,输出只含自己拼的标签,不是原文直接插进 DOM -->
+              <article v-else class="md answer-md" v-html="rendered[i]" />
+
+              <details
+                v-if="m.role === 'assistant' && m.citations.length > 0"
+                class="cite-fold"
+                :open="i === messages.length - 1"
+              >
+                <summary class="cite-summary">出处 {{ m.citations.length }} 条</summary>
+                <ul class="cite-list">
+                  <li
+                    v-for="c in m.citations"
+                    :key="c.n"
+                    class="cite-item"
+                    role="link"
+                    tabindex="0"
+                    @click="openNote(c.note_id)"
+                    @keydown.enter="openNote(c.note_id)"
+                  >
+                    <span class="cite-n mono">[{{ c.n }}]</span>
+                    <span class="cite-title">{{ c.note_title }}</span>
+                    <span v-if="c.heading_path !== null" class="cite-path">{{ c.heading_path }}</span>
+                  </li>
+                </ul>
+              </details>
+              <p
+                v-else-if="m.role === 'assistant' && m.citations.length === 0"
+                class="cite-empty muted"
+              >
+                (本次没有引用笔记片段)
+              </p>
+            </div>
+          </div>
+
+          <div v-if="sending" class="msg-row msg-row--assistant">
+            <div class="bubble bubble--assistant bubble--pending">思考中…</div>
+          </div>
+        </div>
+
+        <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
+
+        <form class="chat-input" @submit.prevent="send">
+          <input
+            v-model="input"
+            class="input"
+            type="text"
+            placeholder="问点什么…(Enter 发送)"
+            aria-label="问题"
+            :disabled="sending"
+          />
+          <button class="btn btn--primary" type="submit" :disabled="sending">发送</button>
+        </form>
+
+        <p class="cache-status muted" aria-live="polite">
+          缓存命中率:
+          <span v-if="lastCacheRate !== null" class="cache-value">
+            {{ (lastCacheRate * 100).toFixed(1) }}%
+          </span>
+          <span v-else-if="hasAssistantMessage">—(当前模型未返回缓存数据)</span>
+          <span v-else>—</span>
+        </p>
+      </div>
+    </div>
   </section>
 </template>
 
 <style scoped>
-.search-bar {
+.qa-layout {
   display: flex;
-  margin-bottom: 16px;
-  align-items: center;
-  gap: 10px;
+  align-items: stretch;
+  gap: 16px;
 }
 
-.result-meta {
-  margin-bottom: 12px;
+.session-side {
+  flex-shrink: 0;
+  width: 210px;
 }
 
-.answer {
-  padding: 20px 24px;
-  margin-bottom: 22px;
-}
-
-.cites-title {
-  font-size: 16px;
+.new-btn {
+  width: 100%;
   margin-bottom: 10px;
+}
+
+.side-empty {
+  font-size: 13px;
+}
+
+.session-list {
+  display: flex;
+  list-style: none;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.session-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+}
+
+.session-item--active {
+  border-color: var(--accent);
+}
+
+.session-open {
+  flex: 1;
+  overflow: hidden;
+  padding: 8px 4px 8px 10px;
+  border: none;
+  background: none;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13.5px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-open:hover {
+  color: var(--accent-ink);
+}
+
+.session-del {
+  flex-shrink: 0;
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-size: 15px;
+}
+
+.session-del:hover {
+  color: var(--err);
+}
+
+.session-export {
+  flex-shrink: 0;
+  padding: 4px 6px;
+  color: var(--ink-3);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.session-export:hover {
+  color: var(--accent-ink);
+}
+
+.chat-main {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.msg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  height: 56vh;
+  padding: 6px 2px;
+  overflow-y: auto;
+}
+
+.msg-row {
+  display: flex;
+}
+
+.msg-row--user {
+  justify-content: flex-end;
+}
+
+.msg-row--assistant {
+  justify-content: flex-start;
+}
+
+.bubble {
+  max-width: 86%;
+}
+
+.bubble--user {
+  padding: 9px 14px;
+  border-radius: 12px 12px 3px 12px;
+  background: var(--accent);
+  color: #fff;
+}
+
+.user-text {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.bubble--assistant {
+  padding: 14px 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px 12px 12px 3px;
+  background: #fff;
+}
+
+.bubble--pending {
+  color: var(--ink-3);
+}
+
+.cite-fold {
+  margin-top: 10px;
+  border-top: 1px dashed var(--line);
+  padding-top: 8px;
+}
+
+.cite-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ink-2);
+  cursor: pointer;
+  font-size: 13px;
 }
 
 .cite-list {
   display: flex;
   list-style: none;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
+  margin-top: 8px;
 }
 
-.cite {
-  padding: 12px 14px;
-  cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease;
-}
-
-.cite:hover {
-  border-color: #c9d8e6;
-  transform: translateY(-1px);
-}
-
-.cite:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.cite-head {
+.cite-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  gap: 8px;
+  gap: 6px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f7f9fc;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.cite-item:hover {
+  background: #eef4fa;
 }
 
 .cite-n {
@@ -175,22 +451,36 @@ function openNote(noteId: number): void {
 }
 
 .cite-title {
-  font-size: 15px;
   font-weight: 650;
 }
 
 .cite-path {
-  margin: 4px 0 6px;
-  color: var(--ink-2);
-  font-size: 13px;
+  color: var(--ink-3);
 }
 
-.cite-snippet {
-  margin: 0;
-  color: var(--ink-2);
-  font-size: 13.5px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-word;
+.cite-empty {
+  margin: 8px 0 0;
+  font-size: 12.5px;
+}
+
+.chat-input {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.chat-input .btn {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.cache-status {
+  margin: 8px 2px 0;
+  font-size: 12.5px;
+}
+
+.cache-value {
+  color: var(--accent-ink);
+  font-weight: 650;
 }
 </style>
