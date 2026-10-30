@@ -3,6 +3,37 @@
 > 岗位制：每个交付块标题写明「执行者」，同一个岗位换人不换记录。
 > 历届担任：`Trae-评测`（线 C 全阶段 + `stratified-v2`）→ `DSH-评测`（线 N）。
 
+## 2026-10-31 · G2 真跑评测（完整十节报告）+ 切块档位重跑（§8 校准）· 执行者：ZCode（主人批准）
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `eval/preds_live.csv` | 真预测器逐行预测（35 样本，10 列同 runner.py COLUMNS）；`raw_json` 记判定阶段/reasons/降级标记 |
+| 重新生成 | `eval/report.md` | **test split（held-out，18 条）**十节正式报告——从此是真数据，不再是 fake 占位 |
+| 新增 | `eval/report_all.md` | 全量 35 条口径（含 14 个解析不了的非 ok 文件） |
+| 新增 | `eval/report_g2_ok.md` | **ok 子集（21 条，G2 真正考核面）**口径——与 G1 的 0/15 同分母 |
+| 追加 | `eval/ablation.md` §12 + §1 更新行 | 15 篇语料 × 线 R 回填后三档重跑（200/300/400 × 宽松/严格），判决维持 300 |
+
+### 自测（原始输出）
+
+- 真链路预测器 `backend/scripts/g2_eval.py`（parse→G1→G2，deepseek-flash 官方，probe json_mode=True）：
+  35 样本 = **G0 拦 14 + G1 拦 3 + G2 判 18**，总花费 65,567 token（G2 均值 ~3.6k/条，1.8–7.1s），零 error 零降级。
+- **误拒率（ok 口径，分母 15）= 0/15 = 0.0%**（基线 53.3% → 0%）；test split 2/10 与 all 3/18 的「误拒」
+  全部是 **G0 解析不了**的 human-accept 文件（霸道总裁.doc + 两张手写 jpg，产品本就不进闸），非 G2 判错。
+- 非法组合 **0**（18 条 G2 全部 accept→index / reject→topic_dialog|drop 合法）；误丢率 ok 口径 0/1。
+- 唯一判定错误 = 1 条**误收**（项目实施记录（一）.md：human reject/topic_dialog → pred accept/index，test split）——
+  「误拒代价≫误收」哲学下可接受，进 mining list。
+- 消融：check_expected_paths **失配 0**（回填编号标题被 chunker 丢空 section、期望路径全存活，queries.csv 一字未改）；
+  三档 R@5 94.4/94.4/88.9（宽松），300 档 R@10 唯一 100%、MRR 双口径最高 → **维持 300**。
+
+### 已知限制
+
+- 误丢率 all 口径 1/2（分母只有 2 条 topic_dialog，小样本无统计力）；macro-F1/混淆矩阵见 report.md。
+- 600 档未跑（bge 512 窗口必截断，对 §8 的执行偏离已在 §12.4 存档）。
+- 2 个原子代码块 >512 token 被 embedding 侧静默截（既有取舍，§1 结论 2 复现）。
+- 300 档大节内 in_range 61.5%（<70% 目标、>60% 警戒线，4 篇小节型新笔记拉低，如实记录）。
+
 ## 2026-10-29 15:48 · 线 N-追加 · heading 前缀 A/B · 执行者：ZCode（主人批准）
 
 ### 产物

@@ -2,7 +2,7 @@
 
 split 版本：stratified-v3（分层粒度：slot_verdict）
 
-**误拒率 1/10 = 10.0%　|　误丢率 0/1 = 0.0%**
+**误拒率 2/10 = 20.0%　|　误丢率 0/1 = 0.0%**
 
 ---
 
@@ -66,7 +66,7 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 ## 2. 🔴 误拒率
 
-**误拒率 = 1/10 = 10.0%**（human ∈ {accept, partial} 中 pred = reject 的比例）—— 好笔记被扔了。
+**误拒率 = 2/10 = 20.0%**（human ∈ {accept, partial} 中 pred = reject 的比例）—— 好笔记被扔了。
 
 ## 3. 🔴 误丢率
 
@@ -82,9 +82,9 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | human \ pred | accept | partial | reject |
 |---|---|---|---|
-| accept | 8 | 0 | 1 |
+| accept | 7 | 0 | 2 |
 | partial | 1 | 0 | 0 |
-| reject | 2 | 0 | 6 |
+| reject | 1 | 0 | 7 |
 
 ## 6. 判定准确率与各类 P / R / F1
 
@@ -93,9 +93,9 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | 类别 | support | precision | recall | F1 |
 |---|---|---|---|---|
-| accept | 9 | 0.73 | 0.89 | 0.80 |
+| accept | 9 | 0.78 | 0.78 | 0.78 |
 | partial | 1 | 0.00 | 0.00 | 0.00 |
-| reject | 8 | 0.86 | 0.75 | 0.80 |
+| reject | 8 | 0.78 | 0.88 | 0.82 |
 
 ## 7. 质量分级被低估清单
 
@@ -103,7 +103,8 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | rel_path | human_quality | pred_quality |
 |---|---|---|
-| _inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg | normal | junk |
+| _inbox/霸道总裁爱上我.doc | core |  |
+| _inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg | normal |  |
 
 ## 8. 全错样本清单（mining list）
 
@@ -111,29 +112,25 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | rel_path | human | pred | human_reason |
 |---|---|---|---|
-| _inbox/软件开发项目大综合实训实践授课进度计划表.docx | reject / drop | accept / index | 抽取全文仅8行，全部是授课进度计划表的空白表头与签名栏，没有任何实际进度内容 |
+| _inbox/霸道总裁爱上我.doc | accept / index | reject / drop | 文件名像小说，实际是霸总文题材的结构化解析笔记，含核心概念、人物模板、三幕结构与趋势判断，文件名不可作为判定依据 |
 | _inbox/项目实施记录（一）.md | reject / topic_dialog | accept / index | 实训模板填出来的过程记录，全是按流程执行的汇报，没有技术判断或踩坑结论 |
-| _inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg | accept / index | reject / extract_spans | 手写的AI应用开发知识提纲，四大板块覆盖RAG、大模型原理、Agent编排与鉴权，虽只有关键词无展开，但结构完整可当回顾 |
+| _inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg | accept / index | reject / drop | 手写的AI应用开发知识提纲，四大板块覆盖RAG、大模型原理、Agent编排与鉴权，虽只有关键词无展开，但结构完整可当回顾 |
 | _inbox/软件开发项目大综合实训实践项目指导书.docx | partial / extract_spans | accept / index | 全文约七成是教学安排（适用专业、场地、指导团队、评分要求、预习思考题），可用内容集中在第四部分 |
 
 ## 9. 成本
 
 | 项 | 值 |
 |---|---|
-| 总 token | 0 |
-| 均值 token / 文件 | 0.0 |
-| P50 延迟 | 0 ms |
-| P95 延迟 | 251 ms |
+| 总 token | 37057 |
+| 均值 token / 文件 | 2058.7 |
+| P50 延迟 | 2129 ms |
+| P95 延迟 | 5328 ms |
 
 ## 10. 🔴 非法组合清单
 
 合法映射只有 `accept→index`、`partial→extract_spans`、`reject→topic_dialog`、`reject→drop`；其余组合说明预测器自相矛盾，**计入错误数**。
 
-**非法组合 = 3 条；判定错误 = 4 条；去重后唯一错误 = 6 条（两类可能重叠）。**
+**非法组合 = 0 条；判定错误 = 4 条；去重后唯一错误 = 4 条（两类可能重叠）。**
 
-| rel_path | pred_verdict | pred_action |
-|---|---|---|
-| _inbox/20260906_105322_839e8a44.pdf | reject | extract_spans |
-| _inbox/【哲风壁纸】人物特写-动漫少女.jpg | reject | extract_spans |
-| _inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg | reject | extract_spans |
+无。
 
