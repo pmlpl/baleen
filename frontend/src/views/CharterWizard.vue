@@ -25,7 +25,7 @@ const errorText = ref('')
 const direction = ref('')
 const purpose = ref('')
 
-// Step 2: 收什么 / 不收什么(多选 chip)
+// Step 2: 收什么 / 不收什么
 const collectOptions = [
   '讲清概念或方法的笔记（定义+例子）',
   '技术文档、论文、项目说明',
@@ -33,15 +33,22 @@ const collectOptions = [
   '问题记录（现象—原因—解决）',
   '手写或拍照的笔记',
 ]
+
+/** 「不能收」:内容客观上没有价值,固定不收,不给选择(用户没得选,不算偏好) */
+const fixedReject = [
+  '空文件、hello world、测试文件',
+  '壁纸、表情包、明星照片、随手截图',
+]
+
+/** 「倾向不收」:边界内容,收不收取决于你自己的用法 —— 默认全不收,取消勾选 = 这类我其实想保留 */
 const rejectOptions = [
   '单据与行政表格',
   '无上下文的报错堆栈',
   '纯流程流水账（只写做了什么，没写为什么）',
-  '空文件、hello world、测试文件',
-  '壁纸、表情包、随手截图',
 ]
 const selectedCollect = ref<string[]>([])
-const selectedReject = ref<string[]>([])
+/** 默认全部不收(与 charter.md 默认一致);取消勾选表示「这类我其实想保留」 */
+const selectedReject = ref<string[]>([...rejectOptions])
 
 function toggleCollect(item: string): void {
   const idx = selectedCollect.value.indexOf(item)
@@ -181,7 +188,15 @@ onMounted(async () => {
         </div>
       </div>
       <div class="field">
-        <span class="field-label">不想收什么？（多选）</span>
+        <span class="field-label">这些默认不收 —— 内容本身没有价值，不需要你选</span>
+        <ul class="fixed-reject">
+          <li v-for="item in fixedReject" :key="item">{{ item }}</li>
+        </ul>
+      </div>
+      <div class="field">
+        <span class="field-label">
+          下面这几类是边界情况，收不收看你怎么用 —— 勾选 = 不收，取消勾选 = 这类我其实想保留
+        </span>
         <div class="chips">
           <button
             v-for="opt in rejectOptions"
@@ -294,6 +309,20 @@ onMounted(async () => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.fixed-reject {
+  margin: 0;
+  padding: 12px 16px 12px 32px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: var(--neutral-soft);
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.fixed-reject li + li {
+  margin-top: 4px;
 }
 
 .chip {
