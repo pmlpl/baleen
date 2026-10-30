@@ -1,7 +1,12 @@
 <script setup lang="ts">
 /**
- * Charter 问卷向导:首次登录自动跳转到这里。
- * 3 步问卷(你是谁 → 收什么/不收什么 → 拿不准+补充) → 第 4 步预览 LLM 生成的章程(可编辑) → 保存。
+ * 知识库章程向导。
+ *
+ * 两种模式:
+ * - **首次使用**(DB 无 charter):路由守卫强制停在这里,没有「跳过」,填完才能用其他功能;
+ * - **编辑模式**(已有 charter,从设置页进来):直接展示现有章程供修改,也可重新填问卷。
+ *
+ * 3 步问卷(你是谁 → 收什么/不能收什么 → 拿不准+补充) → 预览可编辑 → 保存。
  * 保存后 G2 热用新章程(DB 优先于 charter.md 文件)。
  */
 import { computed, onMounted, ref } from 'vue'
@@ -9,6 +14,7 @@ import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { generateCharter, getCharter, saveCharter } from '../api/charter'
+import { markCharterSaved } from '../charterGate'
 
 defineOptions({ name: 'CharterWizard' })
 
@@ -16,6 +22,7 @@ const router = useRouter()
 
 // 步骤:1=你是谁, 2=收/不收, 3=拿不准+补充, 4=预览
 const step = ref(1)
+/** 已有章程 = 编辑模式(从设置页来);false = 首次使用,强制填完 */
 const hasCharter = ref(false)
 const generating = ref(false)
 const saving = ref(false)
@@ -94,18 +101,68 @@ async function doGenerate(): Promise<void> {
     generatedCharter.value = resp.charter
     step.value = 4
   } catch (error) {
-    errorText.value = describeApiError(error)
+    // 生成失败不把人锁死:转入手写模式,带上问卷内容做起草提示
+    errorText.value = `${describeApiError(error)}——可以直接手写章程。`
+    generatedCharter.value = draftFromAnswers()
+    step.value = 4
   } finally {
     generating.value = false
   }
 }
 
+/** 手写章程:跳过 AI,直接进编辑框(只在首次使用时提供) */
+function writeManually(): void {
+  errorText.value = ''
+  generatedCharter.value = draftFromAnswers()
+  step.value = 4
+}
+
+/** 用问卷答案拼一份草稿骨架,用户在此基础上改(不调 LLM) */
+function draftFromAnswers(): string {
+  const lines: string[] = ['## 这是谁的库', '']
+  if (direction.value.trim() || purpose.value.trim()) {
+    lines.push(
+      `我是${direction.value.trim() || '（请填写方向）'}，` +
+        `这个库用来${purpose.value.trim() || '（请填写用途）'}。`,
+    )
+  } else {
+    lines.push('（请写一段：你是谁、这个库用来做什么）')
+  }
+  lines.push('', '## 收什么', '')
+  if (selectedCollect.value.length > 0) {
+    for (const c of selectedCollect.value) lines.push(`- ${c}`)
+  } else {
+    lines.push('- （请写出你想收的笔记类型，每条带一个例子）')
+  }
+  lines.push('', '## 不能收什么', '')
+  for (const r of fixedReject) lines.push(`- ${r}`)
+  lines.push('', '## 不收什么', '')
+  if (selectedReject.value.length > 0) {
+    for (const r of selectedReject.value) lines.push(`- ${r}`)
+  } else {
+    lines.push('- （没有特别排除的，可删掉本节）')
+  }
+  lines.push('', '## 拿不准的时候怎么办', '')
+  const chosen = unsureOptions.find((o) => o.value === unsure.value)
+  lines.push(chosen ? chosen.desc : '拿不准就收下，把质量标低一点。')
+  lines.push('', '## 判据', '', '复述别人定的规则不是知识，自己踩坑想通了才是。')
+  if (extra.value.trim()) {
+    lines.push('', '## 我自己想补的 / 想删的', '', extra.value.trim())
+  }
+  return lines.join('\n')
+}
+
 async function doSave(): Promise<void> {
   if (saving.value) return
+  if (generatedCharter.value.trim() === '') {
+    errorText.value = '章程不能为空。'
+    return
+  }
   saving.value = true
   errorText.value = ''
   try {
     await saveCharter(generatedCharter.value)
+    markCharterSaved() // 解锁:路由守卫放行其他页面
     router.push({ name: 'import' })
   } catch (error) {
     errorText.value = describeApiError(error)
@@ -114,16 +171,27 @@ async function doSave(): Promise<void> {
   }
 }
 
-function skip(): void {
-  router.push({ name: 'import' })
+/** 编辑模式下离开(首次使用不提供这个入口) */
+function leave(): void {
+  router.push({ name: 'settings' })
+}
+
+/** 编辑模式下想完全重填:回到第 1 步 */
+function restartQuestionnaire(): void {
+  step.value = 1
 }
 
 onMounted(async () => {
   try {
     const status = await getCharter()
     hasCharter.value = status.has_charter
+    if (status.has_charter && status.charter) {
+      // 编辑模式:直接展示现有章程,用户改字即可,不必重填问卷
+      generatedCharter.value = status.charter
+      step.value = 4
+    }
   } catch {
-    // 后端没起来也不挡问卷填写
+    // 查不到就按首次使用走(填完照常能存)
   }
 })
 </script>
@@ -131,14 +199,20 @@ onMounted(async () => {
 <template>
   <section class="page">
     <header class="page-head">
-      <h1 class="page-title">知识库章程向导</h1>
+      <h1 class="page-title">{{ hasCharter ? '修改知识库章程' : '先设置你的知识库章程' }}</h1>
       <p class="page-desc">
-        填几个问题，AI 帮你生成一份章程——它决定导入时哪些笔记收、哪些不收。保存后立即生效。
+        章程决定导入时哪些笔记收、哪些不收。
+        <template v-if="hasCharter">
+          下面是当前的章程，可以直接改文字，也可以重新填一遍问卷。
+        </template>
+        <template v-else>
+          这是开始使用前唯一需要完成的一步，填完即可使用全部功能。
+        </template>
       </p>
     </header>
 
     <p v-if="hasCharter" class="note note--warn">
-      你已有一份章程，重新生成将覆盖它。
+      修改后立即生效，G2 判据随之更新。
     </p>
     <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
 
@@ -165,7 +239,7 @@ onMounted(async () => {
       </label>
       <div class="wizard-actions">
         <button class="btn btn--primary" :disabled="!canNext" @click="step = 2">下一步</button>
-        <a class="skip-link" @click="skip">稍后再填</a>
+        <a v-if="hasCharter" class="skip-link" @click="leave">返回设置</a>
       </div>
     </div>
 
@@ -253,14 +327,22 @@ onMounted(async () => {
         <button class="btn btn--primary" type="button" :disabled="generating" @click="doGenerate">
           {{ generating ? '生成中…' : '生成章程' }}
         </button>
+        <button class="btn btn--ghost" type="button" :disabled="generating" @click="writeManually">
+          手写章程
+        </button>
       </div>
     </div>
 
-    <!-- Step 4: 预览 -->
+    <!-- Step 4: 预览 / 编辑 -->
     <div v-if="step === 4" class="card wizard-card">
-      <p class="step-indicator">预览 · 可编辑后保存</p>
+      <p class="step-indicator">{{ hasCharter ? '当前章程 · 可直接编辑' : '预览 · 可编辑后保存' }}</p>
       <p class="muted preview-hint">
-        下面是 AI 根据你的回答生成的章程，可以直接修改文字，满意后点保存。
+        <template v-if="hasCharter">
+          下面是当前生效的章程，改完点保存即生效；也可以重新填一遍问卷生成新的。
+        </template>
+        <template v-else>
+          下面是 AI 根据你的回答生成的章程，可以直接修改文字，满意后点保存。
+        </template>
       </p>
       <textarea
         v-model="generatedCharter"
@@ -268,13 +350,11 @@ onMounted(async () => {
         rows="24"
       />
       <div class="wizard-actions">
-        <button class="btn" type="button" @click="step = 3">回去改问卷</button>
-        <button class="btn" type="button" @click="doGenerate" :disabled="generating">
-          {{ generating ? '重新生成…' : '重新生成' }}
-        </button>
+        <button class="btn" type="button" @click="restartQuestionnaire">重填问卷</button>
         <button class="btn btn--primary" type="button" :disabled="saving" @click="doSave">
           {{ saving ? '保存中…' : '保存' }}
         </button>
+        <a v-if="hasCharter" class="skip-link" @click="leave">返回设置</a>
       </div>
     </div>
   </section>

@@ -130,10 +130,10 @@ onMounted(() => {
     <div class="card charter-section">
       <h2 class="section-title">知识库章程</h2>
       <p class="muted">
-        章程决定导入时哪些笔记收、哪些不收。通过问卷向导生成,保存后 G2 热生效。
+        章程决定导入时哪些笔记收、哪些不收。可以查看当前章程、直接改文字，或重新填一遍问卷。
       </p>
       <button class="btn" type="button" @click="router.push({ name: 'charter' })">
-        重新生成章程
+        查看 / 修改章程
       </button>
     </div>
   </section>
