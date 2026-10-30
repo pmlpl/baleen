@@ -418,8 +418,14 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
                   >
                     <span class="cite-n mono">{{ c.url !== null ? `[W${c.n}]` : `[${c.n}]` }}</span>
                     <span class="cite-title" :title="c.note_title">{{ c.note_title }}</span>
-                    <span v-if="c.heading_path !== null" class="cite-path">{{ c.heading_path }}</span>
-                    <span v-if="c.url !== null" class="cite-path" :title="c.url">
+                    <span
+                      v-if="c.heading_path !== null"
+                      class="cite-path"
+                      :title="c.heading_path"
+                    >
+                      {{ c.heading_path }}
+                    </span>
+                    <span v-if="c.url !== null" class="cite-path" :title="prettyUrl(c.url)">
                       {{ prettyUrl(c.url) }}
                     </span>
                   </li>
