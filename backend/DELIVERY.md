@@ -1471,3 +1471,82 @@ Referenced by:
 ---
 
 ## 2026-10-30 02:50 · 线 Q-批8 · 模型配置 API（设置页后端，热生效）· 执行者：ZCode（主人批准）
+
+---
+
+## 2026-10-31 · 存量笔记标题回填（线 R）· 执行者：ZCode（主人批准；模型 glm-5.2 试 → deepseek-flash 收尾）
+
+### 为什么做
+标题整理（§9 / commit e913726）只挂在导入管线里，存量 15 篇没赶上。落地当时明确排除的「需单独回填脚本」即本节。
+
+### 产物
+- `app/service/rewrite/backfill.py`：`backfill_notes` / `list_candidates` —— 对存量 `notes.doc` 跑与导入**同款** rewrite（plan_outline → number_headings → apply_outline），单篇一事务：换 doc + 删光 chunks 重建 + 重嵌。幂等主闸 `sources.parse_meta.headings_rewritten`、省钱副闸 `needs_rewrite`；LLM 空计划不打标记（可重试 no-op）；单篇失败回滚不中断整批；`note.title` 与 `sources.doc` 均不动（保持「sources=原始解析」不变量）
+- `app/repo/chunks.py`：补 `delete_by_note`（全仓第一个删 chunks 的方法；embeddings/子块靠 FK CASCADE 顺带清）
+- `EMBEDDING_MODEL` 常量挪到 `app/service/embed/__init__.py`（pipeline / retriever / 检索测试改引用；顺带解除 retriever→pipeline 的重依赖）
+- `scripts/backfill_outline.py`：薄壳（g2_smoke 骨架）—— 默认 dry-run 零 LLM 零写库；`--live` 每篇一事务；`--note-id/--limit/--resume/--delay`；`--llm-base-url/--llm-api-key/--llm-model` 临时覆盖（换模型不碰 DB/.env）；结果追加 `backend/tmp/backfill_outline_results.jsonl`（resume 只认 rewritten）
+- 测试 7 例（`tests/service/rewrite/test_backfill.py` + conftest）：真 PG 外层事务回滚 + FakeTransport + 假 embed；覆盖整理重建/两类跳过/空计划/LLM 失败回滚/候选清单/级联删除
+
+### 自测 / 验收
+- pytest 全量 **239 passed + 1 failed** —— 挂的是 `test_qa` 存笔记拆分（上一会话未提交 WIP 自带，与本次无关）；ruff 全清
+- **真实回填 15 篇收口**：11 篇 rewritten（433/487/156/157 用 glm-5.2 成在**小文档**；158/159/160/161/164/296/297 换 deepseek-flash，含 107 块大文档 +39 标题），4 篇该跳（10/27/70 <400 字；162 编号率 86% 结构已好）
+- 幂等闭环：重跑 dry-run「待整理 0」；11/15 打标记；15 篇 chunks/向量行数齐全；检索冒烟 2 query top 命中均带新编号路径（「四、手写防抖和节流 > 带 leading/trailing 的防抖」）
+
+### 已知限制 / 坑
+- **glm-5.2（网关→sensenova 推理模型）小文档（~20 块内）能出，大文档 502/429/空 content**；回填期间网关还整波 502。标题整理/回填一律 deepseek-flash 稳
+- LLM 按 prompt 规则 2 对既有标题在**原位**插编号版 → chunker 把空 section 丢掉、路径留原语义标题（管线同款既有语义，非回填引入）；编号进检索路径靠**新增**章节标题（158 实证「二、深拷贝」等前缀已进路径）
+- 一次偶发 `MissingGreenlet`（run1 长等待后连接态；run2 全量未复现，数据无损，未深究——若复现再查 pool_pre_ping 在非 greenlet 上下文的 checkout）
+
+---
+
+## 2026-10-31 · G2 真跑评测（十节报告落地）· 执行者：ZCode（主人批准：完整报告路线）
+
+### 为什么做
+G2 自线 J 政策修正后从未全量真跑（唯一基线：修正前 live 误拒率 **53.3% (8/15)**）；TASK.md 定义的正式交付是
+metrics.py 十节 report.md，此前一直是 fake predictor 占位。本节把「评测」变成真的。
+
+### 产物
+- `scripts/g2_eval.py`（新）：**产品真链路预测器** —— 对每个样本 `parse_file`（真 G0）→ 非 ok 确定性 reject/drop
+  （产品本就不进闸）→ 真 G1（启发式）→ 过 → 真 G2（LLM）。preds.csv 10 列与 runner.py COLUMNS 逐列一致
+  （rel_path 相对 samples 根），`raw_json` 记判定阶段/reasons/降级；G1 拒收不给 1-5 分（0-1 概率不同量纲，留空）。
+  单文件失败写 error 列继续；`--resume`/`--limit`/`--delay` 齐全；LLM 三件套走环境变量覆盖（零文件改动）。
+- `eval/preds_live.csv`（35 行）+ `eval/report.md`（**test split 主报告，从此是真数据**）+
+  `eval/report_all.md`（全量口径）+ `eval/report_g2_ok.md`（**ok 子集口径**，分母 15，与 G1 的 0/15 同分母）。
+- LLM：deepseek-flash 官方（probe json_mode=True）；总花费 **65,567 token**（G2 均值 ~3.6k/条，1.8–7.1s）。
+
+### 自测（原始数字）
+- 阶段分布：**G0 拦 14 + G1 拦 3 + G2 判 18**（16 accept/index、1 reject/topic_dialog、1 reject/drop），零 error 零降级。
+- **误拒率（ok 口径，分母 15）= 0/15 = 0.0%** —— 达标线「≤1/15 且较 53.3% 实质下降」以最优值通过；非法组合 **0**。
+- test split 2/10、all 3/18 的「误拒」**全部是 G0 解析不了**的 human-accept 文件（霸道总裁.doc + 两张手写 jpg）——
+  产品限制非 G2 判错，报告全错清单可查。
+- 唯一判定错误：1 条**误收**（项目实施记录（一）.md：human reject/topic_dialog → pred accept/index）——
+  「误拒代价≫误收」哲学下可接受，进 mining list。
+- 跑前自检：g2_smoke dry-run 确认 charter 1148 token（<1200 警戒线）、21 ok 文件全部按设计压进 4000 预算。
+
+### 已知限制
+- 误丢率 all 口径 1/2（human topic_dialog 全库仅 2 条，小样本无统计力）。
+- ok 口径报告依赖 tmp/labels_ok.csv（由 preds_live.csv 的 stage 字段过滤生成，复现命令见 eval/DELIVERY）。
+- 达标线为本次自定义（文档原无数字门槛），推导已写入本节；G2 prompt 未做任何改动。
+
+---
+
+## 2026-10-31 · 切块档位重跑（ADR §8 校准，15 篇语料）· 执行者：ZCode（主人批准）
+
+### 为什么做
+§8 要求对 TARGET_CHARS 消融校准，上次跑在 10-29 的 **11 篇语料 + q04 复核前标签**上；且线 R 回填改了
+11 篇旧笔记的标题结构、语料新增 4 篇干扰项——旧结论必须在新语料上重验。
+
+### 产物与结果
+- `ablation.py` **一行未改**；`check_expected_paths()` 失配 **0**（回填编号标题被 chunker 丢空 section、
+  期望路径全存活——queries.csv 一字未改，回填与导入同构的实证）。
+- 三档 × 双口径（宽松 n=18 / 严格 n=16，bge 确定性、零随机、纯内存只读库）：
+  R@5 = 94.4% / **94.4%** / 88.9%（宽松），93.8% / **93.8%** / 87.5%（严格）；
+  300 档 **R@10 唯一 100%、MRR 双口径最高**（0.631/0.648）。
+- 判决：**维持 300 档（= 生产现状）**——三项指标无一劣于两翼；300 vs 400 差 1 条 query（q13 掉出 top-5）；
+  「400 是上限」复现（400 档 p90=444 字符、in_range 跌到 44.4%）。
+- 报告：`eval/ablation.md` §12 + §1 更新行（论文引用以 §12 的 15 篇口径为准，§11 的 100% 是 11 篇历史值）。
+
+### 已知限制 / 执行偏离
+- §8 字面的 600 档未跑：bge 512 窗口下必静默截断，harness 刻意封顶 400（偏离已在 §12.4 存档）。
+- 2 个原子代码块 >512 token（517/700）embedding 侧被截——既有取舍非回归（§1 结论 2 复现）。
+- 300 档大节内 in_range 61.5%（<70% 目标、>60% 警戒线；4 篇小节型新笔记拉低）。
+- 绝对数字与 §11 的 100% 不可直比（语料 11→15 + 回填改结构）；组内可比成立。
