@@ -265,9 +265,24 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
               class="session-export"
               type="button"
               title="导出为 Markdown"
+              aria-label="导出为 Markdown"
               @click.stop="exportSession(s.id)"
             >
-              ↓
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
             </button>
             <button
               class="session-del"
@@ -438,29 +453,43 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 }
 
 .session-del {
+  display: flex;
   flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
   padding: 4px 8px;
   border: none;
   background: none;
   color: var(--ink-3);
   cursor: pointer;
   font-size: 15px;
+  line-height: 1;
+  opacity: 0.75;
+  transition: color 0.15s ease, opacity 0.15s ease;
 }
 
 .session-del:hover {
   color: var(--err);
+  opacity: 1;
 }
 
 .session-export {
+  display: flex;
   flex-shrink: 0;
-  padding: 4px 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  border: none;
+  background: none;
   color: var(--ink-3);
-  text-decoration: none;
-  font-size: 13px;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: color 0.15s ease, opacity 0.15s ease;
 }
 
 .session-export:hover {
   color: var(--accent-ink);
+  opacity: 1;
 }
 
 .chat-main {
