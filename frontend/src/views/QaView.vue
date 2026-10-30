@@ -281,6 +281,33 @@ async function saveAsNote(): Promise<void> {
 }
 
 /** 库内出处跳笔记详情;联网出处开新窗口 */
+/**
+ * 把 URL 显示成可读形式。
+ *
+ * 联网来源的地址里中文会被百分号编码(如 %E6%B8%AC%E8%A9%A6),
+ * 直接显示就是一串乱码。这里:
+ * 1) 用 decodeURI 还原可读字符(失败就保留原样,不能因为美化把链接搞坏)
+ * 2) 太长的话中间省略,只留域名 + 尾部
+ */
+function prettyUrl(raw: string): string {
+  let decoded = raw
+  try {
+    decoded = decodeURI(raw)
+  } catch {
+    // 非法百分号序列(比如带裸 % 的路径)→ 原样显示
+  }
+  const MAX = 72
+  if (decoded.length <= MAX) return decoded
+  try {
+    const parsed = new URL(raw)
+    const host = parsed.host
+    const tail = decoded.slice(-40)
+    return `${host}/…${tail}`
+  } catch {
+    return `${decoded.slice(0, MAX - 1)}…`
+  }
+}
+
 function openCitation(c: { note_id: number | null; url: string | null }): void {
   if (c.url !== null) {
     window.open(c.url, '_blank', 'noopener')
@@ -400,7 +427,9 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
                     <span class="cite-n mono">{{ c.url !== null ? `[W${c.n}]` : `[${c.n}]` }}</span>
                     <span class="cite-title">{{ c.note_title }}</span>
                     <span v-if="c.heading_path !== null" class="cite-path">{{ c.heading_path }}</span>
-                    <span v-if="c.url !== null" class="cite-path">{{ c.url }}</span>
+                    <span v-if="c.url !== null" class="cite-path" :title="c.url">
+                      {{ prettyUrl(c.url) }}
+                    </span>
                   </li>
                 </ul>
               </details>
