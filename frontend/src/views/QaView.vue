@@ -19,6 +19,8 @@ import {
   saveSessionNote,
   streamChat,
 } from '../api/qa'
+import { createSource, getSource } from '../api/sources'
+import { MAX_UPLOAD_BYTES } from '../stores/import'
 import type {
   NotePlanResponse,
   QaMessage,
@@ -48,6 +50,117 @@ const planningNote = ref(false)
 const executingNote = ref(false)
 const noteCustomMode = ref(false)
 const noteCustomText = ref('')
+
+// ---------------- 会话内导入(/导入 弹文件选择器) ----------------
+
+const chatFileInput = ref<HTMLInputElement | null>(null)
+const importingFiles = ref(false)
+
+/** 往消息流里插一条本地反馈(负 id 不落库,与选项卡的反馈气泡同一套) */
+function pushSystemBubble(text: string): void {
+  messages.value.push({
+    id: -Date.now() - Math.floor(Math.random() * 1000),
+    role: 'assistant',
+    content: text,
+    citations: [],
+    model: null,
+    cost_tokens: 0,
+    cache_hit_rate: null,
+  })
+  scrollBottom()
+}
+
+const IMPORT_POLL_MS = 2000
+const IMPORT_MAX_POLLS = 150 // 2s × 150 = 5 分钟上限
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+/** 等一个导入任务收尾,返回最终详情(调用方取 note_id/parse_status) */
+async function waitImportDone(sourceId: number) {
+  for (let i = 0; i < IMPORT_MAX_POLLS; i += 1) {
+    const detail = await getSource(sourceId)
+    if (detail.job.status === 'done' || detail.job.status === 'failed') return detail
+    await sleep(IMPORT_POLL_MS)
+  }
+  return getSource(sourceId)
+}
+
+async function importOneFile(file: File): Promise<void> {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    pushSystemBubble(`❌ 《${file.name}》超过 50MB 上限,没有导入。`)
+    return
+  }
+  pushSystemBubble(`⏳ 正在导入:《${file.name}》…`)
+  let upload
+  try {
+    try {
+      upload = await createSource(file)
+    } catch (error) {
+      // 没配 API Key(要跑 G2 会 400)→ 自动降级为「跳过 AI 判定」再试一次
+      const msg = describeApiError(error)
+      if (msg.includes('API Key')) {
+        upload = await createSource(file, true)
+        pushSystemBubble('ℹ️ 这个账号还没配 API Key,本次跳过了 AI 归属判断。')
+      } else {
+        throw error
+      }
+    }
+  } catch (error) {
+    pushSystemBubble(`❌ 《${file.name}》导入失败:${describeApiError(error)}`)
+    return
+  }
+  if (upload.deduped) {
+    pushSystemBubble(`↩️ 《${file.name}》之前导入过,直接复用已有记录,不重复入库。`)
+    return
+  }
+  try {
+    const detail = await waitImportDone(upload.source_id)
+    if (detail.job.status === 'failed') {
+      const reason = detail.job.last_error ?? '处理失败'
+      pushSystemBubble(`❌ 《${file.name}》导入失败:${reason}`)
+      return
+    }
+    if (detail.note_id !== null) {
+      pushSystemBubble(`✅ 《${file.name}》已入库,生成笔记 #${detail.note_id},可在笔记库查看。`)
+    } else {
+      pushSystemBubble(`✅ 《${file.name}》处理完成(状态:${detail.parse_status},没有生成笔记)。`)
+    }
+  } catch {
+    pushSystemBubble(`⚠️ 《${file.name}》已提交入库,但等结果时连接断了;稍后可在导入页查看进度。`)
+  }
+}
+
+async function importChatFiles(files: FileList | File[]): Promise<void> {
+  if (importingFiles.value) return
+  const list = Array.from(files)
+  if (list.length === 0) return
+  importingFiles.value = true
+  errorText.value = ''
+  try {
+    for (const f of list) {
+      await importOneFile(f)
+    }
+  } finally {
+    importingFiles.value = false
+  }
+}
+
+function onChatFilesPicked(event: Event): void {
+  const inputEl = event.target as HTMLInputElement
+  if (inputEl.files !== null && inputEl.files.length > 0) {
+    void importChatFiles(inputEl.files)
+  }
+  inputEl.value = '' // 允许下次选同一个文件
+}
+
+function onChatDrop(event: DragEvent): void {
+  if (importingFiles.value) return
+  const files = event.dataTransfer?.files
+  if (files !== undefined && files.length > 0) {
+    event.preventDefault()
+    void importChatFiles(files)
+  }
+}
 
 // ---------------- 斜杠命令 ----------------
 
@@ -92,26 +205,10 @@ const CHAT_COMMANDS: ChatCommand[] = [
   },
   {
     name: '/导入',
-    desc: '去导入页传文件',
-    keywords: ['导入', '上传', '文件', 'import'],
+    desc: '选择文档/图片导入知识库,AI 之后能检索到',
+    keywords: ['导入', '上传', '文件', '文档', '图片', 'import'],
     run: () => {
-      void router.push({ name: 'import' })
-    },
-  },
-  {
-    name: '/笔记库',
-    desc: '查看书架',
-    keywords: ['笔记库', '书架', '查看', 'notes'],
-    run: () => {
-      void router.push({ name: 'notes' })
-    },
-  },
-  {
-    name: '/设置',
-    desc: '模型 / API Key / 章程',
-    keywords: ['设置', '模型', 'key', '章程', 'settings'],
-    run: () => {
-      void router.push({ name: 'settings' })
+      chatFileInput.value?.click()
     },
   },
 ]
@@ -549,7 +646,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
         </ul>
       </aside>
 
-      <div class="chat-main">
+      <div class="chat-main" @dragover.prevent @drop.prevent="onChatDrop">
         <div class="chat-toolbar">
           <button
             class="btn btn--ghost"
@@ -638,6 +735,16 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
         </div>
 
         <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
+
+        <!-- /导入 与拖放的文件选择器(隐藏,由命令/拖放触发) -->
+        <input
+          ref="chatFileInput"
+          class="visually-hidden"
+          type="file"
+          multiple
+          aria-label="选择要导入的文件"
+          @change="onChatFilesPicked"
+        />
 
         <!-- 交互式存笔记:选项卡取代输入框(最后一个选项是自己输入) -->
         <div v-if="notePlan !== null" class="note-plan card">
