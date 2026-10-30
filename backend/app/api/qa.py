@@ -316,6 +316,35 @@ async def chat(
         qa = await asyncio.to_thread(
             answer, payload.question, kb_hits, history=history, client=llm, ref_notes=ref_notes
         )
+        # 二段兜底:LLM 用 [NO_KB] 标记「笔记答不了」→ 联网搜;没配 Tavily 就用它自己的
+        # 知识正面回答(带标注)。相关性检查只认字面(「数据库」会命中发票笔记),
+        # 语义层面的「答不了」由 LLM 自己判。
+        if qa.answer.startswith("[NO_KB]"):
+            body = qa.answer.removeprefix("[NO_KB]").strip()
+            if tavily_key:
+                try:
+                    web_results = await asyncio.to_thread(
+                        search_web, search_query, api_key=tavily_key
+                    )
+                except Exception:  # noqa: BLE001 —— 搜索失败走自身知识口径
+                    web_results = []
+            if web_results:
+                qa = await asyncio.to_thread(
+                    answer_web,
+                    payload.question,
+                    web_results,
+                    history=history,
+                    client=llm,
+                    ref_notes=ref_notes,
+                )
+                used_web = True
+            else:
+                qa = qa.model_copy(
+                    update={
+                        "answer": "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n" + body,
+                        "citations": [],
+                    }
+                )
 
     # 5) 存 assistant 消息(出处 + 计费 + 缓存计数),整体 commit(失败全回滚)
     assistant_msg = await repo.add_message(
@@ -423,6 +452,7 @@ async def chat_stream_endpoint(
     user_out = _message_out(user_msg)
 
     async def gen():
+        nonlocal used_web  # marker 兜底会改写;不声明会变成局部变量,meta 处就崩
         accumulated: list[str] = []
         usage_event: dict | None = None
         try:
@@ -451,8 +481,16 @@ async def chat_stream_endpoint(
                 )
                 accumulated.append(qa.answer)
                 yield _sse("delta", {"text": qa.answer})
+                answer_text = qa.answer
+                citations = build_web_citations(web_results, answer_text)
+                cost_tokens = qa.cost_tokens or 0
+                model_name = qa.model or llm.model
+                cache_hit = cache_miss = 0
             else:
                 iterator = llm.chat_stream(messages, max_tokens=3000)
+                marker = False  # [NO_KB] = 笔记答不了,LLM 会给自身知识回答(不外发)
+                buffered = ""
+                streaming = False
                 try:
                     while True:
                         # 同步生成器逐段推进放线程里,不阻塞事件循环
@@ -461,31 +499,93 @@ async def chat_stream_endpoint(
                             break
                         if event["type"] == "usage":
                             usage_event = event
-                        elif event["type"] == "content":
-                            accumulated.append(event["text"])
-                            yield _sse("delta", {"text": event["text"]})
-                        # reasoning 增量暂不转发(前端「思考中…」持续到正文开始)
+                            continue
+                        if event["type"] != "content":
+                            continue
+                        piece = event["text"]
+                        if marker:
+                            buffered += piece  # 静默收完自身知识回答
+                            continue
+                        if streaming:
+                            accumulated.append(piece)
+                            yield _sse("delta", {"text": piece})
+                            continue
+                        buffered += piece
+                        combined = buffered.lstrip()
+                        if combined.startswith("[NO_KB]"):
+                            marker = True
+                            continue
+                        # 缓冲到能判定首行再放行,防止标记漏给用户
+                        if "\n" in buffered or (
+                            len(combined) >= 8 and not combined.startswith("[")
+                        ):
+                            streaming = True
+                            accumulated.append(buffered)
+                            yield _sse("delta", {"text": buffered})
+                            buffered = ""
+                        # else: 继续缓冲直到可判定
                 finally:
                     close = getattr(iterator, "close", None)
                     if close is not None:
                         close()
 
-            answer_text = "".join(accumulated).strip() or _EMPTY_ANSWER
-            citations = (
-                build_web_citations(web_results, answer_text)
-                if used_web
-                else build_citations(kb_hits, answer_text)
-            )
-            usage = usage_event or {}
+                if marker:
+                    # 二段兜底:联网搜;没配 Tavily 就用 LLM 已给出的自身知识回答
+                    body = buffered.removeprefix("[NO_KB]").strip()
+                    web_results2: list[dict[str, str]] = []
+                    if tavily_key:
+                        try:
+                            web_results2 = await asyncio.to_thread(
+                                search_web, search_query, api_key=tavily_key
+                            )
+                        except Exception:  # noqa: BLE001 —— 搜索失败走自身知识口径
+                            web_results2 = []
+                    if web_results2:
+                        used_web = True
+                        qa = await asyncio.to_thread(
+                            answer_web,
+                            payload.question,
+                            web_results2,
+                            history=history,
+                            client=llm,
+                            ref_notes=ref_notes,
+                        )
+                        answer_text = qa.answer
+                        citations = build_web_citations(web_results2, answer_text)
+                        cost_tokens = qa.cost_tokens or 0
+                        model_name = qa.model or llm.model
+                        cache_hit = cache_miss = 0
+                        yield _sse("delta", {"text": answer_text})
+                    else:
+                        answer_text = (
+                            "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n" + body
+                        )
+                        citations = []
+                        cost_tokens = (usage_event or {}).get("total_tokens") or 0
+                        model_name = llm.model
+                        cache_hit = (usage_event or {}).get("prompt_cache_hit_tokens") or 0
+                        cache_miss = (usage_event or {}).get("prompt_cache_miss_tokens") or 0
+                        yield _sse("delta", {"text": answer_text})
+                else:
+                    if buffered:  # 短回答没到放行阈值,流结束后整段放行
+                        accumulated.append(buffered)
+                        yield _sse("delta", {"text": buffered})
+                    answer_text = "".join(accumulated).strip() or _EMPTY_ANSWER
+                    citations = build_citations(kb_hits, answer_text)
+                    cost_tokens = (usage_event or {}).get("total_tokens") or 0
+                    model_name = llm.model
+                    cache_hit = (usage_event or {}).get("prompt_cache_hit_tokens") or 0
+                    cache_miss = (usage_event or {}).get("prompt_cache_miss_tokens") or 0
+
             assistant_msg = await repo.add_message(
                 qa_session.id,
                 role="assistant",
                 content=answer_text,
                 citations=[c.model_dump() for c in citations],
-                model=llm.model,
-                cost_tokens=usage.get("total_tokens") or 0,
-                cache_hit_tokens=usage.get("prompt_cache_hit_tokens") or 0,
-                cache_miss_tokens=usage.get("prompt_cache_miss_tokens") or 0,
+                model=model_name,
+                cost_tokens=cost_tokens,
+                cache_hit_tokens=cache_hit,
+                cache_miss_tokens=cache_miss,
             )
             await session.commit()
             yield _sse(

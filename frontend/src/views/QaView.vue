@@ -7,7 +7,7 @@
  * 数据全部来自 API(会话/消息已落库),本地 ref 不用 store,不引第三方库。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 import { getToken } from '../auth/token'
 import { describeApiError } from '../api/http'
@@ -36,6 +36,7 @@ import { renderMermaidIn } from '../utils/mermaid'
 const TOP_K = 5
 
 const router = useRouter()
+const route = useRoute()
 
 const sessions = ref<QaSessionItem[]>([])
 const currentSessionId = ref<number | null>(null)
@@ -45,8 +46,6 @@ const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const sending = ref(false)
 const loadingSession = ref(false)
-const savingNote = ref(false)
-const savedNote = ref('')
 /** 交互式存笔记:主题计划(非 null 时输入框区域变成选项卡) */
 const notePlan = ref<NotePlanResponse | null>(null)
 const planningNote = ref(false)
@@ -253,11 +252,7 @@ const CHAT_COMMANDS: ChatCommand[] = [
     desc: '开一个空白会话',
     keywords: ['新', '对话', '会话', '清空', 'new'],
     run: () => {
-      currentSessionId.value = null
-      messages.value = []
-      savedNote.value = ''
-      cancelNotePlan()
-      errorText.value = ''
+      startNew()
     },
   },
   {
@@ -494,6 +489,9 @@ onBeforeUnmount(() => {
 
 onMounted(() => {
   void refreshSessions()
+  // URL 带了 ?session=N → 直接恢复那个会话
+  const sid = Number(route.query.session)
+  if (Number.isFinite(sid) && sid > 0) void openSession(sid)
 })
 
 function scrollBottom(): void {
@@ -503,10 +501,20 @@ function scrollBottom(): void {
   })
 }
 
+/** 会话 id 同步到 URL(?session=N):刷新/分享都能回到同一会话 */
+function syncSessionUrl(id: number | null): void {
+  void router.replace({
+    query: { ...route.query, session: id === null ? undefined : String(id) },
+  })
+}
+
 function startNew(): void {
   currentSessionId.value = null
   messages.value = []
   errorText.value = ''
+  referencedNotes.value = []
+  cancelNotePlan()
+  syncSessionUrl(null)
 }
 
 async function openSession(id: number): Promise<void> {
@@ -517,6 +525,7 @@ async function openSession(id: number): Promise<void> {
     const detail = await getSession(id)
     currentSessionId.value = detail.id
     messages.value = detail.messages
+    syncSessionUrl(id)
     scrollBottom()
     // 历史消息里可能有 mermaid 图
     await nextTick()
@@ -607,7 +616,10 @@ async function send(): Promise<void> {
         onMeta: (meta) => {
           usedSearchQuery = meta.search_query
           pendingModel.value = meta.model ?? null
-          currentSessionId.value = meta.session_id
+          if (currentSessionId.value !== meta.session_id) {
+            currentSessionId.value = meta.session_id
+            syncSessionUrl(meta.session_id)
+          }
           const idx = messages.value.findIndex((m) => m.id === tempId)
           if (idx !== -1) messages.value.splice(idx, 1, meta.user_message)
           messages.value.push({
@@ -680,7 +692,6 @@ function openNote(noteId: number): void {
 async function saveAsNote(): Promise<void> {
   if (planningNote.value || executingNote.value || currentSessionId.value === null) return
   planningNote.value = true
-  savedNote.value = ''
   errorText.value = ''
   try {
     notePlan.value = await planSessionNote(currentSessionId.value)
@@ -720,7 +731,6 @@ async function executeNotePlan(req: SaveNoteRequest): Promise<void> {
       cost_tokens: 0,
       cache_hit_rate: null,
     })
-    savedNote.value = `已存 ${r.notes.length} 篇笔记`
     cancelNotePlan()
     scrollBottom()
   } catch (error) {
@@ -818,17 +828,6 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
       </aside>
 
       <div class="chat-main" @dragover.prevent @drop.prevent="onChatDrop">
-        <div class="chat-toolbar">
-          <button
-            class="btn btn--ghost"
-            type="button"
-            :disabled="savingNote || currentSessionId === null || messages.length < 2"
-            @click="saveAsNote"
-          >
-            {{ savingNote ? '整理中…' : '存为笔记' }}
-          </button>
-          <span v-if="savedNote !== ''" class="muted">{{ savedNote }}</span>
-        </div>
         <div ref="msgListEl" class="msg-list">
           <p v-if="messages.length === 0 && !sending" class="empty">
             问一句,比如「闭包是什么」;再追问「那怎么用」——它记得上文。

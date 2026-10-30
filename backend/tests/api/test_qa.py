@@ -638,3 +638,62 @@ def test_chat_with_bogus_note_ids_ignored(
     if isinstance(last_body, bytes):
         last_body = last_body.decode("utf-8")
     assert "<referenced_notes>" not in last_body
+
+
+def test_chat_no_kb_marker_triggers_web_search(
+    env: SimpleNamespace, qa_setup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """LLM 判定笔记答不了([NO_KB]) → 自动联网二次回答,不让用户吃闭门羹。
+
+    复现主人实测:「关系型数据库」被发票笔记里的「数据库」字面误判为相关,
+    旧版只能拒答;现在靠 LLM 自己判语义,联网给出正面解答。
+    """
+    async def fake_tavily_key(*_a, **_kw):  # noqa: ANN001
+        return "tvly-fake"
+
+    monkeypatch.setattr(qa_module, "resolve_tavily_key", fake_tavily_key)
+
+    search_calls: list[str] = []
+
+    def fake_search(query, *, api_key):  # noqa: ANN001
+        search_calls.append(query)
+        return [
+            {"title": "闭包本质详解", "url": "https://closure.example", "content": "闭包的本质是…"}
+        ]
+
+    monkeypatch.setattr(qa_module, "search_web", fake_search)
+
+    # 场景:检索命中闭包笔记(字面相关),但 LLM 判定答不了概念追问
+    # → [NO_KB] → 联网二次回答
+    qa_setup.responses.append((200, _chat("[NO_KB]\n闭包的本质是函数对外层变量的引用机制…")))
+    qa_setup.responses.append((200, _chat("闭包的本质是作用域引用。[W1]")))
+    resp = env.client.post("/api/qa/chat", json={"question": "闭包的本质是什么"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["used_web"] is True
+    assert "作用域引用" in body["assistant_message"]["content"]
+    assert search_calls, "应该发起联网搜索"
+    assert "[NO_KB]" not in body["assistant_message"]["content"]  # 标记不外泄
+
+
+def test_chat_no_kb_marker_without_tavily_answers_from_own_knowledge(
+    env: SimpleNamespace, qa_setup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """没配 Tavily → 用 LLM 已给出的自身知识回答,带来源标注,不再拒答。"""
+
+    async def fake_tavily_none(*_a, **_kw):  # noqa: ANN001
+        return None
+
+    monkeypatch.setattr(qa_module, "resolve_tavily_key", fake_tavily_none)
+
+    qa_setup.responses.append(
+        (200, _chat("[NO_KB]\n关系型数据库是建立在关系模型上的数据库,数据按表组织。"))
+    )
+    resp = env.client.post("/api/qa/chat", json={"question": "什么叫做关系型数据库"})
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["used_web"] is False
+    content = body["assistant_message"]["content"]
+    assert "AI 自身的知识回答" in content
+    assert "关系模型" in content
+    assert "[NO_KB]" not in content

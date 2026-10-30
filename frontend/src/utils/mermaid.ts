@@ -34,6 +34,7 @@ async function loadMermaid(): Promise<typeof import('mermaid').default> {
 
 let lightboxEl: HTMLElement | null = null
 let lightboxKeyHandler: ((e: KeyboardEvent) => void) | null = null
+let lightboxWheelHandler: ((e: WheelEvent) => void) | null = null
 let lightboxScale = 1
 
 function applyLightboxScale(): void {
@@ -46,6 +47,11 @@ function closeLightbox(): void {
   if (lightboxKeyHandler !== null) {
     document.removeEventListener('keydown', lightboxKeyHandler)
     lightboxKeyHandler = null
+  }
+  const body = lightboxEl.querySelector<HTMLElement>('.mermaid-lightbox-body')
+  if (body !== null && lightboxWheelHandler !== null) {
+    body.removeEventListener('wheel', lightboxWheelHandler)
+    lightboxWheelHandler = null
   }
   lightboxEl.remove()
   lightboxEl = null
@@ -70,6 +76,17 @@ function openLightbox(svg: SVGSVGElement): void {
 
   const canvas = lightboxEl.querySelector('.mermaid-lightbox-canvas')
   canvas?.appendChild(svg.cloneNode(true))
+
+  // 滚轮缩放(向上滚放大,向下缩小);preventDefault 防止页面跟着滚
+  const bodyEl = lightboxEl.querySelector<HTMLElement>('.mermaid-lightbox-body')
+  if (bodyEl !== null) {
+    lightboxWheelHandler = (event: WheelEvent) => {
+      event.preventDefault()
+      lightboxScale = Math.min(3, Math.max(0.5, lightboxScale - event.deltaY * 0.0015))
+      applyLightboxScale()
+    }
+    bodyEl.addEventListener('wheel', lightboxWheelHandler, { passive: false })
+  }
 
   lightboxEl.addEventListener('click', (event) => {
     const target = event.target as HTMLElement
