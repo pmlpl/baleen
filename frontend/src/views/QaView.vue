@@ -48,6 +48,123 @@ const planningNote = ref(false)
 const executingNote = ref(false)
 const noteCustomMode = ref(false)
 const noteCustomText = ref('')
+
+// ---------------- 斜杠命令 ----------------
+
+interface ChatCommand {
+  name: string
+  desc: string
+  keywords: string[]
+  run: () => void
+}
+
+const slashOpen = ref(false)
+const slashActive = ref(0)
+
+const CHAT_COMMANDS: ChatCommand[] = [
+  {
+    name: '/新对话',
+    desc: '开一个空白会话',
+    keywords: ['新', '对话', '会话', '清空', 'new'],
+    run: () => {
+      currentSessionId.value = null
+      messages.value = []
+      savedNote.value = ''
+      cancelNotePlan()
+      errorText.value = ''
+    },
+  },
+  {
+    name: '/存为笔记',
+    desc: '分析本次对话,给出生成选项',
+    keywords: ['笔记', '存', '整理', 'note'],
+    run: () => {
+      void saveAsNote()
+    },
+  },
+  {
+    name: '/导出',
+    desc: '导出当前会话为 Markdown',
+    keywords: ['导出', '下载', 'markdown', 'export'],
+    run: () => {
+      if (currentSessionId.value !== null) void exportSession(currentSessionId.value)
+    },
+  },
+  {
+    name: '/导入',
+    desc: '去导入页传文件',
+    keywords: ['导入', '上传', '文件', 'import'],
+    run: () => {
+      void router.push({ name: 'import' })
+    },
+  },
+  {
+    name: '/笔记库',
+    desc: '查看书架',
+    keywords: ['笔记库', '书架', '查看', 'notes'],
+    run: () => {
+      void router.push({ name: 'notes' })
+    },
+  },
+  {
+    name: '/设置',
+    desc: '模型 / API Key / 章程',
+    keywords: ['设置', '模型', 'key', '章程', 'settings'],
+    run: () => {
+      void router.push({ name: 'settings' })
+    },
+  },
+]
+
+/** 按命令名或关键词过滤;query 为空时展示全部 */
+const slashMatches = computed<ChatCommand[]>(() => {
+  const query = input.value.slice(1).trim().toLowerCase()
+  if (query === '') return CHAT_COMMANDS
+  return CHAT_COMMANDS.filter(
+    (c) => c.name.toLowerCase().includes(query) || c.keywords.some((k) => k.toLowerCase().includes(query)),
+  )
+})
+
+function closeSlash(): void {
+  slashOpen.value = false
+  slashActive.value = 0
+}
+
+function updateSlash(): void {
+  slashOpen.value = input.value.startsWith('/')
+  slashActive.value = 0
+}
+
+function executeSlash(cmd: ChatCommand): void {
+  closeSlash()
+  input.value = ''
+  cmd.run()
+}
+
+/** 菜单打开时接管方向键/回车/Tab/Esc;Enter 不再提交表单 */
+function onSlashKeydown(event: KeyboardEvent): void {
+  if (!slashOpen.value) return
+  const matches = slashMatches.value
+  if (event.key === 'Escape') {
+    closeSlash()
+    return
+  }
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    if (matches.length > 0) slashActive.value = (slashActive.value + 1) % matches.length
+    return
+  }
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    if (matches.length > 0) slashActive.value = (slashActive.value - 1 + matches.length) % matches.length
+    return
+  }
+  if (event.key === 'Enter' || event.key === 'Tab') {
+    event.preventDefault()
+    const picked = matches[slashActive.value]
+    if (picked !== undefined) executeSlash(picked)
+  }
+}
 const errorText = ref('')
 
 const msgListEl = ref<HTMLElement | null>(null)
@@ -191,7 +308,7 @@ async function removeSession(id: number): Promise<void> {
 }
 
 async function send(): Promise<void> {
-  if (sending.value) return
+  if (sending.value || slashOpen.value) return
   const text = input.value.trim()
   if (text === '') {
     errorText.value = '请输入要问的问题'
@@ -594,14 +711,34 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
           </button>
         </div>
 
-        <form v-else class="chat-input" @submit.prevent="send">
+        <form v-else class="chat-input chat-input--anchor" @submit.prevent="send">
+          <!-- / 命令菜单:绝对定位在输入框上方 -->
+          <div v-if="slashOpen" class="slash-menu card">
+            <button
+              v-for="(c, i) in slashMatches"
+              :key="c.name"
+              class="slash-item"
+              :class="{ 'slash-item--active': i === slashActive }"
+              type="button"
+              @click="executeSlash(c)"
+              @mouseenter="slashActive = i"
+            >
+              <span class="slash-name mono">{{ c.name }}</span>
+              <span class="slash-desc">{{ c.desc }}</span>
+            </button>
+            <p v-if="slashMatches.length === 0" class="muted slash-empty">
+              没有匹配的命令(输入 / 看全部)
+            </p>
+          </div>
           <input
             v-model="input"
             class="input"
             type="text"
-            placeholder="问点什么…(Enter 发送)"
+            placeholder="问点什么…(输入 / 唤起命令)"
             aria-label="问题"
             :disabled="sending"
+            @input="updateSlash"
+            @keydown="onSlashKeydown"
           />
           <button class="btn btn--primary" type="submit" :disabled="sending">发送</button>
         </form>
@@ -1006,5 +1143,59 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
 .np-cancel:hover:not(:disabled) {
   color: var(--accent);
+}
+
+/* ---- 斜杠命令菜单 ---- */
+.chat-input--anchor {
+  position: relative;
+}
+
+.slash-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 280px;
+  padding: 6px;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+}
+
+.slash-item {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.slash-item--active {
+  background: var(--accent-soft);
+}
+
+.slash-name {
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.slash-desc {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-empty {
+  padding: 10px;
+  font-size: 12.5px;
 }
 </style>
