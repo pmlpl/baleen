@@ -284,27 +284,19 @@ async function saveAsNote(): Promise<void> {
 /**
  * 把 URL 显示成可读形式。
  *
- * 联网来源的地址里中文会被百分号编码(如 %E6%B8%AC%E8%A9%A6),
- * 直接显示就是一串乱码。这里:
- * 1) 用 decodeURI 还原可读字符(失败就保留原样,不能因为美化把链接搞坏)
- * 2) 太长的话中间省略,只留域名 + 尾部
+ * 联网来源的地址里中文会被百分号编码(如 %E6%B8%AC%E8%A9%A6),直接显示就是乱码。
+ * 这里只用 decodeURI 还原可读字符;长度交给 CSS 截断(两行 + 省略号),
+ * 完整地址挂在 title 上,鼠标悬停可见。
+ *
+ * 用 decodeURI 而非 decodeURIComponent:后者会把 %2C %2F 这类保留字也解掉,
+ * 可能破坏 URL 结构。
  */
 function prettyUrl(raw: string): string {
-  let decoded = raw
   try {
-    decoded = decodeURI(raw)
+    return decodeURI(raw)
   } catch {
-    // 非法百分号序列(比如带裸 % 的路径)→ 原样显示
-  }
-  const MAX = 72
-  if (decoded.length <= MAX) return decoded
-  try {
-    const parsed = new URL(raw)
-    const host = parsed.host
-    const tail = decoded.slice(-40)
-    return `${host}/…${tail}`
-  } catch {
-    return `${decoded.slice(0, MAX - 1)}…`
+    // 非法百分号序列(如裸 % 的路径)→ 原样显示,不能让美化把链接搞坏
+    return raw
   }
 }
 
@@ -425,7 +417,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
                     @keydown.enter="openCitation(c)"
                   >
                     <span class="cite-n mono">{{ c.url !== null ? `[W${c.n}]` : `[${c.n}]` }}</span>
-                    <span class="cite-title">{{ c.note_title }}</span>
+                    <span class="cite-title" :title="c.note_title">{{ c.note_title }}</span>
                     <span v-if="c.heading_path !== null" class="cite-path">{{ c.heading_path }}</span>
                     <span v-if="c.url !== null" class="cite-path" :title="c.url">
                       {{ prettyUrl(c.url) }}
@@ -700,11 +692,23 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 }
 
 .cite-title {
+  overflow: hidden;
   font-weight: 650;
+  /* 标题单行,超出省略;完整标题悬停可见 */
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cite-path {
+  display: -webkit-box;
+  overflow: hidden;
   color: var(--ink-3);
+  /* 最多两行,超出省略;完整地址在 title 里(悬停可见) */
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow-wrap: anywhere;
+  word-break: break-all;
 }
 
 .cite-empty {
