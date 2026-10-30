@@ -63,21 +63,108 @@ const toc = computed<TocEntry[]>(() => {
   })
 })
 
-/** 当前选中:URL 的 ?section 优先,否则第一节 */
+/**
+ * 默认选中哪一节:
+ * 优先 URL 里的 ?section;否则选第一节**有实质内容**的块。
+ *
+ * 为什么不能直接用第一节:解析器会为笔记头部生成一个「元信息块」
+ * (难度/关键词 之类,几十 token 一行),落在它上面看起来就像只有标题。
+ */
+const DEFAULT_MIN_CHARS = 80
+
+const defaultSectionId = computed<number | null>(() => {
+  const firstSubstantial = toc.value.find((e) => e.parent.text.trim().length >= DEFAULT_MIN_CHARS)
+  const fallback = firstSubstantial ?? toc.value[0]
+  return fallback ? fallback.parent.chunk_id : null
+})
+
 const selectedId = computed<number | null>(() => {
   const raw = route.query.section
   if (typeof raw === 'string') {
     const parsed = Number(raw)
     if (Number.isFinite(parsed)) return parsed
   }
-  const first = toc.value[0]
-  return first ? first.parent.chunk_id : null
+  return defaultSectionId.value
 })
 
 const selected = computed<NoteParent | null>(() => {
   if (selectedId.value === null) return null
   return toc.value.find((e) => e.parent.chunk_id === selectedId.value)?.parent ?? null
 })
+
+/**
+ * 父块原文 → 有排版的 HTML。
+ *
+ * 父块是「自然语言 + 裸代码」混排,没有 markdown 代码围栏,所以不能直接用
+ * renderMarkdown。这里按启发式分块:连续以代码特征(`{`/`}`/`;`/`function`/
+ * 缩进较多/`//` 注释)开头的行聚成代码块,其余聚成段落。
+ * 全部先做 HTML 转义,原文含 <script> 也只显示成文字。
+ */
+function renderSectionText(raw: string): string {
+  const escaped = (s: string): string =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+  const lines = raw.replace(/\r\n?/g, '\n').split('\n')
+
+  /** 这行看起来是代码吗(缩进 4+ / 以括号分号结尾 / 常见关键字开头 / 单行注释) */
+  const looksLikeCode = (line: string): boolean => {
+    if (line.trim() === '') return false
+    if (/^\s{4,}\S/.test(line)) return true
+    if (/^\s*(\/\/|\/\*|\*)/.test(line)) return true
+    if (/^\s*[})\]];?\s*$/.test(line)) return true
+    if (/[;{]\s*$/.test(line)) return true
+    if (/^\s*(function|const|let|var|return|if|for|while|class|import|export|def|async|await)\b/.test(line)) {
+      return true
+    }
+    if (/^\s*[\w.$]+\s*\(.*\)\s*;?\s*$/.test(line) && /[=:]/.test(line)) return true
+    return false
+  }
+
+  const out: string[] = []
+  let buffer: string[] = []
+  let bufferIsCode: boolean | null = null
+
+  const flush = (): void => {
+    if (buffer.length === 0) return
+    // 去掉代码块首尾空行,避免开出一片空白
+    while (buffer.length > 0 && (buffer[0] as string).trim() === '') buffer.shift()
+    while (buffer.length > 0 && (buffer[buffer.length - 1] as string).trim() === '') buffer.pop()
+    if (buffer.length === 0) {
+      bufferIsCode = null
+      return
+    }
+    if (bufferIsCode === true) {
+      out.push(`<pre class="sec-code"><code>${escaped(buffer.join('\n'))}</code></pre>`)
+    } else {
+      // 段落内单换行保留为 <br>,父块的换行本身有语义(步骤、条件列举)
+      out.push(`<p>${buffer.map(escaped).join('<br>')}</p>`)
+    }
+    buffer = []
+    bufferIsCode = null
+  }
+
+  for (const line of lines) {
+    const isCode = looksLikeCode(line)
+    if (bufferIsCode === null) {
+      bufferIsCode = isCode
+      buffer.push(line)
+      continue
+    }
+    // 代码块里遇到明显是自然语言的行(长句、无代码符号)→ 收束
+    const breaksBlock =
+      (bufferIsCode && !isCode && /[\u4e00-\u9fa5]/.test(line) && line.trim().length > 12) ||
+      (!bufferIsCode && isCode)
+    if (breaksBlock) {
+      flush()
+      bufferIsCode = isCode
+    }
+    buffer.push(line)
+  }
+  flush()
+  return out.join('\n')
+}
+
+const sectionHtml = computed(() => (selected.value === null ? '' : renderSectionText(selected.value.text)))
 
 const selectedIndex = computed(() =>
   toc.value.findIndex((e) => e.parent.chunk_id === selectedId.value),
@@ -216,7 +303,8 @@ function qualityLabel(quality: string | null): string {
               <span class="section-path mono">{{ selected.heading_path }}</span>
               <span class="muted section-tokens">{{ selected.token_count }} tokens</span>
             </div>
-            <div class="card section-body">{{ selected.text }}</div>
+            <!-- 父块原文经 renderSectionText 分块(段落/代码)并逐行转义,不是原文直插 -->
+            <div class="card section-body sec" v-html="sectionHtml" />
 
             <nav class="section-nav" aria-label="章节切换">
               <button
@@ -383,8 +471,30 @@ function qualityLabel(quality: string | null): string {
   font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
   font-size: 14.5px;
   line-height: 1.85;
-  white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 父块正文:段落之间留白,代码块单独成块 */
+.sec :deep(p) {
+  margin: 0 0 14px;
+}
+
+.sec :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.sec :deep(.sec-code) {
+  margin: 0 0 16px;
+  padding: 13px 16px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f7f9fc;
+  color: #22303f;
+  font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  white-space: pre;
 }
 
 .section-nav {
