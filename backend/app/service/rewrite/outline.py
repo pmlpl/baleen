@@ -345,9 +345,25 @@ def summarize_specs(specs: list[HeadingSpec]) -> list[dict]:
     return [{"at": s.before_index, "level": s.level, "title": s.title} for s in specs]
 
 
+def doc_stats(blocks: dict) -> dict:
+    """轻量结构统计(标题数/带编号数/正文字数),供回填 dry-run 解释「为什么跳过」。"""
+    headings = 0
+    numbered = 0
+    body_chars = 0
+    for block in blocks.get("content") or []:
+        if block.get("type") == "heading":
+            headings += 1
+            if NUMBER_PREFIX.match(_block_text(block)):
+                numbered += 1
+        else:
+            body_chars += len(_block_text(block))
+    return {"headings": headings, "numbered": numbered, "body_chars": body_chars}
+
+
 __all__ = [
     "HeadingSpec",
     "apply_outline",
+    "doc_stats",
     "needs_rewrite",
     "number_headings",
     "plan_outline",

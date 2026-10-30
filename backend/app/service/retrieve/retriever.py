@@ -16,8 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.models import Chunk
 from app.repo import Repos
-from app.service.embed import embed_query
-from app.service.imports.pipeline import EMBEDDING_MODEL
+from app.service.embed import EMBEDDING_MODEL, embed_query
 
 RRF_K = 60  # 标准 RRF 常数
 RRF_PER_ROUTE_MIN = 20  # 每路进入融合的最少候选数

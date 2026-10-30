@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app.core.config import ROOT_DIR, get_settings
 from app.repo import Repos
 from app.service.chunk import ChunkResult, chunk
-from app.service.embed import count_tokens, embed_passage
+from app.service.embed import EMBEDDING_MODEL, count_tokens, embed_passage
 from app.service.gate import judge as judge_g1
 from app.service.gate.g2 import judge as judge_g2
 from app.service.llm import LLMClient
@@ -39,7 +39,6 @@ from app.service.rewrite.outline import (
 
 STORAGE_ROOT = ROOT_DIR / "storage"
 DEDUPE_PREFIX = "import:"
-EMBEDDING_MODEL = "bge-large-zh-v1.5"
 WORKER = "import-cli"
 
 log = logging.getLogger(__name__)

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 
 from app.models import Chunk as ChunkRow
 from app.service.chunk import Chunk, ChunkResult
@@ -11,6 +11,17 @@ from .base import Repo
 
 
 class ChunksRepo(Repo):
+    async def delete_by_note(self, note_id: int) -> int:
+        """删光一个笔记的 chunks,返回删除行数。
+
+        子块/父块一起删(self-FK CASCADE);embeddings 靠 FK CASCADE 顺带清。
+        供标题回填等「整篇重建切块」的场景用。
+        """
+        result = await self.session.execute(
+            delete(ChunkRow).where(ChunkRow.note_id == note_id)
+        )
+        return result.rowcount or 0
+
     async def get_by_note(self, note_id: int) -> list[ChunkRow]:
         rows = await self.session.scalars(
             select(ChunkRow).where(ChunkRow.note_id == note_id).order_by(ChunkRow.ord)
