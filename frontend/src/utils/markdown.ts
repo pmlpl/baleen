@@ -15,10 +15,30 @@ function escapeHtml(raw: string): string {
 }
 
 function renderInline(raw: string): string {
-  return escapeHtml(raw)
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
+  const escaped = escapeHtml(raw)
+
+  // 先切出行内代码,受保护不参与后续替换(否则 `arr[1]` 里的 [1] 会被当成引用)
+  const codes: string[] = []
+  const withPlaceholders = escaped.replace(/`([^`]+)`/g, (_m, body: string) => {
+    codes.push(`<code>${body}</code>`)
+    return `\u0000CODE${codes.length - 1}\u0000`
+  })
+
+  const withRefs = withPlaceholders
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+    // 引用标记:[1] [12] 库内出处,[W1] [W2] 联网来源 → 上标小徽章。
+    // 前置断言排除 arr[1] 这类数组/索引访问(前面紧挨字母数字下划线或点)。
+    .replace(
+      /(?<![\w.[])\[(W?\d+)\]/g,
+      (_m, ref: string) =>
+        ref.startsWith('W')
+          ? `<sup class="cite-ref cite-ref--web">${ref}</sup>`
+          : `<sup class="cite-ref">${ref}</sup>`,
+    )
+
+  // 还原行内代码
+  return withRefs.replace(/\u0000CODE(\d+)\u0000/g, (_m, i: string) => codes[Number(i)] ?? '')
 }
 
 export function renderMarkdown(markdown: string): string {

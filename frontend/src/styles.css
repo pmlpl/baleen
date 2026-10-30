@@ -371,6 +371,28 @@ ol {
   line-height: 1.8;
 }
 
+/* 出处标记 [1] / [W2]:上标小徽章,和正文区分
+   (由 utils/markdown.ts 的 renderInline 生成) */
+.md sup.cite-ref {
+  display: inline-block;
+  margin: 0 1px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 0.72em;
+  font-weight: 600;
+  line-height: 1.5;
+  vertical-align: super;
+}
+
+/* 联网来源 [W1]:暖色底,和库内出处一眼区分 */
+.md sup.cite-ref--web {
+  background: var(--warn-soft);
+  color: var(--warn);
+}
+
 .md h1,
 .md h2,
 .md h3,
