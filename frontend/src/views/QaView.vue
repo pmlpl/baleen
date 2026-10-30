@@ -14,6 +14,7 @@ import { describeApiError } from '../api/http'
 import { deleteSession, getSession, listSessions, saveSessionNote, streamChat } from '../api/qa'
 import type { QaMessage, QaSessionItem } from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
+import { renderMermaidIn } from '../utils/mermaid'
 
 const TOP_K = 5
 
@@ -124,6 +125,9 @@ async function openSession(id: number): Promise<void> {
     currentSessionId.value = detail.id
     messages.value = detail.messages
     scrollBottom()
+    // 历史消息里可能有 mermaid 图
+    await nextTick()
+    if (msgListEl.value !== null) void renderMermaidIn(msgListEl.value)
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {
@@ -237,6 +241,10 @@ async function send(): Promise<void> {
               search_query: usedSearchQuery,
             }
           }
+          // 流式结束才渲染图表:中途渲染会随增量重画抖动
+          void nextTick(() => {
+            if (msgListEl.value !== null) void renderMermaidIn(msgListEl.value)
+          })
           void refreshSessions()
         },
         onError: (detail) => {

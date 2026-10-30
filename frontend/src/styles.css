@@ -371,6 +371,69 @@ ol {
   line-height: 1.8;
 }
 
+/* markdown 表格(GFM pipe table) */
+.md table {
+  margin: 14px 0;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 13.5px;
+}
+
+.md th,
+.md td {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+}
+
+.md th {
+  background: var(--neutral-soft);
+  font-weight: 600;
+}
+
+.md tbody tr:nth-child(even) {
+  background: #f9fbfd;
+}
+
+/* 嵌套列表缩进 */
+.md li > ul,
+.md li > ol {
+  margin: 4px 0 2px;
+  padding-left: 22px;
+}
+
+/* mermaid 图容器 */
+.mermaid-figure {
+  display: flex;
+  justify-content: center;
+  margin: 14px 0;
+  padding: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.mermaid-figure svg {
+  max-width: 100%;
+  height: auto;
+}
+
+/* mermaid 解析失败:保留代码块 + 角标 */
+pre.mermaid-error {
+  position: relative;
+  padding-top: 30px;
+}
+
+.mermaid-error-badge {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: var(--warn);
+  font-size: 11.5px;
+}
+
 /* 出处标记 [1] / [W2]:上标小徽章,和正文区分
    (由 utils/markdown.ts 的 renderInline 生成) */
 .md .cite-ref {

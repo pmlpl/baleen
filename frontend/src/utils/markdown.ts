@@ -1,9 +1,9 @@
 /**
- * 极简 markdown 渲染器(手写,无第三方依赖 —— AGENTS.md §3.2 不许加 marked 之类)。
- * 支持:标题/段落/有序无序列表/引用/代码块/行内 code 粗体 斜体/水平线。
+ * 极简 markdown 渲染器(手写 —— 表格/嵌套列表也是手写;mermaid 走独立懒加载模块)。
+ * 支持:标题/段落/有序无序列表(一级嵌套)/表格/引用/代码块/行内 code 粗体 斜体/水平线/引用标记。
  *
  * 安全:所有原文先 HTML 转义再拼标记,即便原文含 <script> 也只显示成文字。
- * NoteView(笔记正文)与 QaView(问答答案)共用,从 NoteView 原本内联的实现抽出。
+ * NoteView(笔记正文)与 QaView(问答答案)共用。
  */
 
 function escapeHtml(raw: string): string {
@@ -41,10 +41,55 @@ function renderInline(raw: string): string {
   return withRefs.replace(/\u0000CODE(\d+)\u0000/g, (_m, i: string) => codes[Number(i)] ?? '')
 }
 
+// ---------------- 表格 ----------------
+
+/** 表格行:以 | 开头且含 |(裸文本里偶见的 a|b 不算) */
+function isTableRow(line: string): boolean {
+  return /^\s*\|.*\|\s*$/.test(line)
+}
+
+/** 拆一行成单元格;不处理 \| 转义(LLM 输出里极罕见) */
+function splitRow(line: string): string[] {
+  let s = line.trim()
+  if (s.startsWith('|')) s = s.slice(1)
+  if (s.endsWith('|')) s = s.slice(0, -1)
+  return s.split('|').map((c) => c.trim())
+}
+
+/** 分隔行:每个单元格都是 :--- / ---: / --- 形态 */
+function isSeparatorRow(cells: string[]): boolean {
+  return cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c))
+}
+
+/** 分隔行 → 列对齐(居中/右/默认左) */
+function alignsOf(separatorCells: string[]): string[] {
+  return separatorCells.map((c) => {
+    if (c.startsWith(':') && c.endsWith(':')) return 'center'
+    if (c.endsWith(':')) return 'right'
+    return 'left'
+  })
+}
+
+function buildTable(header: string[], aligns: string[], bodyRows: string[][]): string {
+  const th = (cells: string[]): string =>
+    `<tr>${cells.map((c, i) => `<th style="text-align:${aligns[i] ?? 'left'}">${renderInline(c)}</th>`).join('')}</tr>`
+  const td = (cells: string[]): string =>
+    `<tr>${cells.map((c, i) => `<td style="text-align:${aligns[i] ?? 'left'}">${renderInline(c)}</td>`).join('')}</tr>`
+  const body = bodyRows.map(td).join('')
+  return `<table><thead>${th(header)}</thead><tbody>${body}</tbody></table>`
+}
+
+// ---------------- 列表(支持一级嵌套) ----------------
+
+interface ListFrame {
+  tag: 'ul' | 'ol'
+  liOpen: boolean
+}
+
 export function renderMarkdown(markdown: string): string {
   const lines = markdown.replace(/\r\n?/g, '\n').split('\n')
   const out: string[] = []
-  let listTag: 'ul' | 'ol' | null = null
+  const listStack: ListFrame[] = []
   let inCode = false
   let codeLines: string[] = []
   let paragraph: string[] = []
@@ -55,13 +100,27 @@ export function renderMarkdown(markdown: string): string {
     paragraph = []
   }
 
-  const closeList = (): void => {
-    if (listTag === null) return
-    out.push(`</${listTag}>`)
-    listTag = null
+  const closeLi = (): void => {
+    const top = listStack[listStack.length - 1]
+    if (top !== undefined && top.liOpen) {
+      out.push('</li>')
+      top.liOpen = false
+    }
   }
 
-  for (const line of lines) {
+  const closeOneList = (): void => {
+    closeLi()
+    const top = listStack.pop()
+    if (top !== undefined) out.push(`</${top.tag}>`)
+  }
+
+  const closeAllLists = (): void => {
+    while (listStack.length > 0) closeOneList()
+  }
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] as string
+
     if (line.trimStart().startsWith('```')) {
       if (inCode) {
         out.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
@@ -69,7 +128,7 @@ export function renderMarkdown(markdown: string): string {
         inCode = false
       } else {
         flushParagraph()
-        closeList()
+        closeAllLists()
         inCode = true
       }
       continue
@@ -82,14 +141,32 @@ export function renderMarkdown(markdown: string): string {
 
     if (line.trim() === '') {
       flushParagraph()
-      closeList()
+      closeAllLists()
+      continue
+    }
+
+    // ---- 表格:本行是表格行 且 下一行是分隔行 ----
+    if (i + 1 < lines.length && isTableRow(line) && isSeparatorRow(splitRow(lines[i + 1] as string))) {
+      flushParagraph()
+      closeAllLists()
+      const separator = splitRow(lines[i + 1] as string)
+      const aligns = alignsOf(separator)
+      const header = splitRow(line)
+      const bodyRows: string[][] = []
+      let j = i + 2
+      while (j < lines.length && isTableRow(lines[j] as string)) {
+        bodyRows.push(splitRow(lines[j] as string))
+        j += 1
+      }
+      out.push(buildTable(header, aligns, bodyRows))
+      i = j - 1 // for 的 i++ 会把它指回第一行非表格行
       continue
     }
 
     const heading = /^(#{1,6})\s+(.*)$/.exec(line)
     if (heading !== null) {
       flushParagraph()
-      closeList()
+      closeAllLists()
       const level = heading[1].length
       out.push(`<h${level}>${renderInline(heading[2])}</h${level}>`)
       continue
@@ -97,30 +174,50 @@ export function renderMarkdown(markdown: string): string {
 
     if (/^\s*([-*_])\1{2}\s*$/.test(line)) {
       flushParagraph()
-      closeList()
+      closeAllLists()
       out.push('<hr />')
       continue
     }
 
+    // ---- 列表项(支持一级嵌套:缩进 ≥2 空格 → 上一 <li> 里开子列表) ----
+    const indent = line.length - line.trimStart().length
     const ordered = /^\s*\d+\.\s+(.*)$/.exec(line)
     const bullet = /^\s*[-*+]\s+(.*)$/.exec(line)
     const listItem = ordered ?? bullet
     if (listItem !== null) {
       flushParagraph()
       const tag = ordered === null ? 'ul' : 'ol'
-      if (listTag !== tag) {
-        closeList()
+      const top = listStack[listStack.length - 1]
+      const nested = indent >= 2 && listStack.length === 1
+      if (top === undefined) {
         out.push(`<${tag}>`)
-        listTag = tag
+        listStack.push({ tag, liOpen: true })
+      } else if (nested) {
+        // 关键:父 <li> 保持开放(不 closeLi),子列表才能嵌在它内部
+        out.push(`<${tag}>`)
+        listStack.push({ tag, liOpen: true })
+      } else if (listStack.length === 2 && indent < 2) {
+        // 从嵌套层回到顶层:先收掉嵌套列表(其 </li></ul>),再收父 <li>,再开新项
+        closeOneList()
+        closeLi()
+        const parent = listStack[listStack.length - 1]
+        out.push(`<li>${renderInline(listItem[1])}`)
+        if (parent !== undefined) parent.liOpen = true
+        continue
+      } else {
+        closeLi()
+        out.push(`<li>${renderInline(listItem[1])}`)
+        top.liOpen = true
+        continue
       }
-      out.push(`<li>${renderInline(listItem[1])}</li>`)
+      out.push(`<li>${renderInline(listItem[1])}`)
       continue
     }
 
     const quote = /^>\s?(.*)$/.exec(line)
     if (quote !== null) {
       flushParagraph()
-      closeList()
+      closeAllLists()
       out.push(`<blockquote>${renderInline(quote[1])}</blockquote>`)
       continue
     }
@@ -130,6 +227,6 @@ export function renderMarkdown(markdown: string): string {
 
   if (inCode) out.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
   flushParagraph()
-  closeList()
+  closeAllLists()
   return out.join('\n')
 }
