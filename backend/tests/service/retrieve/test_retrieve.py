@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.models import Chunk
 from app.repo import Repos
-from app.service.imports.pipeline import EMBEDDING_MODEL
+from app.service.embed import EMBEDDING_MODEL
 from app.service.retrieve import retrieve
 
 DIM = 1024
