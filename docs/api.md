@@ -74,6 +74,16 @@
 
 - `deduped=true` 表示同 `sha256` 已存在且已处理完，**不会再入队**，直接拿已有 `source_id`。
 - 415 = 扩展名不认识；413 = 超 50 MB；422 = 没带文件。
+- `no_llm=false` 且该账号没配 API Key → **400**（提示去设置页，或改勾「跳过 AI 判定」）。
+
+**导入时的标题结构二次加工**（`no_llm=false` 才跑）：
+流水线在建笔记之前让 LLM 规划标题结构，补上缺失标题、给章节加编号
+（`一、` / `2.1 ` / `2.1.3 `）、消除同级重名。**只动标题，正文不改**。
+跳过条件：正文 < 400 字 / 已有 ≥2 个标题且无重名无空章且 80% 带编号。
+失败静默降级（原结构保留，导入照常成功）。
+
+> ⚠️ **需要非推理模型**。推理模型（如 sensenova）会把 `max_tokens` 全用在 reasoning 上、
+> `content` 返回空，导致整理静默失败。实测 deepseek-flash 正常。
 
 ### `GET /api/sources/{source_id}`（已实现）
 
@@ -90,6 +100,7 @@
   "message": null,
   "warnings": [],
   "g2_skipped": false,
+      "headings_rewritten": true,
   "note_id": 7,
   "created_at": "2026-10-29T01:20:00+08:00",
   "job": { "id": 34, "status": "done", "attempts": 1, "last_error": null },
@@ -389,6 +400,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-30 | v6 | §2 新增**导入时标题结构二次加工**（LLM 规划 + 代码算编号；需非推理模型）；source 响应加 `headings_rewritten`；上传补 400（没配 API Key）
 | 2026-10-30 | v5 | 新增 **§9 认证**（注册/登录/me + 数据隔离）；**全站改为多用户**——所有业务接口需 `Authorization: Bearer`，`owner_id` 由 token 解出；`app_settings` 改每用户一行（章程随行归属），API Key 不再回退 `.env`；§7 移除「登录/注册」 |
 | 2026-10-30 | v4 | 新增 **§8 Charter 章程**（GET/POST generate/PUT）；worker 的 charter 改为 DB 优先（`resolve_charter`），§6 已知边界更新 |
 | 2026-10-29 | v1 | 首版：把已实现的 `/healthz`、`POST /api/sources`、`GET /api/sources/{id}` 固化，并定下待实现的 4 个查询接口，供线 L（前端）与线 M（后端）并行开发 |
