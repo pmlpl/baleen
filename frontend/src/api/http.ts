@@ -1,5 +1,7 @@
 /** 统一 fetch 封装:组件里不许直接 fetch(AGENTS.md §9),一律从这里走。 */
 
+import { getToken } from '../auth/token'
+
 export const BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? '/api'
 
 /** 少数不带 /api 前缀的端点:docs/api.md §1,/healthz 是历史原因,别改 */
@@ -56,9 +58,20 @@ async function readDetail(response: Response): Promise<string | null> {
   }
 }
 
+/**
+ * 401 的统一处理:由 main.ts 注册(清 token + 跳登录)。
+ * http.ts 不直接 import router —— 会形成 router → charterGate → api → http → router 的环。
+ */
+let onUnauthorized: (() => void) | null = null
+
+export function setUnauthorizedHandler(handler: () => void): void {
+  onUnauthorized = handler
+}
+
 async function parseResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const detail = await readDetail(response)
+    if (response.status === 401) onUnauthorized?.()
     throw new ApiError(
       response.status,
       detail ?? `请求失败(${response.status}:${response.statusText})`,
@@ -68,8 +81,14 @@ async function parseResponse<T>(response: Response): Promise<T> {
 }
 
 async function send(path: string, init: RequestInit): Promise<Response> {
+  // 这是所有请求的唯一汇聚点(postForm/del 也走这里),token 只在这一处注入
+  const token = getToken()
+  const headers: HeadersInit | undefined =
+    token === null
+      ? init.headers
+      : { ...(init.headers as Record<string, string> | undefined), Authorization: `Bearer ${token}` }
   try {
-    return await fetch(resolveUrl(path), init)
+    return await fetch(resolveUrl(path), { ...init, headers })
   } catch {
     // fetch 只在真正连不上时抛(TypeError):后端没起 / 代理没通
     throw new ApiError(NETWORK_STATUS, '连不上后端:网络请求失败(确认后端已启动)')
@@ -131,6 +150,8 @@ export const http = {
 export function describeApiError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === NETWORK_STATUS) return error.message
+    if (error.status === 401) return '登录已过期,请重新登录'
+    if (error.status === 403) return '没有权限'
     if (error.status === 404) return `后端接口还没就绪(404):${error.message}`
     if (error.status === 413) return '文件超过 50 MB,后端不接受(413)'
     if (error.status === 415) return `格式不支持(415):${error.message}`

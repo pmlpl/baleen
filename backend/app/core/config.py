@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     llm_model: str = "gpt-4o-mini"
     charter: str = DEFAULT_CHARTER
 
+    # ---------- 认证(JWT)----------
+    # ⚠️ 默认值仅供本地开发;部署前必须在 .env 里换成随机长串(改了会让已签发的 token 全部失效)
+    jwt_secret: str = "dev-only-insecure-secret-change-me"
+    jwt_expire_minutes: int = 60 * 24 * 7  # 7 天
+
     def resolve_charter(self) -> str:
         """charter 解析优先级:``baleen/charter.md`` 全文 > `CHARTER` 环境变量 > 内置默认。
 

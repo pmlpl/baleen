@@ -21,6 +21,7 @@ dependencies = [
     "sentence-transformers>=6.2.0",
     "arq>=0.28.0",
     "python-multipart>=0.0.32",
+    "pyjwt>=2.15.1",
 ]
 
 [dependency-groups]

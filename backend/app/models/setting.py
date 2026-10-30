@@ -1,14 +1,15 @@
-"""app_settings —— 运行时可改的模型配置(设置页),单行 id=1。
+"""app_settings —— 每个用户一行的运行时可改配置(设置页 + 章程)。
 
-DB 值优先于 .env 缺省;字段为 NULL 时回退 .env 对应项。api_key 明文存库
-(与 .env 同级别;单用户本地应用,可接受,响应里永不回显全文)。
+多用户后按 owner_id 唯一；charter 也在这里，所以每个账号有自己的一份章程。
+字段为 NULL 时:非密钥项(base_url/model)回退 .env 默认值,API Key 不回退(必须自己配)。
+响应里永不回显 key 全文。
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Text, func
+from sqlalchemy import BigInteger, DateTime, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -16,8 +17,10 @@ from app.models.base import Base
 
 class AppSettings(Base):
     __tablename__ = "app_settings"
+    __table_args__ = (UniqueConstraint("owner_id", name="app_settings_owner_uq"),)
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default=text("1"))
     llm_base_url: Mapped[str | None] = mapped_column(Text)
     llm_api_key: Mapped[str | None] = mapped_column(Text)
     llm_model: Mapped[str | None] = mapped_column(Text)

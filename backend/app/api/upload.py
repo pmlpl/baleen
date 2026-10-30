@@ -32,7 +32,7 @@ from fastapi import (
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import get_session
+from app.api.deps import CurrentOwnerDep, get_session
 from app.repo import Repos
 from app.service.parse.router import IMAGE_EXTS, PARSERS, UNSUPPORTED_MESSAGES
 from app.worker import STAGING_ROOT, enqueue_import
@@ -106,12 +106,14 @@ async def upload_source(
     response: Response,
     file: UploadFile,
     session: SessionDep,
+    owner_id: CurrentOwnerDep,
     no_llm: Annotated[
         bool, Query(description="跳过 G2(不写 G2 判定行,parse_meta 记 g2_skipped)")
     ] = False,
 ) -> UploadResponse:
     # 延迟导入:api 进程不因 import 本模块而加载 torch/解析栈,只在真正上传时才拉
     from app.service.imports.pipeline import DEDUPE_PREFIX, _store_blob
+    from app.service.llm.resolve import resolve_llm_config
 
     raw_name = Path(file.filename or "").name
     if not raw_name:
@@ -119,6 +121,15 @@ async def upload_source(
     ext = Path(raw_name).suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(status_code=415, detail=f"暂不支持的格式:{ext or '(无扩展名)'}")
+
+    # 预检:要跑 G2 却没配 API Key → 当场提示去设置页,别让任务在队列里静默降级
+    if not no_llm:
+        _base, api_key, _model = await resolve_llm_config(session, owner_id)
+        if not api_key:
+            raise HTTPException(
+                status_code=400,
+                detail="这个账号还没配置 API Key,请先到设置页配置,或勾选「跳过 AI 判定」后再上传",
+            )
 
     # 流式落暂存区(保留原文件名/扩展名,文件名本身是判定特征):边读边算 sha256、边限大小;
     # blob 仍由流水线存,这里先存一份让 source.storage_path 立即有效
@@ -147,7 +158,7 @@ async def upload_source(
     sha = digest.hexdigest()
     blob = _store_blob(staging.read_bytes(), sha)  # 内容寻址只有这一个实现(pipeline 私有函数)
 
-    repos = Repos(session, owner_id=1)
+    repos = Repos(session, owner_id=owner_id)
     source, _ = await repos.sources.create_or_get_by_sha256(
         sha256=sha,
         filename=raw_name,
@@ -171,7 +182,12 @@ async def upload_source(
         # queued/failed/dead:重入队(arq _job_id 幂等挡重复;队列丢失时也借此自愈)。
         # 此时暂存文件可能被任务用到,不删;真正的孤儿由 worker 启动时的 24h 清理兜底
         try:
-            await enqueue_import(str(staging), dedupe_key=DEDUPE_PREFIX + sha, no_llm=no_llm)
+            await enqueue_import(
+                str(staging),
+                dedupe_key=DEDUPE_PREFIX + sha,
+                no_llm=no_llm,
+                owner_id=owner_id,
+            )
         except Exception as exc:
             raise HTTPException(
                 status_code=503,
@@ -188,11 +204,13 @@ async def upload_source(
 
 
 @router.get("/sources/{source_id}", response_model=SourceStatus)
-async def get_source_status(source_id: int, session: SessionDep) -> SourceStatus:
+async def get_source_status(
+    source_id: int, session: SessionDep, owner_id: CurrentOwnerDep
+) -> SourceStatus:
     # 延迟导入:与流水线共用同一份 dedupe_key 前缀,不另写一套
     from app.service.imports.pipeline import DEDUPE_PREFIX
 
-    repos = Repos(session, owner_id=1)
+    repos = Repos(session, owner_id=owner_id)
     source = await repos.sources.get(source_id)
     if source is None:
         raise HTTPException(status_code=404, detail=f"source 不存在:{source_id}")

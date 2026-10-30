@@ -13,6 +13,7 @@ from .qa import QaMessage, QaSession
 from .review_run import ReviewRun
 from .setting import AppSettings
 from .source import Source
+from .user import User
 
 __all__ = [
     "AppSettings",
@@ -25,4 +26,5 @@ __all__ = [
     "QaSession",
     "ReviewRun",
     "Source",
+    "User",
 ]

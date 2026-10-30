@@ -375,7 +375,7 @@ def test_chat_web_fallback_when_kb_misses(
 
     qa_setup.hits = []  # 库内没命中
 
-    async def fake_tavily_key(session):  # noqa: ANN001
+    async def fake_tavily_key(session, owner_id):  # noqa: ANN001
         return "tvly-test"
 
     def fake_search(query, *, api_key, max_results=5):  # noqa: ANN001
@@ -421,7 +421,9 @@ def test_save_note_writes_file_and_enqueues_import(
     monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path / "staging")
     enqueued: list[dict] = []
 
-    async def fake_enqueue(file_path, *, dedupe_key, no_llm=False):  # noqa: ANN001
+    async def fake_enqueue(
+        file_path, *, dedupe_key, no_llm=False, owner_id=1
+    ):  # noqa: ANN001
         enqueued.append({"file": file_path, "no_llm": no_llm})
         return dedupe_key
 

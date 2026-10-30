@@ -14,7 +14,7 @@ import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { generateCharter, getCharter, saveCharter } from '../api/charter'
-import { markCharterSaved } from '../charterGate'
+import { markCharterSaved } from '../onboardingGate'
 
 defineOptions({ name: 'CharterWizard' })
 
@@ -212,7 +212,7 @@ onMounted(async () => {
     </header>
 
     <p v-if="hasCharter" class="note note--warn">
-      修改后立即生效，G2 判据随之更新。
+      修改后立即生效，之后导入笔记时会按新章程判断收还是不收。
     </p>
     <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
 

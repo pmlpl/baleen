@@ -22,6 +22,7 @@ from arq.connections import RedisSettings
 from app.core.config import ROOT_DIR, get_settings
 from app.core.db import session_factory
 from app.repo import Repos
+from app.service.llm import LLMClient
 from app.service.parse.blocks import empty_doc
 
 log = logging.getLogger(__name__)
@@ -66,7 +67,7 @@ def clean_stale_uploads(max_age_hours: int = STALE_UPLOAD_TTL_HOURS) -> list[str
     return removed
 
 
-async def _mark_g2_skipped(source_id: int) -> None:
+async def _mark_g2_skipped(source_id: int, owner_id: int) -> None:
     """no_llm 导入成功后打标记:parse_meta.g2_skipped=true;G2 的 review_runs 行保持不存在。
 
     写在 worker 而不是流水线里:本批文件边界不含 app/service/imports/(协调方确认)。
@@ -74,7 +75,7 @@ async def _mark_g2_skipped(source_id: int) -> None:
     dedupe 命中(之前带 G2 导入过)时不打,避免给真跑过 G2 的 source 冤记标记。
     """
     async with session_factory() as session:
-        repos = Repos(session, owner_id=1)
+        repos = Repos(session, owner_id=owner_id)
         source = await repos.sources.get(source_id)
         if source is None:
             return
@@ -89,22 +90,37 @@ async def _mark_g2_skipped(source_id: int) -> None:
         await session.commit()
 
 
-async def import_file(ctx: dict, file_path: str, *, no_llm: bool = False) -> dict:
-    """arq 任务:跑导入流水线。失败向上抛(arq 自动重试,流水线可续跑);成功删暂存文件。"""
+async def import_file(
+    ctx: dict, file_path: str, *, no_llm: bool = False, owner_id: int = 1
+) -> dict:
+    """arq 任务:跑导入流水线。失败向上抛(arq 自动重试,流水线可续跑);成功删暂存文件。
+
+    ``owner_id`` 由入队方(upload / save-note)传入,决定数据落在哪个账号下;
+    默认 1 只兼容历史任务,新任务必须显式传。
+    """
     # 延迟导入:上传 API 进程 import 本模块(拿 STAGING_ROOT/enqueue_import)时,
     # 不把 torch/解析栈拉进 api 进程
     from app.service.imports import run_import_async
-    from app.service.llm.resolve import resolve_charter
+    from app.service.llm.resolve import resolve_charter, resolve_llm_config
 
-    # 读 charter:DB(问卷生成的)优先 → charter.md 文件;G2 热用设置页/问卷的章程
+    # 读该用户的 charter 与 LLM 配置(api_key 不继承 .env;没配就传 None,流水线走降级口径)
     async with session_factory() as session:
-        charter = await resolve_charter(session)
+        charter = await resolve_charter(session, owner_id)
+        base_url, api_key, model = await resolve_llm_config(session, owner_id)
+    client = (
+        LLMClient(base_url=base_url, api_key=api_key, model=model) if api_key else None
+    )
 
     result = await run_import_async(
-        file_path, no_llm=no_llm, worker=WORKER_NAME, charter=charter
+        file_path,
+        no_llm=no_llm,
+        worker=WORKER_NAME,
+        charter=charter,
+        owner_id=owner_id,
+        client=client,
     )
     if no_llm and not result.deduped and result.source_id is not None:
-        await _mark_g2_skipped(result.source_id)
+        await _mark_g2_skipped(result.source_id, owner_id)
     _remove_staging(file_path)
     # 阶段3(ADR 0005):导入成功 → 摘要 + 自动建「新导入:xxx」会话。
     # best-effort:失败只记日志,不影响导入结果(ADR §2 验收标准)。
@@ -112,7 +128,9 @@ async def import_file(ctx: dict, file_path: str, *, no_llm: bool = False) -> dic
         try:
             from app.service.qa.summarizer import summarize_import
 
-            qa_session = await summarize_import(result.note_id, Path(file_path).name)
+            qa_session = await summarize_import(
+                result.note_id, Path(file_path).name, owner_id=owner_id
+            )
             if qa_session is not None:
                 log.info(
                     "导入后摘要会话已建: qa_sessions #%s(笔记 #%s)", qa_session.id, result.note_id
@@ -122,12 +140,20 @@ async def import_file(ctx: dict, file_path: str, *, no_llm: bool = False) -> dic
     return asdict(result)
 
 
-async def enqueue_import(file_path: str, *, dedupe_key: str, no_llm: bool = False) -> str | None:
+async def enqueue_import(
+    file_path: str, *, dedupe_key: str, no_llm: bool = False, owner_id: int
+) -> str | None:
     """入队导入任务。以 dedupe_key 作 arq job id:同 key 的在途任务会被 arq 幂等挡掉
-    (返回 None),重复上传/重复入队都安全。每次调用各开各的连接池,用完即关。"""
+    (返回 None),重复上传/重复入队都安全。每次调用各开各的连接池,用完即关。
+
+    ``owner_id`` 必传:决定导入产物归属哪个账号(多用户后不能默认成 1)。
+    dedupe_key 生产方应带上 owner 前缀,避免不同用户同内容互相去重。
+    """
     pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     try:
-        job = await pool.enqueue_job("import_file", file_path, no_llm=no_llm, _job_id=dedupe_key)
+        job = await pool.enqueue_job(
+            "import_file", file_path, no_llm=no_llm, owner_id=owner_id, _job_id=dedupe_key
+        )
         return job.job_id if job is not None else None
     finally:
         await pool.aclose()

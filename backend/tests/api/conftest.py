@@ -54,8 +54,17 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(upload_module, "STAGING_ROOT", tmp_path / "uploads")
     calls: list[dict[str, Any]] = []
 
-    async def fake_enqueue(file_path: str, *, dedupe_key: str, no_llm: bool = False) -> str | None:
-        calls.append({"file_path": file_path, "dedupe_key": dedupe_key, "no_llm": no_llm})
+    async def fake_enqueue(
+        file_path: str, *, dedupe_key: str, no_llm: bool = False, owner_id: int = 1
+    ) -> str | None:
+        calls.append(
+            {
+                "file_path": file_path,
+                "dedupe_key": dedupe_key,
+                "no_llm": no_llm,
+                "owner_id": owner_id,
+            }
+        )
         return dedupe_key
 
     monkeypatch.setattr(upload_module, "enqueue_import", fake_enqueue)
@@ -74,7 +83,15 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
             async def _setup() -> None:
                 shared["engine"] = create_async_engine(db_url)
                 shared["conn"] = await shared["engine"].connect()
+                # 先开事务,再插测试账号 —— 结束时整笔回滚,不污染开发库
                 shared["trans"] = await shared["conn"].begin()
+                # id=1 = 「库主人」:现有 API 测试造数据都写 owner_id=1,夹具账号对齐它
+                await shared["conn"].execute(
+                    text(
+                        "INSERT INTO users (id, username, password_hash) "
+                        "VALUES (1, 'test-user', 'x') ON CONFLICT (id) DO NOTHING"
+                    )
+                )
                 shared["factory"] = async_sessionmaker(
                     bind=shared["conn"],
                     expire_on_commit=False,
@@ -82,8 +99,23 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 )
 
             client.portal.call(_setup)
+
+            # 所有测试请求默认带上该账号的 token(现有 API 测试无需逐个改)
+            from app.service.auth.token import create_access_token
+
+            shared["token"] = create_access_token(1, "test-user")
+            client.headers["Authorization"] = f"Bearer {shared['token']}"
+            shared["owner_id"] = 1
+
             try:
-                yield SimpleNamespace(client=client, calls=calls, shared=shared, tmp_path=tmp_path)
+                yield SimpleNamespace(
+                    client=client,
+                    calls=calls,
+                    shared=shared,
+                    tmp_path=tmp_path,
+                    token=shared["token"],
+                    owner_id=1,
+                )
             finally:
 
                 async def _teardown() -> None:

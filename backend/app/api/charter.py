@@ -14,8 +14,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 
-from app.api.deps import SessionDep
-from app.api.library import OWNER_ID
+from app.api.deps import CurrentOwnerDep, SessionDep
 from app.repo.settings import SettingsRepo
 from app.service.charter.generator import generate_charter
 from app.service.llm import LLMClient
@@ -24,11 +23,11 @@ from app.service.llm.resolve import resolve_llm_config
 router = APIRouter(prefix="/api/charter", tags=["charter"])
 
 
-# ── LLM client 依赖(同 qa.py 模式:设置页 DB 配置优先,回退 .env) ──
+# ── LLM client 依赖(设置页 DB 配置优先;api_key 不继承 .env) ──
 
 
-async def get_llm_client(session: SessionDep) -> LLMClient:
-    base_url, api_key, model = await resolve_llm_config(session)
+async def get_llm_client(session: SessionDep, owner_id: CurrentOwnerDep) -> LLMClient:
+    base_url, api_key, model = await resolve_llm_config(session, owner_id)
     return LLMClient(base_url=base_url, api_key=api_key, model=model)
 
 
@@ -59,16 +58,18 @@ class CharterGenerateResponse(BaseModel):
 
 
 class CharterUpdate(BaseModel):
-    charter: str = Field(min_length=1, max_length=20000)
+    """charter 全文;空串 = 清空(删除该账号的章程,回退 charter.md 文件)。"""
+
+    charter: str = Field(max_length=20000)
 
 
 # ── 端点 ──
 
 
 @router.get("", response_model=CharterStatus)
-async def get_charter(session: SessionDep) -> CharterStatus:
+async def get_charter(session: SessionDep, owner_id: CurrentOwnerDep) -> CharterStatus:
     """查 charter:DB 有 → 返回全文 + has_charter=true;DB 无 → null + false(回退 charter.md)。"""
-    row = await SettingsRepo(session, OWNER_ID).get()
+    row = await SettingsRepo(session, owner_id).get()
     text = row.charter if row is not None else None
     return CharterStatus(has_charter=bool(text), charter=text)
 
@@ -81,8 +82,11 @@ async def generate(payload: CharterAnswers, llm: LLMClientDep) -> CharterGenerat
 
 
 @router.put("", response_model=CharterStatus)
-async def save_charter(payload: CharterUpdate, session: SessionDep) -> CharterStatus:
-    """保存 charter 到 DB(热生效:G2 下次调用即从 DB 读到新章程)。"""
-    await SettingsRepo(session, OWNER_ID).save(charter=payload.charter)
+async def save_charter(
+    payload: CharterUpdate, session: SessionDep, owner_id: CurrentOwnerDep
+) -> CharterStatus:
+    """保存 charter 到该用户的 DB 行(热生效:G2 下次调用即从 DB 读到新章程)。"""
+    await SettingsRepo(session, owner_id).save(charter=payload.charter)
     await session.commit()
-    return CharterStatus(has_charter=True, charter=payload.charter)
+    text = payload.charter.strip()
+    return CharterStatus(has_charter=bool(text), charter=text or None)

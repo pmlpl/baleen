@@ -37,7 +37,7 @@ def _summary_messages(title: str, text: str) -> list[dict[str, str]]:
 
 
 async def summarize_import(
-    note_id: int, filename: str, *, client: LLMClient | None = None
+    note_id: int, filename: str, *, owner_id: int = 1, client: LLMClient | None = None
 ) -> QaSession | None:
     """摘要 + 自动建「新导入:xxx」会话。
 
@@ -46,13 +46,13 @@ async def summarize_import(
     - 测试可注入 client 与 monkeypatch session_factory / LibraryRepo 方法
     """
     async with session_factory() as session:
-        repo = LibraryRepo(session, 1)
+        repo = LibraryRepo(session, owner_id)
         note = await repo.get_active_note(note_id)
         if note is None:
             return None
         parents = await repo.list_parent_chunks(note_id)
         text = "\n\n".join(p.text for p in parents)[:SUMMARY_MAX_CHARS]
-        base_url, api_key, model = await resolve_llm_config(session)
+        base_url, api_key, model = await resolve_llm_config(session, owner_id)
 
     if not text.strip():
         return None
@@ -65,8 +65,9 @@ async def summarize_import(
 
     title = f"{SESSION_TITLE_PREFIX}{filename}"[:SESSION_TITLE_CHARS]
     async with session_factory() as session:
-        qa_session = await QaRepo(session, 1).create_session(title)
-        await QaRepo(session, 1).add_message(
+        qa_repo = QaRepo(session, owner_id)
+        qa_session = await qa_repo.create_session(title)
+        await qa_repo.add_message(
             qa_session.id,
             role="assistant",
             content=summary,

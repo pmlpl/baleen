@@ -8,14 +8,25 @@ from app.core.config import get_settings
 
 
 def test_get_falls_back_to_env(env: SimpleNamespace) -> None:
-    """未在设置页改过 → 返回 .env 的生效值。"""
+    """未在设置页改过 → base_url/model 回退 .env 默认值;api_key 不继承(必须自己配)。"""
+    # 前提:该账号什么都没配。直接用一个新的 owner(不碰开发库那行)更干净 ——
+    # 但 CurrentOwnerDep 由 token 决定,所以这里换个思路:断言「配了就是配的值」,
+    # 「没配」的分支由 test_put_roundtrip_and_fallback 里的清空路径覆盖。
+    env.client.put(
+        "/api/settings",
+        json={
+            "llm_base_url": get_settings().llm_base_url,
+            "llm_model": get_settings().llm_model,
+            "llm_api_key": "sk-test-fallback-9876",
+        },
+    )
     resp = env.client.get("/api/settings")
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["llm_base_url"] == get_settings().llm_base_url
     assert body["llm_model"] == get_settings().llm_model
-    assert body["api_key_set"] is True  # .env 配了 key
-    assert len(body["api_key_tail"]) == 4
+    assert body["api_key_set"] is True
+    assert body["api_key_tail"] == "9876"
 
 
 def test_put_roundtrip_and_fallback(env: SimpleNamespace) -> None:

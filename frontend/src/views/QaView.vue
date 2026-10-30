@@ -9,6 +9,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
+import { getToken } from '../auth/token'
 import { describeApiError } from '../api/http'
 import { deleteSession, getSession, listSessions, saveSessionNote, streamChat } from '../api/qa'
 import type { QaMessage, QaSessionItem } from '../api/qa'
@@ -86,6 +87,32 @@ async function openSession(id: number): Promise<void> {
     errorText.value = describeApiError(error)
   } finally {
     loadingSession.value = false
+  }
+}
+
+/**
+ * 导出会话为 Markdown。
+ * 不能用 <a download>(浏览器无法给导航请求加 Authorization 头),改成 fetch + blob。
+ */
+async function exportSession(sessionId: number): Promise<void> {
+  try {
+    const token = getToken()
+    const resp = await fetch(`/api/qa/sessions/${sessionId}/export`, {
+      headers: token === null ? {} : { Authorization: `Bearer ${token}` },
+    })
+    if (!resp.ok) {
+      errorText.value = resp.status === 401 ? '登录已过期,请重新登录' : `导出失败(${resp.status})`
+      return
+    }
+    const text = await resp.text()
+    const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `session-${sessionId}.md`
+    link.click()
+    URL.revokeObjectURL(url)
+  } catch {
+    errorText.value = '导出失败:连不上后端'
   }
 }
 
@@ -234,15 +261,14 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
             <button class="session-open" type="button" :title="s.title" @click="openSession(s.id)">
               {{ s.title }}
             </button>
-            <a
+            <button
               class="session-export"
-              :href="`/api/qa/sessions/${s.id}/export`"
-              download
+              type="button"
               title="导出为 Markdown"
-              @click.stop
+              @click.stop="exportSession(s.id)"
             >
               ↓
-            </a>
+            </button>
             <button
               class="session-del"
               type="button"

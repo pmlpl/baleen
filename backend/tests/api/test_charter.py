@@ -42,6 +42,11 @@ def _chat(content: str, *, total: int = 20) -> bytes:
     ).encode()
 
 
+def _clear(env: SimpleNamespace) -> None:
+    """把该账号的 charter 清空(UPDATE 空串 = 清空,回退 charter.md)。"""
+    assert env.client.put("/api/charter", json={"charter": ""}).status_code == 200
+
+
 @pytest.fixture
 def charter_llm(env: SimpleNamespace) -> SimpleNamespace:
     """env + 假 LLM(覆盖 charter_module.get_llm_client)。"""
@@ -67,6 +72,8 @@ def charter_llm(env: SimpleNamespace) -> SimpleNamespace:
 
 def test_get_no_charter(env: SimpleNamespace) -> None:
     """DB 没有 charter(刚加的列,默认 NULL)→ has_charter=false, charter=null。"""
+    # 夹具账号可能已有章程(开发库残留),先清空再断言
+    _clear(env)
     resp = env.client.get("/api/charter")
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -93,6 +100,7 @@ def test_generate_returns_charter_text(
     env: SimpleNamespace, charter_llm: SimpleNamespace
 ) -> None:
     """POST generate → LLM 生成 charter 文本(不落库,GET 仍 false)。"""
+    _clear(env)
     charter_llm.responses.append((200, _chat("## 这是谁的库\n我是一名软件工程师。")))
     resp = env.client.post(
         "/api/charter/generate",

@@ -8,6 +8,7 @@ import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { getSettings, updateSettings } from '../api/settings'
+import { markKeyConfigured } from '../onboardingGate'
 
 const router = useRouter()
 
@@ -61,6 +62,8 @@ async function save(): Promise<void> {
     apiKey.value = ''
     tavilyKey.value = ''
     saved.value = true
+    // 通知闸门:配好 key 后可以进入下一步(章程)
+    markKeyConfigured(s.api_key_set)
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {

@@ -25,8 +25,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
-from app.api.deps import SessionDep
-from app.api.library import OWNER_ID, RetrieveDep
+from app.api.deps import CurrentOwnerDep, SessionDep
+from app.api.library import RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import QaRepo
 from app.service.llm import LLMClient, LLMError
@@ -122,12 +122,12 @@ class SessionDetail(BaseModel):
     messages: list[MessageOut]
 
 
-async def get_llm_client(session: SessionDep) -> LLMClient:
+async def get_llm_client(session: SessionDep, owner_id: CurrentOwnerDep) -> LLMClient:
     """LLM client 工厂:设置页(DB 单行)优先,回退 .env;每次请求现读 → 热生效。
 
     测试用 ``dependency_overrides`` 换成带 FakeTransport 的假 client。
     """
-    base_url, api_key, model = await resolve_llm_config(session)
+    base_url, api_key, model = await resolve_llm_config(session, owner_id)
     return LLMClient(base_url=base_url, api_key=api_key, model=model)
 
 
@@ -190,10 +190,14 @@ def _message_out(m: QaMessage) -> MessageOut:
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
-    payload: ChatRequest, retrieve: RetrieveDep, llm: LLMClientDep, session: SessionDep
+    payload: ChatRequest,
+    retrieve: RetrieveDep,
+    llm: LLMClientDep,
+    session: SessionDep,
+    owner_id: CurrentOwnerDep,
 ) -> ChatResponse:
     started = time.perf_counter()
-    repo = QaRepo(session, OWNER_ID)
+    repo = QaRepo(session, owner_id)
 
     # 1) 会话:无则建(title = 首问前 30 字)
     if payload.session_id is None:
@@ -227,7 +231,7 @@ async def chat(
             search_query = payload.question
 
     # 4) 检索 top-k + 组装本轮 LLM 消息(拿到含 <context> 的原文,存 llm_content 供下轮重放)
-    result = await retrieve(search_query, top_k=payload.top_k, owner_id=OWNER_ID)
+    result = await retrieve(search_query, top_k=payload.top_k, owner_id=owner_id)
     kb_hits = [
         ContextHit(
             note_id=h.note_id,
@@ -243,7 +247,7 @@ async def chat(
 
     # 4.5) 工具链兜底:库内没命中 OR 命中但不相关(正文不含查询关键词) → 联网搜索
     web_results: list[dict[str, str]] = []
-    tavily_key = await resolve_tavily_key(session)
+    tavily_key = await resolve_tavily_key(session, owner_id)
     kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
     if kb_irrelevant and tavily_key:
         try:
@@ -296,7 +300,11 @@ def _sse(event: str, data: dict) -> str:
 
 @router.post("/chat/stream")
 async def chat_stream_endpoint(
-    payload: ChatRequest, retrieve: RetrieveDep, llm: LLMClientDep, session: SessionDep
+    payload: ChatRequest,
+    retrieve: RetrieveDep,
+    llm: LLMClientDep,
+    session: SessionDep,
+    owner_id: CurrentOwnerDep,
 ) -> StreamingResponse:
     """流式问答:SSE 事件流 meta → delta* → done(error 兜底)。
 
@@ -304,7 +312,7 @@ async def chat_stream_endpoint(
     轮次开始即 commit 用户消息(回答失败它也不丢),回答完成再 commit 助手消息。
     """
     started = time.perf_counter()
-    repo = QaRepo(session, OWNER_ID)
+    repo = QaRepo(session, owner_id)
 
     if payload.session_id is None:
         qa_session = await repo.create_session(payload.question[:TITLE_CHARS])
@@ -332,7 +340,7 @@ async def chat_stream_endpoint(
         except LLMError:
             search_query = payload.question
 
-    result = await retrieve(search_query, top_k=payload.top_k, owner_id=OWNER_ID)
+    result = await retrieve(search_query, top_k=payload.top_k, owner_id=owner_id)
     kb_hits = [
         ContextHit(
             note_id=h.note_id,
@@ -348,7 +356,7 @@ async def chat_stream_endpoint(
 
     # 工具链兜底:库内没命中 OR 命中但不相关 → 联网搜索
     web_results: list[dict[str, str]] = []
-    tavily_key = await resolve_tavily_key(session)
+    tavily_key = await resolve_tavily_key(session, owner_id)
     kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
     if kb_irrelevant and tavily_key:
         try:
@@ -442,9 +450,11 @@ async def chat_stream_endpoint(
 
 @router.get("/sessions", response_model=SessionsPage)
 async def list_sessions(
-    session: SessionDep, limit: Annotated[int, Query(ge=1, le=100)] = 50
+    session: SessionDep,
+    owner_id: CurrentOwnerDep,
+    limit: Annotated[int, Query(ge=1, le=100)] = 50,
 ) -> SessionsPage:
-    total, rows = await QaRepo(session, OWNER_ID).list_sessions(limit=limit)
+    total, rows = await QaRepo(session, owner_id).list_sessions(limit=limit)
     return SessionsPage(
         total=total,
         items=[SessionItem(id=s.id, title=s.title, created_at=s.created_at) for s in rows],
@@ -452,8 +462,10 @@ async def list_sessions(
 
 
 @router.get("/sessions/{session_id}", response_model=SessionDetail)
-async def get_session_detail(session_id: int, session: SessionDep) -> SessionDetail:
-    repo = QaRepo(session, OWNER_ID)
+async def get_session_detail(
+    session_id: int, session: SessionDep, owner_id: CurrentOwnerDep
+) -> SessionDetail:
+    repo = QaRepo(session, owner_id)
     qa_session = await repo.get_session(session_id)
     if qa_session is None:
         raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
@@ -467,8 +479,10 @@ async def get_session_detail(session_id: int, session: SessionDep) -> SessionDet
 
 
 @router.delete("/sessions/{session_id}", status_code=204)
-async def delete_session(session_id: int, session: SessionDep) -> None:
-    deleted = await QaRepo(session, OWNER_ID).delete_session(session_id)
+async def delete_session(
+    session_id: int, session: SessionDep, owner_id: CurrentOwnerDep
+) -> None:
+    deleted = await QaRepo(session, owner_id).delete_session(session_id)
     if not deleted:
         raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
     await session.commit()
@@ -509,9 +523,11 @@ def _export_markdown(qa_session: QaSession, messages: list[QaMessage]) -> str:
 
 
 @router.get("/sessions/{session_id}/export")
-async def export_session(session_id: int, session: SessionDep) -> Response:
+async def export_session(
+    session_id: int, session: SessionDep, owner_id: CurrentOwnerDep
+) -> Response:
     """导出会话为 Markdown:浏览器下载一份,同时在 tmp/qa_exports/ 落一份给 agent 读。"""
-    repo = QaRepo(session, OWNER_ID)
+    repo = QaRepo(session, owner_id)
     qa_session = await repo.get_session(session_id)
     if qa_session is None:
         raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
@@ -537,13 +553,13 @@ class SaveNoteResponse(BaseModel):
 
 @router.post("/sessions/{session_id}/save-note", response_model=SaveNoteResponse)
 async def save_session_as_note(
-    session_id: int, llm: LLMClientDep, session: SessionDep
+    session_id: int, llm: LLMClientDep, session: SessionDep, owner_id: CurrentOwnerDep
 ) -> SaveNoteResponse:
     """阶段4(D2=B):把会话整理成 Markdown 笔记 → 落 notes_out/ → no_llm 入库(异步)。
 
     直接入库跳过 G2(来源是自家整理产物);G0/G1/切块/向量化照常走,保证可检索。
     """
-    repo = QaRepo(session, OWNER_ID)
+    repo = QaRepo(session, owner_id)
     qa_session = await repo.get_session(session_id)
     if qa_session is None:
         raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
@@ -570,7 +586,9 @@ async def save_session_as_note(
     staging_path = STAGING_ROOT / filename
     staging_path.write_text(note_md, encoding="utf-8")
     dedupe_key = hashlib.sha256(note_md.encode("utf-8")).hexdigest()
-    job_id = await enqueue_import(str(staging_path), dedupe_key=dedupe_key, no_llm=True)
+    job_id = await enqueue_import(
+        str(staging_path), dedupe_key=dedupe_key, no_llm=True, owner_id=owner_id
+    )
 
     return SaveNoteResponse(
         note_file=f"notes_out/{filename}",

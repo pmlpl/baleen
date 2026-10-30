@@ -21,12 +21,11 @@ from typing import Annotated, Any, Protocol
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
-from app.api.deps import SessionDep
+from app.api.deps import CurrentOwnerDep, SessionDep
 from app.repo.library import LibraryRepo
 
 router = APIRouter(prefix="/api", tags=["library"])
 
-OWNER_ID = 1  # 单用户,写死 1(AGENTS §5 决策 11);业务表都有 owner_id 列,查询只走 Repo
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -162,11 +161,12 @@ OffsetQuery = Annotated[int, Query(ge=0, description="偏移,默认 0")]
 @router.get("/sources", response_model=SourcesPage)
 async def list_sources(
     session: SessionDep,
+    owner_id: CurrentOwnerDep,
     limit: LimitQuery = DEFAULT_LIMIT,
     offset: OffsetQuery = 0,
     parse_status: Annotated[str | None, Query(description="按解析状态过滤,可省略")] = None,
 ) -> SourcesPage:
-    repo = LibraryRepo(session, OWNER_ID)
+    repo = LibraryRepo(session, owner_id)
     total, rows = await repo.list_sources(parse_status=parse_status, limit=limit, offset=offset)
     note_ids = await repo.note_ids_by_source([source.id for source in rows])
     items = [
@@ -188,11 +188,12 @@ async def list_sources(
 @router.get("/notes", response_model=NotesPage)
 async def list_notes(
     session: SessionDep,
+    owner_id: CurrentOwnerDep,
     limit: LimitQuery = DEFAULT_LIMIT,
     offset: OffsetQuery = 0,
     q: Annotated[str | None, Query(description="标题模糊匹配(ILIKE),不走向量")] = None,
 ) -> NotesPage:
-    repo = LibraryRepo(session, OWNER_ID)
+    repo = LibraryRepo(session, owner_id)
     total, rows = await repo.list_notes(q=q, limit=limit, offset=offset)
     counts = await repo.parent_chunk_counts([note.id for note in rows])
     items = [
@@ -213,8 +214,10 @@ async def list_notes(
 
 
 @router.get("/notes/{note_id}", response_model=NoteDetailOut)
-async def get_note_detail(note_id: int, session: SessionDep) -> NoteDetailOut:
-    repo = LibraryRepo(session, OWNER_ID)
+async def get_note_detail(
+    note_id: int, session: SessionDep, owner_id: CurrentOwnerDep
+) -> NoteDetailOut:
+    repo = LibraryRepo(session, owner_id)
     note = await repo.get_active_note(note_id)
     if note is None:
         raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
@@ -242,10 +245,12 @@ async def get_note_detail(note_id: int, session: SessionDep) -> NoteDetailOut:
 
 
 @router.post("/search", response_model=SearchResponse)
-async def search_knowledge(payload: SearchRequest, retrieve: RetrieveDep) -> SearchResponse:
+async def search_knowledge(
+    payload: SearchRequest, retrieve: RetrieveDep, owner_id: CurrentOwnerDep
+) -> SearchResponse:
     started = time.perf_counter()
     # 直接复用线 K 的检索:双路召回 + RRF 融合 + small-to-big 全在 service 层,这里只做映射
-    result = await retrieve(payload.query, top_k=payload.top_k, owner_id=OWNER_ID)
+    result = await retrieve(payload.query, top_k=payload.top_k, owner_id=owner_id)
     took_ms = int(round((time.perf_counter() - started) * 1000))
     return SearchResponse(
         query=payload.query,

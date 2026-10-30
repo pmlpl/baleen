@@ -177,7 +177,7 @@ onBeforeUnmount(() => {
               {{ describeParse(item.source).text }}
             </span>
             <span v-if="item.deduped" class="badge badge--neutral">已存在,未重复入库</span>
-            <span v-if="item.source.g2_skipped" class="badge badge--neutral">G2 已跳过</span>
+            <span v-if="item.source.g2_skipped" class="badge badge--neutral">已跳过归属判断</span>
             <span class="muted mono">sid #{{ item.source.id }}</span>
             <RouterLink
               v-if="item.source.note_id !== null"
@@ -211,7 +211,7 @@ onBeforeUnmount(() => {
               </ul>
               <p v-else class="muted">(这一关没给理由)</p>
             </div>
-            <p v-if="item.source.review_runs.length === 0" class="muted">还没有闸门记录</p>
+            <p v-if="item.source.review_runs.length === 0" class="muted">还没有判定记录</p>
           </div>
 
           <button
@@ -227,7 +227,7 @@ onBeforeUnmount(() => {
     </ul>
 
     <p v-else class="empty">
-      还没有导入记录。选几个文件试试 —— 处理进度、三道闸的判定和理由都会出现在这里。
+      还没有导入记录。选几个文件试试 —— 处理进度、每一道的判断结果和理由都会出现在这里。
     </p>
   </section>
 </template>

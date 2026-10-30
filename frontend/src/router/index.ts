@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
-import { ensureCharterChecked } from '../charterGate'
+import { ensureGateChecked } from '../onboardingGate'
+import { useAuthStore } from '../stores/auth'
 
 // 五页界面故意用静态 import,不做路由懒加载:
 // 1) 总共就 5 个视图,体积很小,拆 chunk 省不下多少;
@@ -9,6 +10,7 @@ import { ensureCharterChecked } from '../charterGate'
 import CharterWizard from '../views/CharterWizard.vue'
 import ImportView from '../views/ImportView.vue'
 import LibraryView from '../views/LibraryView.vue'
+import LoginView from '../views/LoginView.vue'
 import NoteView from '../views/NoteView.vue'
 import QaView from '../views/QaView.vue'
 import SearchView from '../views/SearchView.vue'
@@ -18,6 +20,7 @@ const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
     { path: '/', redirect: { name: 'import' } },
+    { path: '/login', name: 'login', component: LoginView },
     { path: '/import', name: 'import', component: ImportView },
     { path: '/notes', name: 'notes', component: LibraryView },
     { path: '/notes/:id', name: 'note', component: NoteView, props: true },
@@ -32,15 +35,33 @@ const router = createRouter({
 })
 
 /**
- * 章程闸门:没填过问卷的话,除 /charter 外一概拦回 /charter。
- * 单用户无登录,「首次登录」= 首次访问且 DB 无 charter。
- * 检查只做一次(结果缓存在 charterGate),后端不可用时放行不锁死。
+ * 引导闸门,顺序固定:登录 → 配 API Key → 填章程 → 正常使用。
+ *
+ * 用 auth store 的 restored 标志等启动恢复完成再判断,否则刷新页面会被误判未登录。
+ * 后端不可用时 ensureGateChecked 返回「都已完成」,不把用户锁在门外。
  */
 router.beforeEach(async (to) => {
-  const done = await ensureCharterChecked()
-  if (!done && to.name !== 'charter') {
-    return { name: 'charter' }
+  const auth = useAuthStore()
+  if (!auth.restored) await auth.restore()
+
+  // ① 未登录:只能待在 /login
+  if (!auth.isAuthenticated) {
+    return to.name === 'login' ? true : { name: 'login' }
   }
+  // 已登录却访问 /login → 回首页(继续后面的引导)
+  if (to.name === 'login') return { name: 'import' }
+
+  // ② 已登录但还没配 API Key:只能去设置页(或章程页,但先配 key)
+  const gate = await ensureGateChecked()
+  if (!gate.hasKey) {
+    return to.name === 'settings' ? true : { name: 'settings' }
+  }
+
+  // ③ 配了 key 但没填章程:只能去章程页
+  if (!gate.hasCharter) {
+    return to.name === 'charter' ? true : { name: 'charter' }
+  }
+
   return true
 })
 

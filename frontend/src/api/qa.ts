@@ -3,6 +3,7 @@
  * POST /api/qa/chat —— session_id 省略自动建会话;GET sessions 列表/详情;DELETE 删会话。
  * 字段名逐字照后端 app/api/qa.py,不许改名。
  */
+import { getToken } from '../auth/token'
 import { BASE_URL, http } from './http'
 
 export interface QaCitation {
@@ -117,9 +118,16 @@ export async function streamChat(
 ): Promise<void> {
   const body: ChatRequest = { question, top_k: topK }
   if (sessionId !== null) body.session_id = sessionId
+  // 裸 fetch(不是 http 封装):SSE 需要读流,这里手动带上 token
+  const token = getToken()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+  }
+  if (token !== null) headers.Authorization = `Bearer ${token}`
   const resp = await fetch(`${BASE_URL}/qa/chat/stream`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+    headers,
     body: JSON.stringify(body),
     signal,
   })
