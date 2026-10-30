@@ -312,23 +312,25 @@ function qualityLabel(quality: string | null): string {
       <div class="reader">
         <!-- 左栏:锚点目录(sticky,独立滚动) -->
         <aside class="toc" aria-label="章节目录">
-          <p class="toc-title">目录</p>
-          <ul v-if="toc.length > 0" ref="tocListEl" class="toc-list">
-            <li v-for="entry in toc" :key="entry.parent.chunk_id">
-              <button
-                class="toc-item"
-                :class="{ 'toc-item--active': entry.parent.chunk_id === activeId }"
-                :style="{ paddingLeft: `${10 + entry.depth * 14}px` }"
-                type="button"
-                :data-sec="entry.parent.chunk_id"
-                :title="entry.parent.heading_path"
-                @click="scrollToSection(entry.parent.chunk_id)"
-              >
-                {{ entry.label }}
-              </button>
-            </li>
-          </ul>
-          <p v-else class="muted toc-empty">这篇没有分节记录。</p>
+          <div class="toc-inner">
+            <p class="toc-title">目录</p>
+            <ul v-if="toc.length > 0" ref="tocListEl" class="toc-list">
+              <li v-for="entry in toc" :key="entry.parent.chunk_id">
+                <button
+                  class="toc-item"
+                  :class="{ 'toc-item--active': entry.parent.chunk_id === activeId }"
+                  :style="{ paddingLeft: `${10 + entry.depth * 14}px` }"
+                  type="button"
+                  :data-sec="entry.parent.chunk_id"
+                  :title="entry.parent.heading_path"
+                  @click="scrollToSection(entry.parent.chunk_id)"
+                >
+                  {{ entry.label }}
+                </button>
+              </li>
+            </ul>
+            <p v-else class="muted toc-empty">这篇没有分节记录。</p>
+          </div>
         </aside>
 
         <!-- 右栏:整篇连续正文,每节一个锚点 -->
@@ -386,19 +388,24 @@ function qualityLabel(quality: string | null): string {
   display: grid;
   grid-template-columns: 236px minmax(0, 1fr);
   gap: 24px;
-  align-items: start;
+  /* stretch(默认):左栏卡片拉伸到与右栏同高,两栏底边对齐成一条水平线 */
+  align-items: stretch;
 }
 
-/* 左栏:锚点目录,随页面固定 */
+/* 左栏:卡片随右栏拉伸;内层 sticky,滚动时目录仍跟随视口 */
 .toc {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  min-width: 0;
+}
+
+.toc-inner {
   position: sticky;
   top: 16px;
   max-height: calc(100vh - 140px);
   overflow-y: auto;
   padding: 14px 10px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--panel);
 }
 
 .toc-title {
@@ -535,7 +542,7 @@ function qualityLabel(quality: string | null): string {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .toc {
+  .toc-inner {
     position: static;
     max-height: 240px;
   }
