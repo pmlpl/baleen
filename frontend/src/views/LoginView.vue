@@ -7,6 +7,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
+import PasswordInput from '../components/PasswordInput.vue'
 import { useAuthStore } from '../stores/auth'
 
 defineOptions({ name: 'LoginView' })
@@ -94,10 +95,8 @@ async function submit(): Promise<void> {
         </label>
         <label class="field">
           <span class="field-label">密码</span>
-          <input
+          <PasswordInput
             v-model="password"
-            class="input"
-            type="password"
             :autocomplete="mode === 'login' ? 'current-password' : 'new-password'"
             placeholder="至少 8 个字符"
           />

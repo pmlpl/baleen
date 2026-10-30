@@ -8,6 +8,7 @@ import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { getSettings, updateSettings } from '../api/settings'
+import PasswordInput from '../components/PasswordInput.vue'
 import { markKeyConfigured } from '../onboardingGate'
 
 const router = useRouter()
@@ -104,10 +105,8 @@ onMounted(() => {
       </label>
       <label class="field">
         <span class="field-label">API Key</span>
-        <input
+        <PasswordInput
           v-model="apiKey"
-          class="input"
-          type="password"
           placeholder="留空保持不变"
           autocomplete="off"
         />
@@ -115,10 +114,8 @@ onMounted(() => {
       </label>
       <label class="field">
         <span class="field-label">Tavily API Key(联网搜索,可选)</span>
-        <input
+        <PasswordInput
           v-model="tavilyKey"
-          class="input"
-          type="password"
           placeholder="留空保持不变"
           autocomplete="off"
         />
