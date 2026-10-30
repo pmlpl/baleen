@@ -9,10 +9,10 @@
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import CurrentOwnerDep, SessionDep
 from app.repo.settings import SettingsRepo
@@ -42,8 +42,17 @@ class CharterStatus(BaseModel):
     charter: str | None  # 有则返回全文,无则 null
 
 
+def _str_list(max_items: int = 12, max_len: int = 60) -> Any:
+    """多选字段的校验:字符串列表,截断条数与单条长度。"""
+
+    def check(value: list[str]) -> list[str]:
+        return [v.strip()[:max_len] for v in value if isinstance(v, str) and v.strip()][:max_items]
+
+    return check
+
+
 class CharterAnswers(BaseModel):
-    """问卷答案:5 个字段对应 charter.md 的各个段落。"""
+    """问卷答案:字段对应向导各步,全部可空(旧版客户端少传字段也兼容)。"""
 
     direction: str = Field(default="", max_length=200)  # 你是什么方向
     purpose: str = Field(default="", max_length=200)  # 这个库用来做什么
@@ -51,6 +60,16 @@ class CharterAnswers(BaseModel):
     reject: list[str] = Field(default_factory=list)  # 不收什么(多选)
     unsure: str = Field(default="collect_low")  # 拿不准怎么办:collect_low/reject/discuss
     extra: str = Field(default="", max_length=1000)  # 补充说明
+    # --- 扩展问卷(每步多选 + 自填) ---
+    domains: list[str] = Field(default_factory=list)  # 技术领域
+    sources: list[str] = Field(default_factory=list)  # 笔记来源偏好
+    formats: list[str] = Field(default_factory=list)  # 喜欢的笔记形态
+    quality_marks: list[str] = Field(default_factory=list)  # 好笔记的标准
+
+    @field_validator("domains", "sources", "formats", "quality_marks")
+    @classmethod
+    def _clean_lists(cls, value: list[str]) -> list[str]:
+        return _str_list()(value)
 
 
 class CharterGenerateResponse(BaseModel):

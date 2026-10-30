@@ -147,3 +147,47 @@ def test_generate_prompt_contains_answers(
     assert "数据集说明" in messages_text
     assert "日志文件" in messages_text
     assert "数据质量" in messages_text
+
+
+def test_generate_prompt_contains_extended_answers(
+    env: SimpleNamespace, charter_llm: SimpleNamespace
+) -> None:
+    """扩展问卷(领域/来源/形态/标准)必须进到 LLM 的 prompt 里。"""
+    charter_llm.responses.append((200, _chat("charter text")))
+    env.client.post(
+        "/api/charter/generate",
+        json={
+            "direction": "后端开发",
+            "purpose": "项目沉淀",
+            "collect": ["技术文档"],
+            "reject": ["单据"],
+            "unsure": "collect_low",
+            "extra": "",
+            "domains": ["后端 / 服务端", "数据库"],
+            "sources": ["项目复盘"],
+            "formats": ["步骤式教程"],
+            "quality_marks": ["有代码示例"],
+        },
+    )
+    raw_body = charter_llm.transports[-1].calls[0]["body"]
+    if isinstance(raw_body, bytes):
+        raw_body = raw_body.decode("utf-8")
+    parsed = json.loads(raw_body)
+    messages_text = " ".join(m["content"] for m in parsed["messages"])
+    assert "后端 / 服务端" in messages_text
+    assert "数据库" in messages_text
+    assert "项目复盘" in messages_text
+    assert "步骤式教程" in messages_text
+    assert "有代码示例" in messages_text
+
+
+def test_generate_accepts_legacy_payload_without_new_fields(
+    env: SimpleNamespace, charter_llm: SimpleNamespace
+) -> None:
+    """旧客户端不传扩展字段 → 照常生成(向后兼容)。"""
+    charter_llm.responses.append((200, _chat("ok")))
+    resp = env.client.post(
+        "/api/charter/generate",
+        json={"direction": "测试", "purpose": "测试", "collect": [], "reject": []},
+    )
+    assert resp.status_code == 200, resp.text

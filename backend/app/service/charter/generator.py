@@ -36,17 +36,27 @@ def _charter_messages(answers: dict) -> list[dict[str, str]]:
     unsure_key = answers.get("unsure", "collect_low")
     extra = answers.get("extra", "").strip()
 
+    # 扩展问卷字段(旧客户端不传 = 空列表,prompt 里显示未填)
+    domains = [str(d).strip() for d in answers.get("domains") or [] if str(d).strip()]
+    sources = [str(d).strip() for d in answers.get("sources") or [] if str(d).strip()]
+    formats = [str(d).strip() for d in answers.get("formats") or [] if str(d).strip()]
+    quality_marks = [str(d).strip() for d in answers.get("quality_marks") or [] if str(d).strip()]
+
     unsure_text = _UNSURE_MAP.get(unsure_key, _UNSURE_MAP["collect_low"])
 
     collect_items = "\n".join(f"- {c}" for c in collect) if collect else "- （未选择）"
     reject_items = "\n".join(f"- {r}" for r in reject) if reject else "- （未选择）"
+    domain_items = "、".join(domains) if domains else "（未填）"
+    source_items = "、".join(sources) if sources else "（未填）"
+    format_items = "\n".join(f"- {f}" for f in formats) if formats else "- （未填）"
+    quality_items = "\n".join(f"- {q}" for q in quality_marks) if quality_marks else "- （未填）"
 
     system = (
         "你是个人笔记库的章程生成助手。根据用户的问卷回答,生成一份完整的知识库章程(charter)。\n"
         "章程决定 G2 归属闸怎么判——它不是技术配置,是用户自己的判断标准。\n\n"
         "输出格式(Markdown,直接输出正文,不要客套开头):\n"
-        "## 这是谁的库\n（根据用户的方向和用途写一段话）\n\n"
-        "## 收什么\n（根据用户选择,每条带说明和例子,用用户自己的话）\n\n"
+        "## 这是谁的库\n（结合方向、用途、技术领域写一段话）\n\n"
+        "## 收什么\n（综合「想收什么」与「来源偏好」,每条带说明和例子,用用户自己的话）\n\n"
         "## 不能收什么\n"
         "（客观无价值的:空壳文件、测试文件、壁纸表情包截图。"
         "这些不是偏好而是硬底线,写成一节直接列出,不要让用户取舍）\n\n"
@@ -56,19 +66,28 @@ def _charter_messages(answers: dict) -> list[dict[str, str]]:
         "（默认规则:大部分是行政内容只抽技术段;"
         "整篇不像笔记但有技术话题先提出来聊;"
         "以内容为准不看文件名）\n\n"
+        "## 笔记长什么样\n"
+        "（根据「喜欢的笔记形态」写:整理笔记时按这些形态组织内容,每条带一个例子）\n\n"
         "## 拿不准的时候怎么办\n（根据用户选择展开）\n\n"
-        "## 判据\n（默认判据:复述别人定的规则不是知识,自己踩坑想通了才是。可以适当展开）\n\n"
+        "## 判据\n"
+        "（默认判据:复述别人定的规则不是知识,自己踩坑想通了才是;"
+        "再结合「好笔记的标准」展开,标准可以适当展开成可操作的判断句）\n\n"
         "## 我自己想补的 / 想删的\n（用户的补充说明,没有就省略此段）\n\n"
         "规则:\n"
         "1. 用用户自己的话,不要照搬这个 prompt 里的措辞;\n"
         "2. 中文;\n"
         "3. 每条规则要有具体例子;\n"
-        "4. 「拿不准」是★最重要的一条,要标注并放在显著位置。"
+        "4. 「拿不准」是★最重要的一条,要标注并放在显著位置;"
+        "5. 「笔记长什么样」「判据」两节如果用户完全没填,给通用默认即可,别硬编。"
     )
     user = (
         f"[方向]{direction or '（未填）'}\n"
         f"[用途]{purpose or '（未填）'}\n"
+        f"[技术领域]{domain_items}\n"
         f"[想收什么]\n{collect_items}\n"
+        f"[来源偏好]{source_items}\n"
+        f"[喜欢的笔记形态]\n{format_items}\n"
+        f"[好笔记的标准]\n{quality_items}\n"
         f"[明确不能收(客观无价值,固定)]空文件/hello world/测试文件;"
         f"壁纸/表情包/明星照片/随手截图\n"
         f"[倾向不收(边界内容,收不收看用途)]\n{reject_items}\n"

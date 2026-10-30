@@ -16,6 +16,14 @@ export interface CharterAnswers {
   reject: string[]
   unsure: string
   extra: string
+  /** 技术领域多选(扩展问卷) */
+  domains?: string[]
+  /** 笔记来源偏好 */
+  sources?: string[]
+  /** 喜欢的笔记形态 */
+  formats?: string[]
+  /** 好笔记的标准 */
+  quality_marks?: string[]
 }
 
 export interface CharterGenerateResponse {

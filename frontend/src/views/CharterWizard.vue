@@ -69,6 +69,71 @@ function toggleReject(item: string): void {
   else selectedReject.value.push(item)
 }
 
+// Step 3/4(扩展):领域 / 来源 / 形态 / 标准
+const domainOptions = [
+  '前端 / 客户端',
+  '后端 / 服务端',
+  '数据库',
+  'AI / 机器学习',
+  '硬件 / 嵌入式',
+  '算法 / 数据结构',
+  '网络 / 运维',
+  '产品 / 设计',
+]
+const sourceOptions = [
+  '课程课件',
+  '技术文档 / 论文',
+  '视频教程笔记',
+  '面试题整理',
+  '项目复盘',
+  '网页文章剪藏',
+  '手写扫描笔记',
+]
+const formatOptions = [
+  '定义 + 例子 + 反例',
+  '步骤式教程',
+  '问答式',
+  '大纲 / 思维导图式',
+  '简短速查卡片',
+  '对比表格',
+]
+const qualityOptions = [
+  '有代码示例',
+  '讲清了原理（为什么）',
+  '有踩坑经验',
+  '有对比和总结',
+  '篇幅精炼',
+  '体系完整',
+]
+const selectedDomains = ref<string[]>([])
+const selectedSources = ref<string[]>([])
+const selectedFormats = ref<string[]>([])
+const selectedQuality = ref<string[]>([])
+
+function toggleDomain(item: string): void {
+  const idx = selectedDomains.value.indexOf(item)
+  if (idx >= 0) selectedDomains.value.splice(idx, 1)
+  else selectedDomains.value.push(item)
+}
+
+function toggleSource(item: string): void {
+  const idx = selectedSources.value.indexOf(item)
+  if (idx >= 0) selectedSources.value.splice(idx, 1)
+  else selectedSources.value.push(item)
+}
+
+function toggleFormat(item: string): void {
+  const idx = selectedFormats.value.indexOf(item)
+  if (idx >= 0) selectedFormats.value.splice(idx, 1)
+  else selectedFormats.value.push(item)
+}
+
+function toggleQuality(item: string): void {
+  const idx = selectedQuality.value.indexOf(item)
+  if (idx >= 0) selectedQuality.value.splice(idx, 1)
+  else selectedQuality.value.push(item)
+}
+
 // Step 3: 拿不准 + 补充
 const unsure = ref('collect_low')
 const unsureOptions = [
@@ -97,9 +162,13 @@ async function doGenerate(): Promise<void> {
       reject: [...selectedReject.value],
       unsure: unsure.value,
       extra: extra.value.trim(),
+      domains: [...selectedDomains.value],
+      sources: [...selectedSources.value],
+      formats: [...selectedFormats.value],
+      quality_marks: [...selectedQuality.value],
     })
     generatedCharter.value = resp.charter
-    step.value = 4
+    step.value = 7
   } catch (error) {
     // 生成失败不把人锁死:转入手写模式,带上问卷内容做起草提示
     errorText.value = `${describeApiError(error)}——可以直接手写章程。`
@@ -142,10 +211,20 @@ function draftFromAnswers(): string {
   } else {
     lines.push('- （没有特别排除的，可删掉本节）')
   }
+  if (selectedSources.value.length > 0) {
+    lines.push('', '## 来源偏好', '', `常来自:${selectedSources.value.join('、')}。`)
+  }
+  if (selectedFormats.value.length > 0) {
+    lines.push('', '## 笔记长什么样', '')
+    for (const f of selectedFormats.value) lines.push(`- ${f}`)
+  }
   lines.push('', '## 拿不准的时候怎么办', '')
   const chosen = unsureOptions.find((o) => o.value === unsure.value)
   lines.push(chosen ? chosen.desc : '拿不准就收下，把质量标低一点。')
   lines.push('', '## 判据', '', '复述别人定的规则不是知识，自己踩坑想通了才是。')
+  if (selectedQuality.value.length > 0) {
+    lines.push('', `好笔记的标准:${selectedQuality.value.join('；')}。`)
+  }
   if (extra.value.trim()) {
     lines.push('', '## 我自己想补的 / 想删的', '', extra.value.trim())
   }
@@ -218,7 +297,7 @@ onMounted(async () => {
 
     <!-- Step 1: 你是谁 -->
     <div v-if="step === 1" class="card wizard-card">
-      <p class="step-indicator">第 1 / 3 步 · 你是谁</p>
+      <p class="step-indicator">第 1 / 6 步 · 你是谁</p>
       <label class="field">
         <span class="field-label">你的专业方向 / 身份</span>
         <input
@@ -245,7 +324,7 @@ onMounted(async () => {
 
     <!-- Step 2: 收什么 / 不收什么 -->
     <div v-if="step === 2" class="card wizard-card">
-      <p class="step-indicator">第 2 / 3 步 · 收什么 / 不收什么</p>
+      <p class="step-indicator">第 2 / 6 步 · 收什么</p>
       <div class="field">
         <span class="field-label">想收什么样的笔记？（多选）</span>
         <div class="chips">
@@ -261,6 +340,93 @@ onMounted(async () => {
           </button>
         </div>
       </div>
+      <div class="wizard-actions">
+        <button class="btn" type="button" @click="step = 1">上一步</button>
+        <button class="btn btn--primary" type="button" @click="step = 3">下一步</button>
+      </div>
+    </div>
+
+    <!-- Step 3: 领域 + 来源偏好 -->
+    <div v-if="step === 3" class="card wizard-card">
+      <p class="step-indicator">第 3 / 6 步 · 领域与来源</p>
+      <div class="field">
+        <span class="field-label">主要涉及哪些技术领域？（多选，帮助 AI 判断内容归属）</span>
+        <div class="chips">
+          <button
+            v-for="opt in domainOptions"
+            :key="opt"
+            class="chip"
+            :class="{ 'chip--selected': selectedDomains.includes(opt) }"
+            type="button"
+            @click="toggleDomain(opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">笔记一般来自哪里？（多选，来源影响「收什么」的判断）</span>
+        <div class="chips">
+          <button
+            v-for="opt in sourceOptions"
+            :key="opt"
+            class="chip"
+            :class="{ 'chip--selected': selectedSources.includes(opt) }"
+            type="button"
+            @click="toggleSource(opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+      </div>
+      <div class="wizard-actions">
+        <button class="btn" type="button" @click="step = 2">上一步</button>
+        <button class="btn btn--primary" type="button" @click="step = 4">下一步</button>
+      </div>
+    </div>
+
+    <!-- Step 4: 笔记形态 + 好笔记标准 -->
+    <div v-if="step === 4" class="card wizard-card">
+      <p class="step-indicator">第 4 / 6 步 · 笔记形态与标准</p>
+      <div class="field">
+        <span class="field-label">你喜欢笔记整理成什么形态？（多选，影响 AI 帮你组织内容的方式）</span>
+        <div class="chips">
+          <button
+            v-for="opt in formatOptions"
+            :key="opt"
+            class="chip"
+            :class="{ 'chip--selected': selectedFormats.includes(opt) }"
+            type="button"
+            @click="toggleFormat(opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+      </div>
+      <div class="field">
+        <span class="field-label">什么样的笔记对你算「好笔记」？（多选，写进判据）</span>
+        <div class="chips">
+          <button
+            v-for="opt in qualityOptions"
+            :key="opt"
+            class="chip"
+            :class="{ 'chip--selected': selectedQuality.includes(opt) }"
+            type="button"
+            @click="toggleQuality(opt)"
+          >
+            {{ opt }}
+          </button>
+        </div>
+      </div>
+      <div class="wizard-actions">
+        <button class="btn" type="button" @click="step = 3">上一步</button>
+        <button class="btn btn--primary" type="button" @click="step = 5">下一步</button>
+      </div>
+    </div>
+
+    <!-- Step 5: 不收什么 -->
+    <div v-if="step === 5" class="card wizard-card">
+      <p class="step-indicator">第 5 / 6 步 · 不收什么</p>
       <div class="field">
         <span class="field-label">这些默认不收 —— 内容本身没有价值，不需要你选</span>
         <ul class="fixed-reject">
@@ -285,14 +451,14 @@ onMounted(async () => {
         </div>
       </div>
       <div class="wizard-actions">
-        <button class="btn" type="button" @click="step = 1">上一步</button>
-        <button class="btn btn--primary" type="button" @click="step = 3">下一步</button>
+        <button class="btn" type="button" @click="step = 4">上一步</button>
+        <button class="btn btn--primary" type="button" @click="step = 6">下一步</button>
       </div>
     </div>
 
     <!-- Step 3: 拿不准 + 补充 -->
-    <div v-if="step === 3" class="card wizard-card">
-      <p class="step-indicator">第 3 / 3 步 · 拿不准的时候 + 补充</p>
+    <div v-if="step === 6" class="card wizard-card">
+      <p class="step-indicator">第 6 / 6 步 · 拿不准的时候 + 补充</p>
       <div class="field">
         <span class="field-label">遇到拿不准的笔记，你倾向怎么办？</span>
         <div class="radio-list">
@@ -323,7 +489,7 @@ onMounted(async () => {
         />
       </label>
       <div class="wizard-actions">
-        <button class="btn" type="button" @click="step = 2">上一步</button>
+        <button class="btn" type="button" @click="step = 5">上一步</button>
         <button class="btn btn--primary" type="button" :disabled="generating" @click="doGenerate">
           {{ generating ? '生成中…' : '生成章程' }}
         </button>
@@ -334,7 +500,7 @@ onMounted(async () => {
     </div>
 
     <!-- Step 4: 预览 / 编辑 -->
-    <div v-if="step === 4" class="card wizard-card">
+    <div v-if="step === 7" class="card wizard-card">
       <p class="step-indicator">{{ hasCharter ? '当前章程 · 可直接编辑' : '预览 · 可编辑后保存' }}</p>
       <p class="muted preview-hint">
         <template v-if="hasCharter">
