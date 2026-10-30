@@ -82,7 +82,11 @@ onBeforeUnmount(() => {
     </div>
 
     <main class="container">
-      <RouterView />
+      <RouterView v-slot="{ Component }">
+        <keep-alive>
+          <component :is="Component" />
+        </keep-alive>
+      </RouterView>
     </main>
   </div>
 </template>
