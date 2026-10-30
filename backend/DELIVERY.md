@@ -7,7 +7,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-10-30 · 多用户 + charter 问卷 + 标题结构整理 交付后
+**最后更新**：2026-10-31 · 会话优先改造 + 引用笔记 + [NO_KB] 兜底 + 线 R 回填/G2 评测/切块校准
 
 ### 已完成模块
 
@@ -30,15 +30,20 @@
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
 | **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷 → LLM 生成章程 → 存 DB → G2 热生效；每用户一份 |
 | **标题结构整理** | `app/service/rewrite/` | ✅ 导入时 LLM 出语义标题、代码算编号；超长文档分段；**需非推理模型** |
+| **存量回填（线 R）** | `app/service/rewrite/backfill.py`、`scripts/backfill_outline.py` | ✅ 历史 15 篇全部收口（11 rewritten + 4 该跳），与导入同构、幂等闭环 |
+| **会话优先前端** | `frontend/` | ✅ 导入/检索并入对话（/导入 文件选择器+拖放、/检索 引用选择器）；删 /import /search 路由页；导航只剩 笔记库/问答/设置 |
+| **引用笔记** | `app/api/qa.py note_ids`、`<referenced_notes>` | ✅ 引用=告诉 AI「在问什么」，检索照跑找关联；[引n]/[n] 双标注 |
+| **[NO_KB] 兜底** | `answerer.py` + `qa.py` | ✅ KB 答不了不再拒答：联网二次回答或 AI 自身知识（带标注）；防瞎编纪律保留 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  228 passed
+cd backend && uv run pytest -q     →  247 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
-→ 183（阶段3/4+工具链）→ 199（多用户）→ **228**（标题整理 + 认证/隔离）
+→ 183（阶段3/4+工具链）→ 199（多用户）→ 228（标题整理 + 认证/隔离）
+→ **247**（引用笔记 + [NO_KB] 兜底 + 线 R 回填测试）
 
 **任何新任务都不许把这个数降下来。**
 
