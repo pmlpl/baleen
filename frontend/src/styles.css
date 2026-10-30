@@ -403,21 +403,77 @@ ol {
   padding-left: 22px;
 }
 
-/* mermaid 图容器 */
+/* mermaid 图容器:自然尺寸,宽图横向滚动;点击开灯箱放大 */
 .mermaid-figure {
   display: flex;
-  justify-content: center;
+  justify-content: flex-start;
   margin: 14px 0;
   padding: 12px;
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
+  cursor: zoom-in;
+}
+
+.mermaid-figure:hover {
+  border-color: var(--accent);
 }
 
 .mermaid-figure svg {
-  max-width: 100%;
+  max-width: none;
   height: auto;
+}
+
+/* mermaid 灯箱 */
+.mermaid-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  padding: 20px;
+  background: rgba(15, 23, 32, 0.78);
+}
+
+.mermaid-lightbox-toolbar {
+  display: flex;
+  margin-bottom: 10px;
+  justify-content: center;
+  gap: 8px;
+}
+
+.mermaid-lightbox-toolbar button {
+  min-width: 44px;
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.mermaid-lightbox-toolbar button:hover {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.mermaid-lightbox-close {
+  color: var(--err);
+}
+
+.mermaid-lightbox-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.mermaid-lightbox-canvas {
+  width: max-content;
+  margin: 0 auto;
 }
 
 /* mermaid 解析失败:保留代码块 + 角标 */
