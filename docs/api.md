@@ -211,6 +211,9 @@
 
 - `query` 1–500 字；**纯空白 → 422**（不是静默默认值）。
 - `top_k` 默认 5，上限 20。
+- **`note_ids`（引用笔记，可选）**：用户 @ 某篇笔记 = 告诉 AI「在问什么」——
+  正文以 `<referenced_notes>` 进 prompt 优先回答，**检索照跑**找关联笔记；
+  答案里引用内容标 `[引n]`、检索片段标 `[n]`。非法/别人的 id 静默忽略；最多 5 篇，单篇截 8000 字。
 
 响应（**命中单位是父块**，small-to-big：小块检索、父块出）：
 
@@ -421,6 +424,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-31 | v8 | chat 请求加 **`note_ids` 引用笔记**（`<referenced_notes>` 优先上下文 + 检索照跑）；**前端收敛为会话优先**——导入/检索并入对话（`/导入` 文件选择器、`/检索` 引用选择器），删除 `/import` `/search` 路由页，导航只剩 笔记库/问答/设置 |
 | 2026-10-30 | v7 | §5 新增 **note-plan**（存笔记前主题分析）与 save-note 请求体（mode/topic_ids/instruction 多篇生成，响应加 `notes[]`）；§8 charter 答案扩展 `domains/sources/formats/quality_marks`（向后兼容） |
 | 2026-10-30 | v6 | §2 新增**导入时标题结构二次加工**（LLM 规划 + 代码算编号；需非推理模型）；source 响应加 `headings_rewritten`；上传补 400（没配 API Key）
 | 2026-10-30 | v5 | 新增 **§9 认证**（注册/登录/me + 数据隔离）；**全站改为多用户**——所有业务接口需 `Authorization: Bearer`，`owner_id` 由 token 解出；`app_settings` 改每用户一行（章程随行归属），API Key 不再回退 `.env`；§7 移除「登录/注册」 |
