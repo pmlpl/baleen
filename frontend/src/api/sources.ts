@@ -10,6 +10,9 @@
  */
 import { http } from './http'
 
+/** 单文件上传上限(后端 413 同源) */
+export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
+
 /** job.status 五态 —— docs/api.md §2「前端就按这五个画状态机,别自己发明」 */
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 

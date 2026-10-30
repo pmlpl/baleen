@@ -83,18 +83,12 @@ onBeforeUnmount(() => {
     <!-- 未登录不显示导航 -->
     <header v-if="auth.isAuthenticated" class="topbar">
       <div class="topbar-inner">
-        <RouterLink v-if="ready" class="brand" :to="{ name: 'import' }">baleen</RouterLink>
+        <RouterLink v-if="ready" class="brand" :to="{ name: 'qa' }">baleen</RouterLink>
         <span v-else class="brand">baleen · 开始使用</span>
         <nav class="nav">
           <template v-if="ready">
-            <RouterLink class="nav-link" :to="{ name: 'import' }" active-class="nav-link--active">
-              导入
-            </RouterLink>
             <RouterLink class="nav-link" :to="{ name: 'notes' }" active-class="nav-link--active">
               笔记库
-            </RouterLink>
-            <RouterLink class="nav-link" :to="{ name: 'search' }" active-class="nav-link--active">
-              检索
             </RouterLink>
             <RouterLink class="nav-link" :to="{ name: 'qa' }" active-class="nav-link--active">
               问答

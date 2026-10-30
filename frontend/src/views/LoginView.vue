@@ -44,7 +44,7 @@ async function submit(): Promise<void> {
     if (mode.value === 'login') await auth.login(credentials)
     else await auth.register(credentials)
     // 登录成功:跳到首页,后续守卫会按「配 key → 填章程」继续引导
-    await router.push({ name: 'import' })
+    await router.push({ name: 'qa' })
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {

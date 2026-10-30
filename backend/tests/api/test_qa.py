@@ -575,3 +575,66 @@ def test_save_note_instruction_reaches_prompt(
         last_body = last_body.decode("utf-8")
     assert "只要代码示例,不要解释" in last_body
     assert len(enqueued) == 1
+
+
+def test_chat_with_referenced_note_puts_it_in_prompt(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    """引用笔记 = 告诉 AI「在问什么」:正文进 <referenced_notes>,检索照跑。"""
+    # 造一篇带父块的笔记:用夹具同一事务的 factory,chat 请求才能读到
+    from app.models import Chunk
+    from app.repo import Repos
+
+    async def _seed() -> int:
+        async with env.shared["factory"]() as session:
+            repos = Repos(session, env.owner_id)
+            note = await repos.notes.create(
+                source_id=None,
+                title="闭包完全指南",
+                doc={"type": "doc", "content": []},
+                quality="core",
+            )
+            session.add(
+                Chunk(
+                    note_id=note.id,
+                    ord=0,
+                    is_parent=True,
+                    heading_path="闭包完全指南",
+                    text="闭包=函数+它捕获的外层变量。REF_MARKER_XYZ",
+                    token_count=10,
+                    meta={},
+                )
+            )
+            await session.commit()
+            return note.id
+
+    note_id = env.client.portal.call(_seed)
+
+    qa_setup.responses.append((200, _chat("按你引用的笔记讲讲 [1]")))
+    resp = env.client.post(
+        "/api/qa/chat", json={"question": "闭包是什么", "note_ids": [note_id]}
+    )
+    assert resp.status_code == 200, resp.text
+    # 引用笔记正文进了 prompt
+    last_body = qa_setup.transports[-1].calls[-1]["body"]
+    if isinstance(last_body, bytes):
+        last_body = last_body.decode("utf-8")
+    assert "REF_MARKER_XYZ" in last_body
+    assert "<referenced_notes>" in last_body
+    # 检索照跑(fake_retrieve 记录了检索词)
+    assert qa_setup.queries == ["闭包是什么"]
+
+
+def test_chat_with_bogus_note_ids_ignored(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    """非法/别人的 note_id 静默忽略,不影响问答。"""
+    qa_setup.responses.append((200, _chat("答 [1]")))
+    resp = env.client.post(
+        "/api/qa/chat", json={"question": "讲讲", "note_ids": [999999, -1]}
+    )
+    assert resp.status_code == 200, resp.text
+    last_body = qa_setup.transports[-1].calls[-1]["body"]
+    if isinstance(last_body, bytes):
+        last_body = last_body.decode("utf-8")
+    assert "<referenced_notes>" not in last_body

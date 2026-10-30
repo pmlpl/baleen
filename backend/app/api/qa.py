@@ -24,6 +24,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentOwnerDep, SessionDep
 from app.api.library import RetrieveDep
@@ -69,6 +70,8 @@ class ChatRequest(BaseModel):
     session_id: int | None = None
     question: str = Field(min_length=1, max_length=MAX_QUERY_CHARS)
     top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=MAX_TOP_K)
+    # 用户引用的笔记(@ 某篇):告诉 AI「在问什么」;检索照跑找关联笔记
+    note_ids: list[int] = Field(default_factory=list)
 
     @field_validator("question")
     @classmethod
@@ -181,6 +184,36 @@ def _has_relevant_hit(hits: list[ContextHit], query: str) -> bool:
     return False
 
 
+REF_NOTE_MAX_CHARS = 8000  # 单篇引用笔记喂给 LLM 的正文上限(超长截头部)
+
+
+async def _load_ref_notes(session: AsyncSession, owner_id: int, note_ids: list[int]) -> list[dict]:
+    """加载用户引用的笔记(只取该用户的 active 笔记;非法/别人的 id 静默忽略)。
+
+    正文 = 父块按 ord 拼接(与笔记详情页同一真源);去重保持首次引用顺序。
+    """
+    if not note_ids:
+        return []
+    from app.repo.library import LibraryRepo
+
+    repo = LibraryRepo(session, owner_id)
+    out: list[dict] = []
+    seen: set[int] = set()
+    for note_id in note_ids[:5]:  # 最多 5 篇,防 prompt 爆炸
+        if note_id in seen:
+            continue
+        seen.add(note_id)
+        note = await repo.get_active_note(note_id)
+        if note is None:
+            continue
+        parents = await repo.list_parent_chunks(note_id)
+        text = "\n\n".join(parent.text for parent in parents)[:REF_NOTE_MAX_CHARS]
+        if not text.strip():
+            continue
+        out.append({"note_id": note.id, "title": note.title, "text": text})
+    return out
+
+
 def _message_out(m: QaMessage) -> MessageOut:
     return MessageOut(
         id=m.id,
@@ -247,7 +280,10 @@ async def chat(
         )
         for h in result.hits
     ]
-    messages, _build_meta = build_qa_messages(payload.question, kb_hits, history=history)
+    ref_notes = await _load_ref_notes(session, owner_id, payload.note_ids)
+    messages, _build_meta = build_qa_messages(
+        payload.question, kb_hits, history=history, ref_notes=ref_notes
+    )
     llm_user_text = messages[-1]["content"]
 
     # 4.5) 工具链兜底:库内没命中 OR 命中但不相关(正文不含查询关键词) → 联网搜索
@@ -269,10 +305,17 @@ async def chat(
     used_web = bool(web_results)
     if used_web:
         qa: QaResult = await asyncio.to_thread(
-            answer_web, payload.question, web_results, history=history, client=llm
+            answer_web,
+            payload.question,
+            web_results,
+            history=history,
+            client=llm,
+            ref_notes=ref_notes,
         )
     else:
-        qa = await asyncio.to_thread(answer, payload.question, kb_hits, history=history, client=llm)
+        qa = await asyncio.to_thread(
+            answer, payload.question, kb_hits, history=history, client=llm, ref_notes=ref_notes
+        )
 
     # 5) 存 assistant 消息(出处 + 计费 + 缓存计数),整体 commit(失败全回滚)
     assistant_msg = await repo.add_message(
@@ -356,7 +399,10 @@ async def chat_stream_endpoint(
         )
         for h in result.hits
     ]
-    messages, _build_meta = build_qa_messages(payload.question, kb_hits, history=history)
+    ref_notes = await _load_ref_notes(session, owner_id, payload.note_ids)
+    messages, _build_meta = build_qa_messages(
+        payload.question, kb_hits, history=history, ref_notes=ref_notes
+    )
     llm_user_text = messages[-1]["content"]
 
     # 工具链兜底:库内没命中 OR 命中但不相关 → 联网搜索
@@ -396,7 +442,12 @@ async def chat_stream_endpoint(
             if web_results:
                 # 联网兜底走非流式回答(web 上下文结构不同),整段作为一帧 delta 下发
                 qa = await asyncio.to_thread(
-                    answer_web, payload.question, web_results, history=history, client=llm
+                    answer_web,
+                    payload.question,
+                    web_results,
+                    history=history,
+                    client=llm,
+                    ref_notes=ref_notes,
                 )
                 accumulated.append(qa.answer)
                 yield _sse("delta", {"text": qa.answer})

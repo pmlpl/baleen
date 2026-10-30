@@ -11,6 +11,8 @@ import { useRouter } from 'vue-router'
 
 import { getToken } from '../auth/token'
 import { describeApiError } from '../api/http'
+import { listNotes } from '../api/notes'
+import type { NoteListItem } from '../api/notes'
 import {
   deleteSession,
   getSession,
@@ -20,7 +22,8 @@ import {
   streamChat,
 } from '../api/qa'
 import { createSource, getSource } from '../api/sources'
-import { MAX_UPLOAD_BYTES } from '../stores/import'
+import { MAX_UPLOAD_BYTES, type SourceDetail } from '../api/sources'
+
 import type {
   NotePlanResponse,
   QaMessage,
@@ -57,8 +60,8 @@ const chatFileInput = ref<HTMLInputElement | null>(null)
 const importingFiles = ref(false)
 
 /** 往消息流里插一条本地反馈(负 id 不落库,与选项卡的反馈气泡同一套) */
-function pushSystemBubble(text: string): void {
-  messages.value.push({
+function pushSystemBubble(text: string): ChatMessage {
+  const bubble: ChatMessage = {
     id: -Date.now() - Math.floor(Math.random() * 1000),
     role: 'assistant',
     content: text,
@@ -66,8 +69,10 @@ function pushSystemBubble(text: string): void {
     model: null,
     cost_tokens: 0,
     cache_hit_rate: null,
-  })
+  }
+  messages.value.push(bubble)
   scrollBottom()
+  return bubble
 }
 
 const IMPORT_POLL_MS = 2000
@@ -75,11 +80,24 @@ const IMPORT_MAX_POLLS = 150 // 2s × 150 = 5 分钟上限
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
-/** 等一个导入任务收尾,返回最终详情(调用方取 note_id/parse_status) */
-async function waitImportDone(sourceId: number) {
+/** 导入阶段文案(轮询时更新气泡,让用户看见推进) */
+function importStageText(detail: SourceDetail): string {
+  if (detail.job.status === 'queued') return '排队中'
+  if (detail.job.status === 'running') {
+    return detail.parse_status === 'ok' ? '切块/向量化中' : '解析中'
+  }
+  return '收尾中'
+}
+
+/** 等一个导入任务收尾;每轮把阶段写回气泡 */
+async function waitImportDone(
+  sourceId: number,
+  onPoll: (detail: SourceDetail) => void,
+) {
   for (let i = 0; i < IMPORT_MAX_POLLS; i += 1) {
     const detail = await getSource(sourceId)
     if (detail.job.status === 'done' || detail.job.status === 'failed') return detail
+    onPoll(detail)
     await sleep(IMPORT_POLL_MS)
   }
   return getSource(sourceId)
@@ -90,7 +108,7 @@ async function importOneFile(file: File): Promise<void> {
     pushSystemBubble(`❌ 《${file.name}》超过 50MB 上限,没有导入。`)
     return
   }
-  pushSystemBubble(`⏳ 正在导入:《${file.name}》…`)
+  const pending = pushSystemBubble(`⏳ 正在导入:《${file.name}》(排队中)…`)
   let upload
   try {
     try {
@@ -114,7 +132,9 @@ async function importOneFile(file: File): Promise<void> {
     return
   }
   try {
-    const detail = await waitImportDone(upload.source_id)
+    const detail = await waitImportDone(upload.source_id, (d) => {
+      pending.content = `⏳ 正在导入:《${file.name}》(${importStageText(d)})…`
+    })
     if (detail.job.status === 'failed') {
       const reason = detail.job.last_error ?? '处理失败'
       pushSystemBubble(`❌ 《${file.name}》导入失败:${reason}`)
@@ -211,7 +231,95 @@ const CHAT_COMMANDS: ChatCommand[] = [
       chatFileInput.value?.click()
     },
   },
+  {
+    name: '/检索',
+    desc: '找一篇笔记引用到提问,AI 直接围绕它回答',
+    keywords: ['检索', '引用', '搜索', '找', 'search'],
+    run: () => {
+      openNotePicker()
+    },
+  },
 ]
+
+// ---------------- 引用笔记(告诉 AI「在问什么」;检索仍会跑找关联笔记) ----------------
+
+interface NoteRef {
+  id: number
+  title: string
+}
+
+/** 已引用的笔记 chips;随下一次提问发给后端 */
+const referencedNotes = ref<NoteRef[]>([])
+/** 笔记选择器开着时,输入框变成筛选框,上方列出匹配笔记 */
+const notePicker = ref(false)
+const pickerNotes = ref<NoteListItem[]>([])
+const pickerLoading = ref(false)
+let pickerSeq = 0
+
+function openNotePicker(): void {
+  notePicker.value = true
+  input.value = ''
+  void loadPickerNotes('')
+}
+
+function closeNotePicker(): void {
+  notePicker.value = false
+  pickerNotes.value = []
+}
+
+function toggleNoteRef(note: NoteRef): void {
+  const idx = referencedNotes.value.findIndex((r) => r.id === note.id)
+  if (idx >= 0) referencedNotes.value.splice(idx, 1)
+  else referencedNotes.value.push(note)
+}
+
+function removeNoteRef(id: number): void {
+  referencedNotes.value = referencedNotes.value.filter((r) => r.id !== id)
+}
+
+/** 输入文字 → 按标题筛笔记(300ms 防抖;过期响应丢弃) */
+const loadPickerNotes = async (query: string): Promise<void> => {
+  const seq = ++pickerSeq
+  pickerLoading.value = true
+  try {
+    const resp = await listNotes({ q: query === '' ? undefined : query, limit: 8 })
+    if (seq !== pickerSeq) return
+    pickerNotes.value = resp.items
+  } catch {
+    if (seq === pickerSeq) pickerNotes.value = []
+  } finally {
+    if (seq === pickerSeq) pickerLoading.value = false
+  }
+}
+
+let pickerDebounce: ReturnType<typeof setTimeout> | undefined
+
+function onPickerInput(): void {
+  if (!notePicker.value) return
+  if (pickerDebounce !== undefined) clearTimeout(pickerDebounce)
+  pickerDebounce = setTimeout(() => {
+    void loadPickerNotes(input.value.trim())
+  }, 300)
+}
+
+/** 选择器开着时:Enter 选第一篇,Esc 关闭;不发送消息 */
+function onPickerKeydown(event: KeyboardEvent): void {
+  if (!notePicker.value) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    closeNotePicker()
+    return
+  }
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    const first = pickerNotes.value[0]
+    if (first !== undefined) {
+      toggleNoteRef({ id: first.id, title: first.title })
+      closeNotePicker()
+      input.value = ''
+    }
+  }
+}
 
 /** 按命令名或关键词过滤;query 为空时展示全部 */
 const slashMatches = computed<ChatCommand[]>(() => {
@@ -432,6 +540,7 @@ async function send(): Promise<void> {
   let usedSearchQuery = ''
   pendingModel.value = null
   try {
+    const refNoteIds = referencedNotes.value.map((r) => r.id)
     await streamChat(
       currentSessionId.value,
       text,
@@ -485,7 +594,10 @@ async function send(): Promise<void> {
         },
       },
       TOP_K,
+      undefined,
+      refNoteIds,
     )
+    referencedNotes.value = [] // 引用随问题消耗掉
   } catch (error) {
     // 流没建立起来(网络/后端未起):撤下乐观消息与空气泡,还原文输入
     const idx = messages.value.findIndex((m) => m.id === tempId)
@@ -837,15 +949,45 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
               没有匹配的命令(输入 / 看全部)
             </p>
           </div>
+          <!-- /检索 的笔记选择器:输入文字按标题筛,点击引用 -->
+          <div v-if="notePicker" class="slash-menu card">
+            <button
+              v-for="n in pickerNotes"
+              :key="n.id"
+              class="slash-item"
+              type="button"
+              @click="toggleNoteRef({ id: n.id, title: n.title }); closeNotePicker(); input = ''"
+            >
+              <span class="slash-name">{{ n.title }}</span>
+              <span class="slash-desc">{{ n.chunk_count }} 段 · 引用到提问</span>
+            </button>
+            <p v-if="pickerNotes.length === 0 && !pickerLoading" class="muted slash-empty">
+              {{ input.trim() === '' ? '输入标题关键词筛选' : '没有匹配的笔记' }}
+            </p>
+          </div>
+          <!-- 已引用的笔记 chips -->
+          <div v-if="referencedNotes.length > 0" class="ref-chips">
+            <span
+              v-for="r in referencedNotes"
+              :key="r.id"
+              class="ref-chip"
+              :title="`取消引用《${r.title}》`"
+            >
+              引用:《{{ r.title }}》
+              <button class="ref-chip-x" type="button" aria-label="取消引用" @click="removeNoteRef(r.id)">
+                ×
+              </button>
+            </span>
+          </div>
           <input
             v-model="input"
             class="input"
             type="text"
-            placeholder="问点什么…(输入 / 唤起命令)"
+            :placeholder="notePicker ? '输入标题筛选,点击上方笔记引用(Esc 退出)' : '问点什么…(输入 / 唤起命令)'"
             aria-label="问题"
             :disabled="sending"
-            @input="updateSlash"
-            @keydown="onSlashKeydown"
+            @input="updateSlash(); onPickerInput()"
+            @keydown="onSlashKeydown; onPickerKeydown($event)"
           />
           <button class="btn btn--primary" type="submit" :disabled="sending">发送</button>
         </form>
@@ -1304,5 +1446,43 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 .slash-empty {
   padding: 10px;
   font-size: 12.5px;
+}
+
+/* ---- 引用笔记 chips ---- */
+.ref-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  width: 100%;
+}
+
+.ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 260px;
+  padding: 3px 8px;
+  border: 1px solid var(--accent);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ref-chip-x {
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--accent-ink);
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.ref-chip-x:hover {
+  color: var(--err);
 }
 </style>

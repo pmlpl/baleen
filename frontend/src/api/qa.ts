@@ -33,6 +33,8 @@ export interface ChatRequest {
   session_id?: number | null
   question: string
   top_k?: number
+  /** 用户引用的笔记 id:告诉 AI「在问什么」;检索仍会跑找关联笔记 */
+  note_ids?: number[]
 }
 
 export interface ChatResponse {
@@ -160,8 +162,9 @@ export async function streamChat(
   handlers: StreamHandlers,
   topK = TOP_K_DEFAULT,
   signal?: AbortSignal,
+  noteIds: number[] = [],
 ): Promise<void> {
-  const body: ChatRequest = { question, top_k: topK }
+  const body: ChatRequest = { question, top_k: topK, note_ids: noteIds }
   if (sessionId !== null) body.session_id = sessionId
   // 裸 fetch(不是 http 封装):SSE 需要读流,这里手动带上 token
   const token = getToken()

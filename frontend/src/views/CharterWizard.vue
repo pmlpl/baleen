@@ -242,7 +242,7 @@ async function doSave(): Promise<void> {
   try {
     await saveCharter(generatedCharter.value)
     markCharterSaved() // 解锁:路由守卫放行其他页面
-    router.push({ name: 'import' })
+    router.push({ name: 'qa' })
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {
