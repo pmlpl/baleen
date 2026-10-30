@@ -6,7 +6,7 @@
  * 前缀缓存命中率(hit/(hit+miss)),首问没有缓存数据时不显示。
  * 数据全部来自 API(会话/消息已落库),本地 ref 不用 store,不引第三方库。
  */
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { getToken } from '../auth/token'
@@ -193,6 +193,59 @@ interface ChatCommand {
 
 const slashOpen = ref(false)
 const slashActive = ref(0)
+const slashMenuEl = ref<HTMLElement | null>(null)
+
+// 高亮项跟着滚进可视区(命令多时菜单内部会滚动)
+watch(slashActive, () => {
+  void nextTick(() => {
+    slashMenuEl.value
+      ?.querySelector('.slash-item--active')
+      ?.scrollIntoView({ block: 'nearest' })
+  })
+})
+
+// ---------------- 输入历史(↑ 召回上一条发送内容,↓ 回到草稿) ----------------
+
+const sentHistory = ref<string[]>([])
+const historyIndex = ref(-1)
+let draftBeforeRecall = ''
+
+function onHistoryKeydown(event: KeyboardEvent): void {
+  if (event.key === 'ArrowUp') {
+    if (sentHistory.value.length === 0) return
+    if (historyIndex.value === -1) {
+      draftBeforeRecall = input.value // 开始回溯前记住草稿
+      historyIndex.value = sentHistory.value.length
+    }
+    if (historyIndex.value === 0) return // 已到最早一条
+    historyIndex.value -= 1
+    input.value = sentHistory.value[historyIndex.value] ?? ''
+    event.preventDefault()
+  } else if (event.key === 'ArrowDown') {
+    if (historyIndex.value === -1) return // 不在回溯中,放行给光标
+    if (historyIndex.value < sentHistory.value.length - 1) {
+      historyIndex.value += 1
+      input.value = sentHistory.value[historyIndex.value] ?? ''
+    } else {
+      historyIndex.value = -1
+      input.value = draftBeforeRecall // 回到未发送前的草稿
+    }
+    event.preventDefault()
+  }
+}
+
+/** 输入框键盘统一入口:命令菜单 → 笔记选择器 → 历史回溯(前者拦截了就不往后传) */
+function onInputKeydown(event: KeyboardEvent): void {
+  if (slashOpen.value) {
+    onSlashKeydown(event)
+    if (event.defaultPrevented) return
+  }
+  if (notePicker.value) {
+    onPickerKeydown(event)
+    if (event.defaultPrevented) return
+  }
+  onHistoryKeydown(event)
+}
 
 const CHAT_COMMANDS: ChatCommand[] = [
   {
@@ -519,6 +572,12 @@ async function send(): Promise<void> {
     errorText.value = '请输入要问的问题'
     return
   }
+  // 记进输入历史(相邻去重),↑ 可召回
+  if (sentHistory.value[sentHistory.value.length - 1] !== text) {
+    sentHistory.value.push(text)
+  }
+  historyIndex.value = -1
+  draftBeforeRecall = ''
   sending.value = true
   errorText.value = ''
   streamingStarted.value = false
@@ -932,7 +991,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
         <form v-else class="chat-input chat-input--anchor" @submit.prevent="send">
           <!-- / 命令菜单:绝对定位在输入框上方 -->
-          <div v-if="slashOpen" class="slash-menu card">
+          <div v-if="slashOpen" ref="slashMenuEl" class="slash-menu card">
             <button
               v-for="(c, i) in slashMatches"
               :key="c.name"
@@ -987,7 +1046,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
             aria-label="问题"
             :disabled="sending"
             @input="updateSlash(); onPickerInput()"
-            @keydown="onSlashKeydown; onPickerKeydown($event)"
+            @keydown="onInputKeydown"
           />
           <button class="btn btn--primary" type="submit" :disabled="sending">发送</button>
         </form>

@@ -127,7 +127,7 @@ class TestErrorClassification:
 
     def test_rate_limit_exhausted(self):
         sleeps: list[float] = []
-        client, transport = _client([(429, b"{}")] * 3, sleeps=sleeps)
+        client, transport = _client([(429, b"{}")] * 3, sleeps=sleeps, max_retries=2)
         with pytest.raises(LLMRateLimitError) as ei:
             client.chat([{"role": "user", "content": "x"}])
         assert ei.value.status_code == 429
@@ -152,13 +152,15 @@ class TestErrorClassification:
 
     def test_timeout_retried_twice_then_raises(self):
         timeouts = [TimeoutError("timed out")] * 3
-        client, transport = _client(timeouts)
+        client, transport = _client(timeouts, max_retries=2)
         with pytest.raises(LLMTimeoutError):
             client.chat([{"role": "user", "content": "x"}])
         assert len(transport.calls) == 3  # 1 次 + 重试 2 次
 
     def test_network_error_classified(self):
-        client, _ = _client([urllib.error.URLError("connection refused")] * 3)
+        client, _ = _client(
+            [urllib.error.URLError("connection refused")] * 3, max_retries=2
+        )
         with pytest.raises(LLMNetworkError):
             client.chat([{"role": "user", "content": "x"}])
 
@@ -168,11 +170,19 @@ class TestErrorClassification:
         assert len(transport.calls) == 2
 
     def test_5xx_exhausted(self):
-        client, transport = _client([(503, b"")] * 3)
+        client, transport = _client([(503, b"")] * 3, max_retries=2)
         with pytest.raises(LLMResponseError) as ei:
             client.chat([{"role": "user", "content": "x"}])
         assert ei.value.status_code == 503
         assert len(transport.calls) == 3
+
+    def test_default_retries_is_five(self):
+        """默认重试 5 次(总尝试 6):主人拍板 2 次太少,这里钉住防止回退。"""
+        client, transport = _client([(503, b"")] * 7)
+        with pytest.raises(LLMResponseError) as ei:
+            client.chat([{"role": "user", "content": "x"}])
+        assert ei.value.status_code == 503
+        assert len(transport.calls) == 6  # 1 次 + 默认重试 5 次
 
     def test_malformed_body(self):
         client, _ = _client([(200, b"not json")])

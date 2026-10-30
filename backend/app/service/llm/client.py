@@ -24,7 +24,7 @@ from pydantic import BaseModel, Field
 from app.core.config import Settings, get_settings
 
 DEFAULT_TIMEOUT = 60.0  # 秒
-DEFAULT_MAX_RETRIES = 2  # 仅网络/5xx/429;总尝试次数 = 1 + 该值
+DEFAULT_MAX_RETRIES = 5  # 仅网络/5xx/429;总尝试次数 = 1 + 该值(主人拍板:2 次太少)
 DEFAULT_MAX_TOKENS = 800
 # 重试退避基准(秒),按 0.5 / 1.0 递增;测试注入 no-op sleep
 RETRY_BACKOFF = 0.5
