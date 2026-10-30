@@ -441,3 +441,137 @@ def test_save_note_writes_file_and_enqueues_import(
 
     # 不存在的会话 → 404
     assert env.client.post("/api/qa/sessions/999999/save-note").status_code == 404
+
+
+def _make_enqueue_recorder(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> list[dict]:
+    monkeypatch.setattr(qa_module, "NOTES_OUT_DIR", tmp_path / "notes_out")
+    import app.worker.worker as worker_module
+
+    monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path / "staging")
+    enqueued: list[dict] = []
+
+    async def fake_enqueue(
+        file_path, *, dedupe_key, no_llm=False, owner_id=1
+    ):  # noqa: ANN001
+        enqueued.append({"file": file_path, "no_llm": no_llm})
+        return dedupe_key
+
+    monkeypatch.setattr(worker_module, "enqueue_import", fake_enqueue)
+    return enqueued
+
+
+def test_note_plan_returns_topics(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    """note-plan:LLM 返回两个主题 → 原样返回,建议 split。"""
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    sid = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()["session_id"]
+
+    plan_json = json.dumps(
+        {
+            "topics": [
+                {"title": "闭包原理", "summary": "定义与条件", "msg_start": 0, "msg_end": 1},
+            ],
+            "suggestion": "single",
+        },
+        ensure_ascii=False,
+    )
+    qa_setup.responses.append((200, _chat(plan_json)))
+    resp = env.client.post(f"/api/qa/sessions/{sid}/note-plan")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["suggestion"] == "single"
+    assert body["topics"][0]["title"] == "闭包原理"
+    assert body["topics"][0]["id"] == 0
+
+    # 消息不足的会话 → 400
+    qa_setup.responses.append((200, _chat("你好")))
+    env.client.post("/api/qa/chat", json={"question": "你好"})
+    # 404 分支:会话不存在
+    assert env.client.post("/api/qa/sessions/999999/note-plan").status_code == 404
+
+
+def test_note_plan_garbage_falls_back_to_single(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    """LLM 返回垃圾 → 回退整段一篇(single),不报错。"""
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    sid = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()["session_id"]
+    qa_setup.responses.append((200, _chat("抱歉我不能输出 JSON")))
+    resp = env.client.post(f"/api/qa/sessions/{sid}/note-plan")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["suggestion"] == "single"
+    assert len(body["topics"]) == 1
+
+
+def test_save_note_split_generates_one_file_per_topic(
+    env: SimpleNamespace,
+    qa_setup: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """split 模式:两主题 → 两次整理 LLM 调用 → 两篇文件两次入队。"""
+    qa_setup.responses.append((200, _chat("先聊数据库 [1]")))
+    sid = env.client.post("/api/qa/chat", json={"question": "讲讲数据库"}).json()["session_id"]
+    # 第二问有历史 → 先改写后回答,队列要两帧
+    qa_setup.responses.append((200, _chat("硬件知识")))
+    qa_setup.responses.append((200, _chat("再聊硬件 [1]")))
+    env.client.post("/api/qa/chat", json={"question": "再问硬件", "session_id": sid})
+
+    enqueued = _make_enqueue_recorder(monkeypatch, tmp_path)
+
+    plan_json = json.dumps(
+        {
+            "topics": [
+                {"title": "数据库索引", "summary": "B+ 树", "msg_start": 0, "msg_end": 1},
+                {"title": "SSD 硬件", "summary": "选购要点", "msg_start": 2, "msg_end": 3},
+            ],
+            "suggestion": "split",
+        },
+        ensure_ascii=False,
+    )
+    # 队列按序消费:先 plan,再每主题一次整理
+    qa_setup.responses.append((200, _chat(plan_json)))
+    qa_setup.responses.append((200, _chat("# 数据库索引\n\nB+ 树…")))
+    qa_setup.responses.append((200, _chat("# SSD 硬件\n\n选购…")))
+
+    resp = env.client.post(
+        f"/api/qa/sessions/{sid}/save-note", json={"mode": "split"}
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert len(body["notes"]) == 2
+    assert body["notes"][0]["title"] == "数据库索引"
+    assert body["notes"][1]["title"] == "SSD 硬件"
+    assert len(enqueued) == 2
+    files = list((tmp_path / "notes_out").glob("*.md"))
+    assert len(files) == 2
+    contents = " ".join(f.read_text(encoding="utf-8") for f in files)
+    assert "数据库索引" in contents and "SSD" in contents
+
+
+def test_save_note_instruction_reaches_prompt(
+    env: SimpleNamespace,
+    qa_setup: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """instruction(用户自由输入)必须进到整理 prompt 里。"""
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    sid = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()["session_id"]
+
+    enqueued = _make_enqueue_recorder(monkeypatch, tmp_path)
+    qa_setup.responses.append((200, _chat("# 只要代码\n\n```js\nconst x = 1\n```")))
+
+    resp = env.client.post(
+        f"/api/qa/sessions/{sid}/save-note",
+        json={"mode": "single", "instruction": "只要代码示例,不要解释"},
+    )
+    assert resp.status_code == 200, resp.text
+    # 最后一次 LLM 调用的 system prompt 应含用户要求
+    last_body = qa_setup.transports[-1].calls[-1]["body"]
+    if isinstance(last_body, bytes):
+        last_body = last_body.decode("utf-8")
+    assert "只要代码示例,不要解释" in last_body
+    assert len(enqueued) == 1

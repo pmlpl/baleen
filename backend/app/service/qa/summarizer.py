@@ -8,6 +8,9 @@ LLM client 由调用方注入或按设置页(DB 优先,回退 .env)现读。
 from __future__ import annotations
 
 import asyncio
+import json
+import re
+from dataclasses import dataclass
 
 from app.core.db import session_factory
 from app.models.qa import QaSession
@@ -95,10 +98,149 @@ def organize_conversation_messages(title: str, dialogue: str) -> list[dict[str, 
 
 
 async def organize_session_note(
-    title: str, dialogue: str, *, client: LLMClient | None = None
+    title: str,
+    dialogue: str,
+    *,
+    instruction: str = "",
+    client: LLMClient | None = None,
 ) -> str:
-    """会话 → Markdown 笔记正文(阶段4,D2=B);失败向上抛(handler 兜底提示)。"""
+    """会话 → Markdown 笔记正文(阶段4,D2=B);失败向上抛(handler 兜底提示)。
+
+    ``instruction`` 是用户在选项卡里自由输入的补充要求(如「只保留代码部分」),
+    原样拼进 system prompt;为空则与旧行为完全一致。
+    """
     cli = client or LLMClient.from_settings()
     messages = organize_conversation_messages(title, dialogue)
+    if instruction.strip():
+        extra = instruction.strip()
+        messages[0]["content"] += f"\n用户的特殊要求(优先遵守,但仍只用对话里的信息):{extra}"
     chat = await asyncio.to_thread(lambda: cli.chat(messages, max_tokens=3000))
     return chat.content.strip() or "（整理失败：模型没有返回内容）"
+
+
+# ---------------- 交互式笔记:主题拆分计划(阶段4 增强) ----------------
+
+PLAN_MAX_TOKENS = 2000
+PLAN_DIALOGUE_MAX_CHARS = 12000
+
+
+def plan_note_messages(title: str, dialogue: str) -> list[dict[str, str]]:
+    """会话 → 主题拆分计划的消息组装(输出 JSON,不写笔记)。"""
+    system = (
+        "你是个人笔记库的笔记整理规划助手。读一段问答对话,判断它覆盖了几个**独立主题**,\n"
+        "输出 JSON(不要解释、不要 markdown 代码块包裹):\n"
+        '{"topics": [{"title": "数据库索引原理", "summary": "聊了 B+ 树结构和最左前缀",'
+        ' "msg_start": 0, "msg_end": 8}], "suggestion": "split"}\n'
+        "字段:\n"
+        "- title:主题名(短,能当笔记标题);\n"
+        "- summary:一句话概括这部分聊了什么;\n"
+        "- msg_start/msg_end:该主题覆盖的消息下标 [start, end] 闭区间"
+        "(0 起,整段对话按 0..N-1 编号);\n"
+        "- suggestion:主题之间**基本无关**填 split,是同一个主题的深入填 single。\n"
+        "规则:\n"
+        "1. 区间要覆盖全部消息且不重叠(闲聊/寒暄就近归入相关主题);\n"
+        "2. 单主题对话就输出一个 topic、suggestion=single;\n"
+        "3. 每个主题至少要有能撑起一篇笔记的内容(几句有信息量的问答)。\n"
+    )
+    user = f"[对话主题]{title}\n\n[对话内容(每行前是消息下标)]\n{dialogue}"
+    return [
+        {"role": "system", "content": system},
+        {"role": "user", "content": user},
+    ]
+
+
+@dataclass(frozen=True)
+class NoteTopic:
+    """一个可独立成篇的主题。"""
+
+    title: str
+    summary: str
+    msg_start: int
+    msg_end: int
+
+
+@dataclass(frozen=True)
+class NotePlan:
+    """拆分计划:suggestion=split 表示主题间基本无关。"""
+
+    topics: tuple[NoteTopic, ...]
+    suggestion: str  # "split" | "single"
+
+
+def _parse_plan(raw: str, message_count: int) -> NotePlan | None:
+    """解析 LLM 的 JSON 计划;非法/越界 → None(调用方回退整段一篇)。"""
+    text = raw.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    start, end = text.find("{"), text.rfind("}")
+    if start < 0 or end <= start:
+        return None
+    try:
+        data = json.loads(text[start : end + 1])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(data, dict):
+        return None
+    raw_topics = data.get("topics")
+    suggestion = data.get("suggestion")
+    if not isinstance(raw_topics, list) or not raw_topics:
+        return None
+
+    topics: list[NoteTopic] = []
+    for item in raw_topics:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title", "")).strip()
+        summary = str(item.get("summary", "")).strip()
+        try:
+            msg_start = int(item.get("msg_start"))
+            msg_end = int(item.get("msg_end"))
+        except (TypeError, ValueError):
+            continue
+        if not title or not 0 <= msg_start <= msg_end < message_count:
+            continue
+        topics.append(
+            NoteTopic(title=title[:60], summary=summary[:200], msg_start=msg_start, msg_end=msg_end)
+        )
+    if not topics:
+        return None
+    plan = NotePlan(topics=tuple(topics), suggestion="split" if suggestion == "split" else "single")
+    return plan
+
+
+async def plan_note_split(
+    title: str, messages: list[dict[str, str]], *, client: LLMClient | None = None
+) -> NotePlan:
+    """分析会话覆盖的主题;任何失败都回退「整段一篇」——规划失败不阻塞存笔记。
+
+    ``messages`` 是「用户/助手: 内容」之外的原始消息(role+content),
+    下标即前端看到的序号;裁剪 dialogue 由调用方按 msg_start/end 做。
+    """
+    fallback = NotePlan(
+        topics=(NoteTopic(title=title[:60], summary="", msg_start=0, msg_end=len(messages) - 1),),
+        suggestion="single",
+    )
+    if len(messages) < 2:
+        return fallback
+    dialogue = "\n".join(
+        f"[{i}] {'用户' if m.get('role') == 'user' else '助手'}:{m.get('content', '')}"
+        for i, m in enumerate(messages)
+    )[:PLAN_DIALOGUE_MAX_CHARS]
+    cli = client or LLMClient.from_settings()
+    chat = await asyncio.to_thread(
+        lambda: cli.chat(plan_note_messages(title, dialogue), max_tokens=PLAN_MAX_TOKENS)
+    )
+    return _parse_plan(chat.content or "", len(messages)) or fallback
+
+
+def dialogue_for_range(
+    messages: list[dict[str, str]], msg_start: int, msg_end: int
+) -> str:
+    """按主题区间裁出对话文本(整理某一篇用,不让单篇笔记吃到全量上下文)。"""
+    clamped_start = max(0, msg_start)
+    clamped_end = min(len(messages) - 1, msg_end)
+    picked = messages[clamped_start : clamped_end + 1]
+    return "\n\n".join(
+        f"{'用户' if m.get('role') == 'user' else '助手'}:{m.get('content', '')}" for m in picked
+    )

@@ -11,8 +11,20 @@ import { useRouter } from 'vue-router'
 
 import { getToken } from '../auth/token'
 import { describeApiError } from '../api/http'
-import { deleteSession, getSession, listSessions, saveSessionNote, streamChat } from '../api/qa'
-import type { QaMessage, QaSessionItem } from '../api/qa'
+import {
+  deleteSession,
+  getSession,
+  listSessions,
+  planSessionNote,
+  saveSessionNote,
+  streamChat,
+} from '../api/qa'
+import type {
+  NotePlanResponse,
+  QaMessage,
+  QaSessionItem,
+  SaveNoteRequest,
+} from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
 import { renderMermaidIn } from '../utils/mermaid'
 
@@ -30,6 +42,12 @@ const sending = ref(false)
 const loadingSession = ref(false)
 const savingNote = ref(false)
 const savedNote = ref('')
+/** 交互式存笔记:主题计划(非 null 时输入框区域变成选项卡) */
+const notePlan = ref<NotePlanResponse | null>(null)
+const planningNote = ref(false)
+const executingNote = ref(false)
+const noteCustomMode = ref(false)
+const noteCustomText = ref('')
 const errorText = ref('')
 
 const msgListEl = ref<HTMLElement | null>(null)
@@ -275,16 +293,55 @@ function openNote(noteId: number): void {
 
 /** 阶段4(D2=B):把当前会话整理成 Markdown 笔记,落 notes_out/ 并提交入库 */
 async function saveAsNote(): Promise<void> {
-  if (savingNote.value || currentSessionId.value === null) return
-  savingNote.value = true
+  if (planningNote.value || executingNote.value || currentSessionId.value === null) return
+  planningNote.value = true
   savedNote.value = ''
+  errorText.value = ''
   try {
-    const r = await saveSessionNote(currentSessionId.value)
-    savedNote.value = `已存 ${r.note_file}(整理 ${r.organized_chars} 字,已提交入库)`
+    notePlan.value = await planSessionNote(currentSessionId.value)
+    noteCustomMode.value = false
+    noteCustomText.value = ''
   } catch (error) {
-    savedNote.value = describeApiError(error)
+    errorText.value = describeApiError(error)
   } finally {
-    savingNote.value = false
+    planningNote.value = false
+  }
+}
+
+function cancelNotePlan(): void {
+  notePlan.value = null
+  noteCustomMode.value = false
+  noteCustomText.value = ''
+}
+
+/** 按用户选的方案生成;结果以助手气泡反馈,输入框恢复 */
+async function executeNotePlan(req: SaveNoteRequest): Promise<void> {
+  if (executingNote.value || currentSessionId.value === null) return
+  executingNote.value = true
+  errorText.value = ''
+  try {
+    const r = await saveSessionNote(currentSessionId.value, req)
+    const names = r.notes.map((n) => `《${n.title}》`).join('、')
+    const summary =
+      r.notes.length > 1
+        ? `已按主题生成 ${r.notes.length} 篇笔记:${names}。全部提交入库,可在笔记库查看。`
+        : `已生成笔记 ${r.note_file}(整理 ${r.organized_chars} 字,已提交入库)。`
+    messages.value.push({
+      id: -Date.now(),
+      role: 'assistant',
+      content: summary,
+      citations: [],
+      model: null,
+      cost_tokens: 0,
+      cache_hit_rate: null,
+    })
+    savedNote.value = `已存 ${r.notes.length} 篇笔记`
+    cancelNotePlan()
+    scrollBottom()
+  } catch (error) {
+    errorText.value = describeApiError(error)
+  } finally {
+    executingNote.value = false
   }
 }
 
@@ -465,7 +522,79 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
         <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
 
-        <form class="chat-input" @submit.prevent="send">
+        <!-- 交互式存笔记:选项卡取代输入框(最后一个选项是自己输入) -->
+        <div v-if="notePlan !== null" class="note-plan card">
+          <p class="np-title">
+            这篇对话涉及 {{ notePlan.topics.length }} 个主题,想怎么整理?
+            <span v-if="notePlan.suggestion === 'split'" class="muted np-hint">
+              主题之间比较独立,建议拆开
+            </span>
+          </p>
+          <div class="np-options">
+            <button
+              v-if="notePlan.topics.length > 1"
+              class="np-option np-option--primary"
+              type="button"
+              :disabled="executingNote"
+              @click="executeNotePlan({ mode: 'split' })"
+            >
+              拆成 {{ notePlan.topics.length }} 篇笔记
+            </button>
+            <button
+              v-for="t in notePlan.topics"
+              :key="t.id"
+              class="np-option"
+              type="button"
+              :title="t.summary"
+              :disabled="executingNote"
+              @click="executeNotePlan({ mode: 'topics', topic_ids: [t.id] })"
+            >
+              只生成:{{ t.title }}
+            </button>
+            <button
+              class="np-option"
+              type="button"
+              :disabled="executingNote"
+              @click="executeNotePlan({ mode: 'single' })"
+            >
+              全部合成一篇
+            </button>
+            <button
+              class="np-option np-option--custom"
+              type="button"
+              :disabled="executingNote"
+              @click="noteCustomMode = !noteCustomMode"
+            >
+              都不满意,自己说
+            </button>
+          </div>
+          <div v-if="noteCustomMode" class="np-custom">
+            <textarea
+              v-model="noteCustomText"
+              class="input np-custom-input"
+              rows="2"
+              placeholder="说说你想怎么整理…(如:只要 axios 的部分 / 按项目拆成两篇)"
+            />
+            <div class="np-actions">
+              <button class="btn btn--ghost" type="button" @click="noteCustomMode = false">
+                返回选项
+              </button>
+              <button
+                class="btn btn--primary"
+                type="button"
+                :disabled="noteCustomText.trim() === '' || executingNote"
+                @click="executeNotePlan({ mode: 'split', instruction: noteCustomText.trim() })"
+              >
+                {{ executingNote ? '整理中…' : '按这个要求整理' }}
+              </button>
+            </div>
+          </div>
+          <button class="np-cancel" type="button" :disabled="executingNote" @click="cancelNotePlan">
+            取消
+          </button>
+        </div>
+
+        <form v-else class="chat-input" @submit.prevent="send">
           <input
             v-model="input"
             class="input"
@@ -786,5 +915,96 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 .status-sep {
   margin: 0 6px;
   color: var(--ink-3);
+}
+
+/* ---- 交互式存笔记选项卡 ---- */
+.note-plan {
+  padding: 14px 18px;
+}
+
+.np-title {
+  margin: 0 0 10px;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.np-hint {
+  font-weight: 400;
+  font-size: 12.5px;
+  margin-left: 6px;
+}
+
+.np-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.np-option {
+  padding: 8px 14px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--ink-2);
+  font-size: 13.5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.np-option:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.np-option:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.np-option--primary {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+.np-option--custom {
+  border-style: dashed;
+  color: var(--ink-3);
+}
+
+.np-custom {
+  margin-top: 12px;
+}
+
+.np-custom-input {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.np-actions {
+  display: flex;
+  margin-top: 8px;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.np-cancel {
+  margin-top: 10px;
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.np-cancel:hover:not(:disabled) {
+  color: var(--accent);
 }
 </style>

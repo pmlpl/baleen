@@ -47,16 +47,57 @@ export interface ChatResponse {
   took_ms: number
 }
 
-export interface SaveNoteResponse {
+export interface SaveNoteItem {
   note_file: string
+  title: string
   organized_chars: number
   import_enqueued: boolean
   import_job_id: string | null
 }
 
+export interface SaveNoteResponse {
+  note_file: string
+  organized_chars: number
+  import_enqueued: boolean
+  import_job_id: string | null
+  /** 多篇模式(split/topics)的完整产物;单篇时长度 1 */
+  notes: SaveNoteItem[]
+}
+
+/** 存为笔记的选项;不带 = 旧行为(整段一篇) */
+export interface SaveNoteRequest {
+  mode: 'single' | 'split' | 'topics'
+  topic_ids?: number[]
+  /** 用户自由输入的补充要求(如「只要 axios 部分」) */
+  instruction?: string
+}
+
+/** note-plan 返回的一个主题;id 即数组下标 */
+export interface NoteTopicView {
+  id: number
+  title: string
+  summary: string
+  msg_start: number
+  msg_end: number
+}
+
+export interface NotePlanResponse {
+  topics: NoteTopicView[]
+  /** split = 主题间基本无关,建议拆;single = 同一主题 */
+  suggestion: 'split' | 'single'
+}
+
+/** POST /api/qa/sessions/{id}/note-plan —— 存笔记前的主题分析 */
+export function planSessionNote(sessionId: number): Promise<NotePlanResponse> {
+  return http.post<NotePlanResponse>(`/qa/sessions/${sessionId}/note-plan`, {})
+}
+
 /** POST /api/qa/sessions/{id}/save-note —— 会话整理成 Markdown:落 notes_out/ + no_llm 入库 */
-export function saveSessionNote(sessionId: number): Promise<SaveNoteResponse> {
-  return http.post<SaveNoteResponse>(`/qa/sessions/${sessionId}/save-note`, {})
+export function saveSessionNote(
+  sessionId: number,
+  body?: SaveNoteRequest,
+): Promise<SaveNoteResponse> {
+  return http.post<SaveNoteResponse>(`/qa/sessions/${sessionId}/save-note`, body ?? {})
 }
 
 export interface QaSessionItem {

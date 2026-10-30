@@ -19,7 +19,7 @@ import re
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from fastapi.responses import StreamingResponse
@@ -42,7 +42,12 @@ from app.service.qa.answerer import (
     build_web_citations,
 )
 from app.service.qa.rewriter import rewrite_question
-from app.service.qa.summarizer import organize_session_note
+from app.service.qa.summarizer import (
+    NoteTopic,
+    dialogue_for_range,
+    organize_session_note,
+    plan_note_split,
+)
 from app.service.qa.websearch import search_web
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
@@ -552,34 +557,56 @@ class SaveNoteResponse(BaseModel):
     organized_chars: int
     import_enqueued: bool
     import_job_id: str | None
+    # 多篇模式(split/topics)的完整产物;旧字段取第一篇以保持兼容
+    notes: list[SaveNoteItem] = Field(default_factory=list)
 
 
-@router.post("/sessions/{session_id}/save-note", response_model=SaveNoteResponse)
-async def save_session_as_note(
-    session_id: int, llm: LLMClientDep, session: SessionDep, owner_id: CurrentOwnerDep
-) -> SaveNoteResponse:
-    """阶段4(D2=B):把会话整理成 Markdown 笔记 → 落 notes_out/ → no_llm 入库(异步)。
+class SaveNoteItem(BaseModel):
+    note_file: str
+    title: str
+    organized_chars: int
+    import_enqueued: bool
+    import_job_id: str | None
 
-    直接入库跳过 G2(来源是自家整理产物);G0/G1/切块/向量化照常走,保证可检索。
+
+class NoteTopicOut(BaseModel):
+    """note-plan 返回的一个主题;id 即 topics 数组下标。"""
+
+    id: int
+    title: str
+    summary: str
+    msg_start: int
+    msg_end: int
+
+
+class NotePlanResponse(BaseModel):
+    topics: list[NoteTopicOut]
+    suggestion: str  # "split"(主题无关,建议拆) | "single"(同一主题)
+
+
+class SaveNoteRequest(BaseModel):
+    """存为笔记的选项(不带 body = 旧行为:整段一篇)。
+
+    mode: single=合成一篇;split=按计划每主题一篇;topics=只生成选中的主题。
+    instruction: 用户自由输入的补充要求,拼进整理 prompt。
     """
-    repo = QaRepo(session, owner_id)
-    qa_session = await repo.get_session(session_id)
-    if qa_session is None:
-        raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
-    messages = await repo.list_messages(session_id)
-    if len(messages) < 2:
-        raise HTTPException(status_code=400, detail="会话还没有可整理的问答内容")
 
-    dialogue = "\n\n".join(
-        f"{'用户' if m.role == 'user' else '助手'}:{m.content}" for m in messages
-    )
-    note_md = await organize_session_note(qa_session.title, dialogue, client=llm)
+    mode: Literal["single", "split", "topics"] = "single"
+    topic_ids: list[int] = Field(default_factory=list)
+    instruction: str = Field(default="", max_length=500)
 
+
+def _sanitize_filename(title: str) -> str:
+    safe = re.sub(r'[<>:"/\\|?*\s]+', "-", title).strip("-.")[:40] or "session"
+    return safe if safe.endswith(".md") else f"{safe}.md"
+
+
+async def _organize_and_enqueue(
+    note_title: str, note_md: str, owner_id: int
+) -> SaveNoteItem:
+    """一篇笔记的落盘 + 入库(save-note 与多篇模式共用)。"""
     NOTES_OUT_DIR.mkdir(parents=True, exist_ok=True)
-    safe = re.sub(r'[<>:"/\\|?*\s]+', "-", qa_session.title).strip("-.")[:40] or "session"
-    if not safe.endswith(".md"):
-        safe += ".md"
-    filename = f"{datetime.now():%Y-%m-%d}-{safe}"
+    filename = f"{datetime.now():%Y-%m-%d}-{_sanitize_filename(note_title)}"
     (NOTES_OUT_DIR / filename).write_text(note_md, encoding="utf-8")
 
     # 入库:写暂存区 → no_llm 导入(G0 解析→G1→切块→向量化;跳过 G2,来源是自家整理产物)
@@ -592,10 +619,110 @@ async def save_session_as_note(
     job_id = await enqueue_import(
         str(staging_path), dedupe_key=dedupe_key, no_llm=True, owner_id=owner_id
     )
-
-    return SaveNoteResponse(
+    return SaveNoteItem(
         note_file=f"notes_out/{filename}",
+        title=note_title,
         organized_chars=len(note_md),
         import_enqueued=job_id is not None,
         import_job_id=job_id,
+    )
+
+
+@router.post("/sessions/{session_id}/note-plan", response_model=NotePlanResponse)
+async def note_plan(
+    session_id: int, llm: LLMClientDep, session: SessionDep, owner_id: CurrentOwnerDep
+) -> NotePlanResponse:
+    """存笔记前的主题分析:跨主题的对话让用户选「拆几篇/要哪篇」,再生成。"""
+    repo = QaRepo(session, owner_id)
+    qa_session = await repo.get_session(session_id)
+    if qa_session is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
+    messages = await repo.list_messages(session_id)
+    if len(messages) < 2:
+        raise HTTPException(status_code=400, detail="会话还没有可整理的问答内容")
+
+    plain = [{"role": m.role, "content": m.content} for m in messages]
+    plan = await plan_note_split(qa_session.title, plain, client=llm)
+    return NotePlanResponse(
+        topics=[
+            NoteTopicOut(
+                id=i,
+                title=t.title,
+                summary=t.summary,
+                msg_start=t.msg_start,
+                msg_end=t.msg_end,
+            )
+            for i, t in enumerate(plan.topics)
+        ],
+        suggestion=plan.suggestion,
+    )
+
+
+@router.post("/sessions/{session_id}/save-note", response_model=SaveNoteResponse)
+async def save_session_as_note(
+    session_id: int,
+    llm: LLMClientDep,
+    session: SessionDep,
+    owner_id: CurrentOwnerDep,
+    payload: SaveNoteRequest | None = None,
+) -> SaveNoteResponse:
+    """阶段4(D2=B):把会话整理成 Markdown 笔记 → 落 notes_out/ → no_llm 入库(异步)。
+
+    直接入库跳过 G2(来源是自家整理产物);G0/G1/切块/向量化照常走,保证可检索。
+    带 body 时支持跨主题拆分:split=每主题一篇,topics=只生成选中的;
+    instruction 是用户自由输入的补充要求。
+    """
+    repo = QaRepo(session, owner_id)
+    qa_session = await repo.get_session(session_id)
+    if qa_session is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
+    messages = await repo.list_messages(session_id)
+    if len(messages) < 2:
+        raise HTTPException(status_code=400, detail="会话还没有可整理的问答内容")
+
+    req = payload or SaveNoteRequest()
+    plain = [{"role": m.role, "content": m.content} for m in messages]
+    instruction = req.instruction.strip()
+
+    # 拆分/选主题 → 先拿计划(不信任前端传的区间,按 id 从本会话现算的计划里取)
+    topics_for_notes: list[NoteTopic] = []
+    if req.mode in ("split", "topics"):
+        plan = await plan_note_split(qa_session.title, plain, client=llm)
+        if plan.suggestion == "single" and len(plan.topics) == 1:
+            # 单主题对话,拆分无意义 → 合成一篇(带上 instruction)
+            topics_for_notes = []
+        elif req.mode == "topics":
+            picked = {i for i in req.topic_ids if 0 <= i < len(plan.topics)}
+            topics_for_notes = (
+                [t for i, t in enumerate(plan.topics) if i in picked] or list(plan.topics)
+            )
+        else:
+            topics_for_notes = list(plan.topics)
+
+    items: list[SaveNoteItem] = []
+    if not topics_for_notes:
+        dialogue = "\n\n".join(
+            f"{'用户' if m.role == 'user' else '助手'}:{m.content}" for m in messages
+        )
+        note_md = await organize_session_note(
+            qa_session.title, dialogue, instruction=instruction, client=llm
+        )
+        items.append(await _organize_and_enqueue(qa_session.title, note_md, owner_id))
+    else:
+        # 每主题一篇,串行(D3 口径);区间外的闲聊不带进单篇,保持笔记聚焦
+        for topic in topics_for_notes:
+            dialogue = dialogue_for_range(plain, topic.msg_start, topic.msg_end)
+            note_title = topic.title if topic.title else qa_session.title
+            note_md = await organize_session_note(
+                note_title, dialogue, instruction=instruction, client=llm
+            )
+            items.append(await _organize_and_enqueue(note_title, note_md, owner_id))
+
+    first = items[0]
+    return SaveNoteResponse(
+        note_file=first.note_file,
+        organized_chars=first.organized_chars,
+        import_enqueued=first.import_enqueued,
+        import_job_id=first.import_job_id,
+        notes=items,
     )
