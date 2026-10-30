@@ -146,20 +146,32 @@ def _has_relevant_hit(hits: list[ContextHit], query: str) -> bool:
 
     向量检索永远返回 top_k 条近邻,即使完全不相关——这个检查防止
     「库内其实没有但检索返回了 5 条不相干的」时联网兜底不触发。
-    中文没空格分词,用 2 字滑窗提取关键词(「闭包是什么」→ 闭包/包是/是什/什么)。
+
+    分两类词:
+    - **专有词**(英文 ≥3 字符):必须至少一个整词命中才算相关
+      (避免 "ReAct" 拆成 re/ea/ac/ct 在代码里到处匹配)
+    - **通用词**(中文 2 字滑窗):无专有词时用,任一命中即可
     """
-    terms: set[str] = set()
+    specific: set[str] = set()  # 英文整词
+    generic: set[str] = set()  # 中文 2 字
     for part in re.split(r"[\s,，。、？?!！]+", query):
         part = part.strip()
-        if len(part) >= 2:
-            terms.add(part.lower())
+        if not part:
+            continue
+        if re.search(r"[a-zA-Z]", part) and len(part) >= 3:
+            specific.add(part.lower())
+        elif len(part) >= 2:
+            generic.add(part)
             for i in range(len(part) - 1):
-                terms.add(part[i : i + 2].lower())
-    if not terms:
+                generic.add(part[i : i + 2])
+    if not specific and not generic:
         return bool(hits)  # 查询太短无法拆词,有命中就算相关
     for h in hits:
         text = (h.parent_text or "").lower()
-        if any(term in text for term in terms):
+        if specific:
+            if any(t in text for t in specific):
+                return True
+        elif any(t in text for t in generic):
             return True
     return False
 
