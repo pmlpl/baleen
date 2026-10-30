@@ -33,8 +33,8 @@ function renderInline(raw: string): string {
       /(?<![\w.[])\[(W?\d+)\]/g,
       (_m, ref: string) =>
         ref.startsWith('W')
-          ? `<sup class="cite-ref cite-ref--web">${ref}</sup>`
-          : `<sup class="cite-ref">${ref}</sup>`,
+          ? `<span class="cite-ref cite-ref--web">${ref}</span>`
+          : `<span class="cite-ref">${ref}</span>`,
     )
 
   // 还原行内代码

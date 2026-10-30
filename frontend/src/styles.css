@@ -373,7 +373,7 @@ ol {
 
 /* 出处标记 [1] / [W2]:上标小徽章,和正文区分
    (由 utils/markdown.ts 的 renderInline 生成) */
-.md sup.cite-ref {
+.md .cite-ref {
   display: inline-block;
   margin: 0 1px;
   padding: 0 4px;
@@ -383,12 +383,15 @@ ol {
   font-family: 'Cascadia Code', 'Consolas', monospace;
   font-size: 0.72em;
   font-weight: 600;
+  /* 行内元素,基线对齐(和文字底部齐平)。不用 <sup>,
+     因为浏览器给 sup 默认 vertical-align:super + font-size:smaller,
+     想对齐还得再覆盖两层 */
   line-height: 1.5;
-  vertical-align: super;
+  vertical-align: baseline;
 }
 
 /* 联网来源 [W1]:暖色底,和库内出处一眼区分 */
-.md sup.cite-ref--web {
+.md .cite-ref--web {
   background: var(--warn-soft);
   color: var(--warn);
 }
