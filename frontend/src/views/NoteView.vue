@@ -28,6 +28,10 @@ const errorText = ref('')
 const activeId = ref<number | null>(null)
 /** 目录列表元素(高亮项自动滚进可视区用) */
 const tocListEl = ref<HTMLElement | null>(null)
+/** 左栏滚动容器(目录本身过高时在这里滚) */
+const tocEl = ref<HTMLElement | null>(null)
+/** 右栏滚动容器(正文在这里滚,不是整页滚) */
+const contentEl = ref<HTMLElement | null>(null)
 
 /** 目录条目:章节名 + 缩进层级 + 原块 */
 interface TocEntry {
@@ -144,14 +148,18 @@ function renderSectionText(raw: string): string {
 /** 平滑滚动期间锁住高亮(否则中途经过的节会闪一下又跳回来) */
 let lockUntil = 0
 
-/** 点目录:滚动到对应块(不换内容),并更新 URL hash */
+/** 点目录:让右栏滚到对应块(不换内容),并更新 URL hash */
 function scrollToSection(chunkId: number, smooth = true): void {
+  const container = contentEl.value
   const target = document.getElementById(`sec-${chunkId}`)
-  if (target === null) return
+  if (container === null || target === null) return
   activeId.value = chunkId
   syncTocScroll(chunkId)
   lockUntil = Date.now() + 600 // 平滑滚动大致耗时,期间不做位置反查
-  target.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' })
+  // 右栏是独立滚动容器,用相对它的偏移量精确定位(留 8px 呼吸空间)
+  const top =
+    target.getBoundingClientRect().top - container.getBoundingClientRect().top + container.scrollTop - 8
+  container.scrollTo({ top, behavior: smooth ? 'smooth' : 'auto' })
   // hash 只用于记忆位置,不触发路由重载
   history.replaceState(null, '', `#sec-${chunkId}`)
 }
@@ -165,16 +173,20 @@ function scrollToSection(chunkId: number, smooth = true): void {
  * 规则:取「顶部已经越过判定线(视口上沿往下 120px)」的最后一节;
  * 一节都还没到就取第一节。这样滚到哪节,左边就跟到哪节。
  */
-const ACTIVE_OFFSET_PX = 120
+const ACTIVE_OFFSET_PX = 60
 
 function computeActive(): void {
   if (Date.now() < lockUntil) return // 程序化滚动中,别和用户意图打架
   if (toc.value.length === 0) return
+  const container = contentEl.value
+  if (container === null) return
+  // 基准是右栏容器的上沿(不是浏览器视口):右栏自己滚,容器位置不变
+  const base = container.getBoundingClientRect().top
   let current = toc.value[0]?.parent.chunk_id ?? null
   for (const entry of toc.value) {
     const el = document.getElementById(`sec-${entry.parent.chunk_id}`)
     if (el === null) continue
-    if (el.getBoundingClientRect().top - ACTIVE_OFFSET_PX <= 0) {
+    if (el.getBoundingClientRect().top - base <= ACTIVE_OFFSET_PX) {
       current = entry.parent.chunk_id
     } else {
       break // 后面的节都在下方,不用再看
@@ -186,20 +198,21 @@ function computeActive(): void {
   }
 }
 
-/** 让目录里高亮的那一项保持在可视区域内(目录自己会滚动) */
+/** 让目录里高亮的那一项保持在可视区域内(目录超高时自己滚) */
 function syncTocScroll(chunkId: number | null): void {
   if (chunkId === null) return
   const list = tocListEl.value
-  if (list === null) return
+  const box = tocEl.value
+  if (list === null || box === null) return
   const active = list.querySelector<HTMLElement>(`[data-sec="${chunkId}"]`)
   if (active === null) return
-  const listRect = list.getBoundingClientRect()
+  const listRect = box.getBoundingClientRect()
   const itemRect = active.getBoundingClientRect()
   const margin = 24
   if (itemRect.top < listRect.top + margin) {
-    list.scrollTop -= listRect.top + margin - itemRect.top
+    box.scrollTop -= listRect.top + margin - itemRect.top
   } else if (itemRect.bottom > listRect.bottom - margin) {
-    list.scrollTop += itemRect.bottom - (listRect.bottom - margin)
+    box.scrollTop += itemRect.bottom - (listRect.bottom - margin)
   }
 }
 
@@ -215,14 +228,14 @@ function onScroll(): void {
   })
 }
 
-/** 绑定 / 解绑(window 滚动 + 尺寸变化) */
+/** 绑定 / 解绑(右栏容器滚动 + 尺寸变化) */
 function bindScrollTracking(): void {
-  window.addEventListener('scroll', onScroll, { passive: true })
+  contentEl.value?.addEventListener('scroll', onScroll, { passive: true })
   window.addEventListener('resize', onScroll)
 }
 
 function unbindScrollTracking(): void {
-  window.removeEventListener('scroll', onScroll)
+  contentEl.value?.removeEventListener('scroll', onScroll)
   window.removeEventListener('resize', onScroll)
 }
 
@@ -239,7 +252,7 @@ function restoreScroll(): void {
   }
   const first = toc.value.find((e) => e.parent.text.trim().length > 0)
   activeId.value = first ? first.parent.chunk_id : null
-  window.scrollTo({ top: 0 })
+  contentEl.value?.scrollTo({ top: 0 })
 }
 
 async function load(): Promise<void> {
@@ -254,16 +267,18 @@ async function load(): Promise<void> {
   unbindScrollTracking() // 换笔记时先摘掉旧监听,避免叠加
   try {
     note.value = await getNote(noteId)
-    await nextTick()
-    restoreScroll()
-    computeActive()
-    bindScrollTracking()
   } catch (error) {
     note.value = null
     errorText.value = describeApiError(error)
   } finally {
     loading.value = false
   }
+  if (note.value === null) return
+  // 等 v-if 把正文渲染出来再取容器:contentEl/tocEl 到这一步才存在
+  await nextTick()
+  restoreScroll()
+  computeActive()
+  bindScrollTracking()
 }
 
 watch(
@@ -311,7 +326,7 @@ function qualityLabel(quality: string | null): string {
 
       <div class="reader">
         <!-- 左栏:锚点目录(sticky,独立滚动) -->
-        <aside class="toc" aria-label="章节目录">
+        <aside ref="tocEl" class="toc" aria-label="章节目录">
           <div class="toc-inner">
             <p class="toc-title">目录</p>
             <ul v-if="toc.length > 0" ref="tocListEl" class="toc-list">
@@ -334,7 +349,7 @@ function qualityLabel(quality: string | null): string {
         </aside>
 
         <!-- 右栏:整篇连续正文,每节一个锚点 -->
-        <article class="content">
+        <article ref="contentEl" class="content">
           <section
             v-for="entry in toc"
             :id="`sec-${entry.parent.chunk_id}`"
@@ -360,7 +375,9 @@ function qualityLabel(quality: string | null): string {
 <style scoped>
 .note-page {
   display: flex;
-  min-height: 0;
+  /* 撑满可视区域,页面本身不滚(滚动交给下面两栏) */
+  height: calc(100vh - 96px);
+  min-height: 420px;
   flex-direction: column;
 }
 
@@ -386,26 +403,28 @@ function qualityLabel(quality: string | null): string {
 
 .reader {
   display: grid;
+  /* 关键:两栏都占满剩余高度,各自内部滚动 → 底边天然对齐且都没有空白 */
+  flex: 1;
+  min-height: 0;
   grid-template-columns: 236px minmax(0, 1fr);
   gap: 24px;
-  /* stretch(默认):左栏卡片拉伸到与右栏同高,两栏底边对齐成一条水平线 */
   align-items: stretch;
 }
 
-/* 左栏:卡片随右栏拉伸;内层 sticky,滚动时目录仍跟随视口 */
+/* 左栏:固定一屏高,目录多了自己滚 */
 .toc {
+  min-width: 0;
+  min-height: 0;
+  padding: 14px 10px;
+  overflow-y: auto;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   background: var(--panel);
-  min-width: 0;
 }
 
+/* 左栏不再需要 sticky:它自己就是滚动容器 */
 .toc-inner {
-  position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 140px);
-  overflow-y: auto;
-  padding: 14px 10px;
+  display: contents;
 }
 
 .toc-title {
@@ -464,6 +483,10 @@ function qualityLabel(quality: string | null): string {
 
 .content {
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* 给滚动条留点空间,末行不被贴边 */
+  padding-right: 6px;
 }
 
 .sec-block {
@@ -538,13 +561,20 @@ function qualityLabel(quality: string | null): string {
 
 /* 窄屏:目录折到上方 */
 @media (max-width: 900px) {
+  .note-page {
+    height: auto;
+  }
+
   .reader {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .toc-inner {
-    position: static;
+  .toc {
     max-height: 240px;
+  }
+
+  .content {
+    overflow: visible;
   }
 }
 </style>
