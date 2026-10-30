@@ -141,6 +141,29 @@ def _cache_hit_rate(hit: int | None, miss: int | None) -> float | None:
     return round(h / total, 4) if total else None
 
 
+def _has_relevant_hit(hits: list[ContextHit], query: str) -> bool:
+    """简单相关性检查:至少一条命中的正文包含查询里的某个关键词。
+
+    向量检索永远返回 top_k 条近邻,即使完全不相关——这个检查防止
+    「库内其实没有但检索返回了 5 条不相干的」时联网兜底不触发。
+    中文没空格分词,用 2 字滑窗提取关键词(「闭包是什么」→ 闭包/包是/是什/什么)。
+    """
+    terms: set[str] = set()
+    for part in re.split(r"[\s,，。、？?!！]+", query):
+        part = part.strip()
+        if len(part) >= 2:
+            terms.add(part.lower())
+            for i in range(len(part) - 1):
+                terms.add(part[i : i + 2].lower())
+    if not terms:
+        return bool(hits)  # 查询太短无法拆词,有命中就算相关
+    for h in hits:
+        text = (h.parent_text or "").lower()
+        if any(term in text for term in terms):
+            return True
+    return False
+
+
 def _message_out(m: QaMessage) -> MessageOut:
     return MessageOut(
         id=m.id,
@@ -206,10 +229,11 @@ async def chat(
     messages, _build_meta = build_qa_messages(payload.question, kb_hits, history=history)
     llm_user_text = messages[-1]["content"]
 
-    # 4.5) 工具链兜底(阶段5 最小实现):库内没命中且配了 Tavily → 联网搜索
+    # 4.5) 工具链兜底:库内没命中 OR 命中但不相关(正文不含查询关键词) → 联网搜索
     web_results: list[dict[str, str]] = []
     tavily_key = await resolve_tavily_key(session)
-    if not kb_hits and tavily_key:
+    kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
+    if kb_irrelevant and tavily_key:
         try:
             web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
         except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
@@ -310,10 +334,11 @@ async def chat_stream_endpoint(
     messages, _build_meta = build_qa_messages(payload.question, kb_hits, history=history)
     llm_user_text = messages[-1]["content"]
 
-    # 工具链兜底(阶段5 最小实现):库内没命中且配了 Tavily → 联网搜索
+    # 工具链兜底:库内没命中 OR 命中但不相关 → 联网搜索
     web_results: list[dict[str, str]] = []
     tavily_key = await resolve_tavily_key(session)
-    if not kb_hits and tavily_key:
+    kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
+    if kb_irrelevant and tavily_key:
         try:
             web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
         except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败

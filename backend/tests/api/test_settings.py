@@ -46,11 +46,8 @@ def test_get_never_returns_full_key(env: SimpleNamespace) -> None:
 
 
 def test_tavily_key_roundtrip(env: SimpleNamespace) -> None:
-    # 默认没有 → set/tail 为空
-    first = env.client.get("/api/settings").json()
-    assert first["tavily_set"] is False
-    assert first["tavily_tail"] == ""
-    # 设置 → 反映
+    # 库里可能已有真实 key(主人配的),不假设初始为空
+    # 设置新 key → tail 反映新值
     resp = env.client.put("/api/settings", json={"tavily_api_key": "tvly-abc12345"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
