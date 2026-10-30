@@ -9,7 +9,8 @@
 
 - 前缀 `/api`，`GET /healthz` 例外（不带前缀，历史原因，别改）。
 - 请求/响应一律 `application/json; charset=utf-8`；上传例外（`multipart/form-data`）。
-- **单用户**：没有鉴权头，`owner_id` 后端写死 1（AGENTS §5 决策 11）。
+- **多用户**：所有 `/api/*` 业务接口都要 `Authorization: Bearer <token>`（`/healthz` 与 `/api/auth/*` 除外）。
+  数据按 `owner_id` 隔离；`owner_id` 由 token 解出，不再是常量（见 §9）。
 - 时间一律 ISO-8601 带时区，例：`2026-10-29T01:20:00+08:00`。
 - 错误一律 `{"detail": "<人能看懂的中文>"}` + 恰当的 4xx/5xx（FastAPI 默认形状，前端直接用）。
 - 分页参数统一 `limit`（默认 20，上限 100）、`offset`（默认 0）；列表响应统一带 `total`。
@@ -321,16 +322,16 @@
 
 | 不做 | 原因 |
 |---|---|
-| 登录 / 注册 / token | 单用户，AGENTS §8 |
+| 邮箱验证 / 找回密码 / 第三方登录 | 只做用户名+密码；毕设不需要更复杂的流程 |
 | 站内编辑笔记（PUT/PATCH） | 真源是 block JSON，v2 再说 |
-| 删除 | 单用户演示不需要；误删演示事故风险 > 收益 |
+| 删除账号 | 演示不需要；误删事故风险 > 收益（笔记/会话的删除已实现） |
 | 分页以外的复杂搜索（排序、过滤组合） | 20 个 query 的评测还没出来，先别过度设计 |
 
 ---
 
 ## 8. Charter 章程（**已实现**）
 
-首次登录弹问卷向导 → LLM 生成章程 → 存 `app_settings.charter` → G2 热生效。
+**每个账号各自一份章程**（`app_settings` 每用户一行）。首次登录弹问卷向导 → LLM 生成章程 → 存该用户行 → G2 热生效。
 DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 → DEFAULT_CHARTER）。
 
 ### `GET /api/charter`
@@ -339,7 +340,9 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 { "has_charter": false, "charter": null }
 ```
 
-`has_charter=true` 表示 DB 里已有问卷生成的章程；`false` = 回退 `charter.md` 文件。前端首次登录用它判断要不要弹问卷。
+`has_charter=true` 表示**当前账号**已有章程；`false` = 回退 `charter.md` 文件。前端用它判断要不要弹问卷。
+
+`PUT /api/charter` 传空串 = 清空该账号的章程（回退文件）。
 
 ### `POST /api/charter/generate`
 
@@ -386,6 +389,49 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-30 | v5 | 新增 **§9 认证**（注册/登录/me + 数据隔离）；**全站改为多用户**——所有业务接口需 `Authorization: Bearer`，`owner_id` 由 token 解出；`app_settings` 改每用户一行（章程随行归属），API Key 不再回退 `.env`；§7 移除「登录/注册」 |
 | 2026-10-30 | v4 | 新增 **§8 Charter 章程**（GET/POST generate/PUT）；worker 的 charter 改为 DB 优先（`resolve_charter`），§6 已知边界更新 |
 | 2026-10-29 | v1 | 首版：把已实现的 `/healthz`、`POST /api/sources`、`GET /api/sources/{id}` 固化，并定下待实现的 4 个查询接口，供线 L（前端）与线 M（后端）并行开发 |
 | 2026-10-29 | v2 | 线 M / 线 L 交付后按**真实返回**订正，补齐 §0 枚举表。**v1 凭记忆写的枚举有 6 处与数据库 CHECK 不符**：`verdict` 写 `pass`（实为 `accept/partial/reject/skip`）、`quality` 写 `high`（实为 `core/normal/reference/junk`）、`action` 写 `accept`（实为 `index/extract_spans/topic_dialog/drop`）、`parse_status` 写 `failed`（实为 `error`）且漏了 `pending_ocr`、`job.status` 写 `cancelled`（实为 `dead`）、`ext` 写成无点。另补：`markdown`/`lang` 实测为 `null`、`parse_status` 只在 `job.status=done` 时有意义、`took_ms` 冷启动语义、检索无相关性阈值的取舍。**教训：契约里的枚举必须从数据库 CHECK 抄，不能凭记忆编。** |
+
+---
+
+## 9. 认证（**已实现**）
+
+用户名 + 密码 + JWT。密码用标准库 `scrypt` 哈希（不存明文），token 有效期 7 天（`JWT_EXPIRE_MINUTES`）。
+
+> **除 `/healthz` 与本节端点外，所有 `/api/*` 都要带 `Authorization: Bearer <token>`，否则 401。**
+
+### `POST /api/auth/register`
+
+开放注册。用户名 3-32 字符、密码 8-128 字符。
+
+```json
+{ "username": "alice", "password": "my-password" }
+```
+
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIs...",
+  "token_type": "bearer",
+  "user": { "id": 1, "username": "alice" }
+}
+```
+
+- 用户名已存在 → `409`「用户名已被占用」
+- **第一个注册的账号拿到 `id=1`，继承项目单用户时期的全部存量数据**（笔记/会话/设置/章程）
+
+### `POST /api/auth/login`
+
+请求体同注册。用户不存在与密码错误统一返回 `401`「用户名或密码错误」（不泄露用户名是否注册过）。
+
+### `GET /api/auth/me`
+
+需要 token。返回 `{ "id": 1, "username": "alice" }`。
+
+### 数据隔离
+
+- 所有业务表查询按 token 解出的 `owner_id` 过滤；拿别人的 `note_id`/`session_id` 一律 404
+- `app_settings` 每用户一行（唯一约束 `owner_id`）：LLM 网关/模型/API Key、Tavily Key、章程各自独立
+- **API Key 不继承 `.env`**：新账号必须自己到设置页配（`api_key_set=false` 时上传会 400）
+- 导入任务（worker）也按 `owner_id` 落库；`jobs` 去重键是 `(owner_id, dedupe_key)`
