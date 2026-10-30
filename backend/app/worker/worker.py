@@ -107,8 +107,16 @@ async def import_file(
     async with session_factory() as session:
         charter = await resolve_charter(session, owner_id)
         base_url, api_key, model = await resolve_llm_config(session, owner_id)
+    # 导入是后台任务,允许长耗时:标题整理要整篇过一遍,60s 默认超时不够
     client = (
-        LLMClient(base_url=base_url, api_key=api_key, model=model) if api_key else None
+        LLMClient(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            timeout=get_settings().llm_long_task_timeout,
+        )
+        if api_key
+        else None
     )
 
     result = await run_import_async(

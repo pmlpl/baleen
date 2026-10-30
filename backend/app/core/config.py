@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-only-insecure-secret-change-me"
     jwt_expire_minutes: int = 60 * 24 * 7  # 7 天
 
+    # ---------- LLM 输出预算 ----------
+    # 推理模型把 reasoning 也计入 max_tokens,给小了正文会整条为空。
+    # 默认按主流长上下文模型的上限设(8192),可用 LLM_MAX_OUTPUT_TOKENS 覆盖。
+    llm_max_output_tokens: int = 8192
+    # 单次结构化任务的超时(秒):整理整篇比单轮问答慢得多
+    llm_long_task_timeout: float = 300.0
+
     def resolve_charter(self) -> str:
         """charter 解析优先级:``baleen/charter.md`` 全文 > `CHARTER` 环境变量 > 内置默认。
 

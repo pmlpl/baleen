@@ -84,6 +84,8 @@ class SourceStatus(BaseModel):
     message: str | None
     warnings: list[str]
     g2_skipped: bool
+    # 导入时是否跑过标题结构二次加工
+    headings_rewritten: bool
     note_id: int | None
     created_at: datetime
     job: JobOut | None
@@ -246,6 +248,7 @@ async def get_source_status(
         message=meta.get("message"),
         warnings=list(meta.get("warnings") or []),
         g2_skipped=bool(meta.get("g2_skipped")),
+        headings_rewritten=bool(meta.get("headings_rewritten")),
         note_id=note.id if note else None,
         created_at=source.created_at,
         job=(

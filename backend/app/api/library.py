@@ -47,6 +47,8 @@ class SourceListItem(BaseModel):
     parse_status: str
     message: str | None
     note_id: int | None
+    # 导入时是否跑过标题结构二次加工(前端展示徽章用)
+    headings_rewritten: bool = False
     created_at: datetime
 
 
@@ -178,6 +180,7 @@ async def list_sources(
             parse_status=source.parse_status,
             message=(source.parse_meta or {}).get("message"),
             note_id=note_ids.get(source.id),
+            headings_rewritten=bool((source.parse_meta or {}).get("headings_rewritten")),
             created_at=source.created_at,
         )
         for source in rows

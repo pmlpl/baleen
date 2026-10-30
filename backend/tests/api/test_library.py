@@ -38,6 +38,7 @@ SOURCE_ITEM_FIELDS = {
     "parse_status",
     "message",
     "note_id",
+    "headings_rewritten",
     "created_at",
 }
 NOTE_ITEM_FIELDS = {

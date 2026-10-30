@@ -46,6 +46,8 @@ export interface SourceDetail {
   message: string | null
   warnings: string[]
   g2_skipped: boolean
+  /** 导入时是否跑过 AI 标题结构整理 */
+  headings_rewritten: boolean
   note_id: number | null
   created_at: string
   job: JobInfo
@@ -138,6 +140,7 @@ function toSourceDetail(raw: unknown): SourceDetail {
     message: asNullableText(data.message),
     warnings: asTextArray(data.warnings),
     g2_skipped: data.g2_skipped === true,
+    headings_rewritten: data.headings_rewritten === true,
     note_id: typeof data.note_id === 'number' ? data.note_id : null,
     created_at: asText(data.created_at),
     job: toJobInfo(data.job),

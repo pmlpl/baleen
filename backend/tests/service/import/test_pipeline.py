@@ -128,10 +128,12 @@ class TestDedupe:
                     "charter": "只收自己想明白的东西",
                 }
                 first = await run_import_async(path, **kwargs)
+                calls_after_first = fake.calls
                 second = await run_import_async(path, **kwargs)
                 assert first.g2_verdict == "accept"
                 assert second.deduped is True
-                assert fake.calls == 1, "去重命中不许重复调用 G2(省钱)"
+                # 首轮可能有 G2 + 标题整理两次调用;关键是第二轮一次都不调
+                assert fake.calls == calls_after_first, "去重命中不许重复调用 LLM(省钱)"
                 async with factory() as session:
                     g2_rows = list(
                         await session.scalars(
@@ -277,5 +279,131 @@ class TestDryRun:
                 async with factory() as session:
                     assert await _count(session, Source, Source.sha256 == _sha(path)) == 0
                     assert await _count(session, Job, Job.dedupe_key == _key(path)) == 0
+
+        asyncio.run(case())
+
+
+class _RoutingLLM:
+    """按 system prompt 区分 G2 与标题整理,各自返回可预期的内容。"""
+
+    model = "fake-routing-llm"
+
+    def __init__(self, outline_json: str = "[]") -> None:
+        self.calls: list[str] = []
+        self._outline_json = outline_json
+
+    def chat(self, messages, **kwargs) -> ChatResult:
+        system = messages[0]["content"] if messages else ""
+        if "文档结构整理助手" in system:
+            self.calls.append("rewrite")
+            content = self._outline_json
+        else:
+            self.calls.append("g2")
+            content = json.dumps(
+                {
+                    "verdict": "accept",
+                    "quality": "core",
+                    "note_type": "case",
+                    "score": 4,
+                    "action": "index",
+                    "reasons": ["fake"],
+                    "missing": [],
+                },
+                ensure_ascii=False,
+            )
+        return ChatResult(content=content, model=self.model, total_tokens=10)
+
+
+class TestHeadingRewrite:
+    """导入时的标题结构二次加工(仅在 no_llm=False 且结构不佳时触发)。"""
+
+    def test_long_doc_without_headings_gets_rewritten(
+        self, tmp_path, db_scope, fake_embed, fake_tokens
+    ):
+        # 一段很长的纯正文(无标题),把行号与标题计划对上
+        body = "\n\n".join([_PARAGRAPH] * 4)
+        path = _write(tmp_path, "plain.md", body)
+        llm = _RoutingLLM('[{"at": 0, "level": 1, "title": "闭包与内存泄漏"}]')
+
+        async def case():
+            async with db_scope() as factory:
+                result = await run_import_async(
+                    path,
+                    no_llm=False,
+                    session_factory=factory,
+                    embed_func=fake_embed,
+                    token_counter=fake_tokens,
+                    client=llm,
+                    charter="只收自己想明白的东西",
+                )
+                assert result.headings_rewritten is True
+                assert result.headings_added == 1
+                assert "rewrite" in llm.calls
+                async with factory() as session:
+                    note = await session.scalar(
+                        select(Note).where(Note.source_id == result.source_id)
+                    )
+                    assert note is not None
+                    # 笔记标题仍是原文派生(没被重写的 H1 顶掉)
+                    assert note.title == "plain"
+                    doc_headings = [
+                        b
+                        for b in (note.doc or {}).get("content", [])
+                        if b.get("type") == "heading"
+                    ]
+                    assert doc_headings, "应当插入了标题块"
+                    text = "".join(n.get("text", "") for n in doc_headings[0]["content"])
+                    assert text.startswith("一、")
+                    assert "闭包与内存泄漏" in text
+
+        asyncio.run(case())
+
+    def test_no_llm_skips_rewrite(self, tmp_path, db_scope, fake_embed, fake_tokens):
+        body = "\n\n".join([_PARAGRAPH] * 4)
+        path = _write(tmp_path, "skip.md", body)
+        llm = _RoutingLLM('[{"at": 0, "level": 1, "title": "不该出现"}]')
+
+        async def case():
+            async with db_scope() as factory:
+                result = await run_import_async(
+                    path,
+                    no_llm=True,
+                    session_factory=factory,
+                    embed_func=fake_embed,
+                    token_counter=fake_tokens,
+                    client=llm,
+                )
+                assert result.headings_rewritten is False
+                assert "rewrite" not in llm.calls  # 一次 LLM 都没调
+
+        asyncio.run(case())
+
+    def test_well_structured_doc_is_not_rewritten(
+        self, tmp_path, db_scope, fake_embed, fake_tokens
+    ):
+        # 已经带编号且无重名 → needs_rewrite 返回 False,不该花 LLM
+        md = (
+            "# 一、总览\n\n" + _PARAGRAPH + "\n\n"
+            "# 二、细节\n\n" + _PARAGRAPH + "\n\n"
+            "## 2.1 子节甲\n\n" + _PARAGRAPH + "\n\n"
+            "## 2.2 子节乙\n\n" + _PARAGRAPH
+        )
+        path = _write(tmp_path, "good.md", md)
+        llm = _RoutingLLM('[{"at": 0, "level": 1, "title": "不该出现"}]')
+
+        async def case():
+            async with db_scope() as factory:
+                result = await run_import_async(
+                    path,
+                    no_llm=False,
+                    session_factory=factory,
+                    embed_func=fake_embed,
+                    token_counter=fake_tokens,
+                    client=llm,
+                    charter="只收自己想明白的东西",
+                )
+                assert result.headings_rewritten is False
+                assert "rewrite" not in llm.calls
+                assert llm.calls.count("g2") == 1  # G2 照常跑
 
         asyncio.run(case())

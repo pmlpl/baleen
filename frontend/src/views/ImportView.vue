@@ -178,6 +178,7 @@ onBeforeUnmount(() => {
             </span>
             <span v-if="item.deduped" class="badge badge--neutral">已存在,未重复入库</span>
             <span v-if="item.source.g2_skipped" class="badge badge--neutral">已跳过归属判断</span>
+            <span v-if="item.source.headings_rewritten" class="badge badge--ok">已整理标题</span>
             <span class="muted mono">sid #{{ item.source.id }}</span>
             <RouterLink
               v-if="item.source.note_id !== null"

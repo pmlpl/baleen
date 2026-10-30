@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import mimetypes
 import time
 from collections.abc import Callable
@@ -29,11 +30,19 @@ from app.service.gate.g2 import judge as judge_g2
 from app.service.llm import LLMClient
 from app.service.parse import ParseResult, ParseStatus, parse_file
 from app.service.parse.blocks import empty_doc
+from app.service.rewrite.outline import (
+    apply_outline,
+    needs_rewrite,
+    number_headings,
+    plan_outline,
+)
 
 STORAGE_ROOT = ROOT_DIR / "storage"
 DEDUPE_PREFIX = "import:"
 EMBEDDING_MODEL = "bge-large-zh-v1.5"
 WORKER = "import-cli"
+
+log = logging.getLogger(__name__)
 
 EmbedFunc = Callable[[list[str]], Any]
 TokenCounter = Callable[[str], int]
@@ -57,6 +66,9 @@ class ImportResult:
     chunks_children: int = 0
     embeddings: int = 0
     message: str | None = None
+    # 标题结构二次加工:是否跑了、加了几条
+    headings_rewritten: bool = False
+    headings_added: int = 0
     stages: list[tuple[str, float]] = field(default_factory=list)
 
     def stage_ms(self, name: str) -> float:
@@ -349,13 +361,41 @@ async def run_import_async(
                 if result.g2_verdict == "reject":
                     return await _finish(repos, job_id, result, None, session)
 
+            # ---- 标题结构二次加工(可选)----
+            # 放在建笔记之前:改的是 pr.blocks,同一份会流向 notes.doc 与 chunk(),
+            # 一处修改两处生效。失败静默跳过(与 G2 降级同口径,不因整理失败而导入失败)。
+            original_title = _title(pr.blocks, path.name)  # 先记下原标题,避免被重写的 H1 覆盖
+            t = time.perf_counter()
+            if (
+                not no_llm
+                and client is not None
+                and not (source.parse_meta or {}).get("headings_rewritten")
+                and needs_rewrite(pr.blocks)
+            ):
+                try:
+                    specs = await asyncio.to_thread(
+                        plan_outline, pr.blocks, title=original_title, client=client
+                    )
+                    if specs:
+                        pr.blocks = apply_outline(pr.blocks, number_headings(specs))
+                        result.headings_rewritten = True
+                        result.headings_added = len(specs)
+                        # 幂等标记:断点续跑时不再重复整理(重写结果幂等,但会白花钱)
+                        meta = dict(source.parse_meta or {})
+                        meta["headings_rewritten"] = True
+                        source.parse_meta = meta
+                        log.info("标题已整理: %s 条(%s)", len(specs), original_title)
+                except Exception as exc:  # noqa: BLE001 —— 整理是锦上添花,静默跳过
+                    log.warning("标题整理失败(不影响导入): %s", exc)
+            mark("rewrite", t)
+
             # ---- note ----
             t = time.perf_counter()
             note = await repos.notes.get_by_source(source_id)
             if note is None:
                 note = await repos.notes.create(
                     source_id=source_id,
-                    title=_title(pr.blocks, path.name),
+                    title=original_title,
                     doc=pr.blocks,
                     quality=result.quality,
                 )

@@ -365,9 +365,14 @@ class LLMClient:
     def _parse_chat(self, raw: bytes) -> ChatResult:
         try:
             data = json.loads(raw)
-            content = data["choices"][0]["message"]["content"]
+            message = data["choices"][0]["message"]
         except (json.JSONDecodeError, KeyError, IndexError, TypeError) as exc:
             raise LLMResponseError(f"响应不是合法的 OpenAI chat 结构:{exc}") from exc
+        # 推理模型(如 sensenova)在 reasoning 吃满 max_tokens 时可能整条省掉 content 字段。
+        # 这种情况按「空回答」处理,交给调用方判断(而不是抛异常让整轮失败)。
+        content = message.get("content")
+        if content is None:
+            content = ""
         if not isinstance(content, str):
             raise LLMResponseError("响应 choices[0].message.content 不是字符串")
         usage = data.get("usage") or {}
