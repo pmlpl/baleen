@@ -26,7 +26,8 @@ const errorText = ref('')
 
 /** 当前视口内的章节 id,用于目录高亮 */
 const activeId = ref<number | null>(null)
-let observer: IntersectionObserver | null = null
+/** 目录列表元素(高亮项自动滚进可视区用) */
+const tocListEl = ref<HTMLElement | null>(null)
 
 /** 目录条目:章节名 + 缩进层级 + 原块 */
 interface TocEntry {
@@ -140,41 +141,89 @@ function renderSectionText(raw: string): string {
   return out.join('\n')
 }
 
+/** 平滑滚动期间锁住高亮(否则中途经过的节会闪一下又跳回来) */
+let lockUntil = 0
+
 /** 点目录:滚动到对应块(不换内容),并更新 URL hash */
-function scrollToSection(chunkId: number): void {
+function scrollToSection(chunkId: number, smooth = true): void {
   const target = document.getElementById(`sec-${chunkId}`)
   if (target === null) return
-  target.scrollIntoView({ behavior: 'smooth', block: 'start' })
   activeId.value = chunkId
+  syncTocScroll(chunkId)
+  lockUntil = Date.now() + 600 // 平滑滚动大致耗时,期间不做位置反查
+  target.scrollIntoView({ behavior: smooth ? 'smooth' : 'auto', block: 'start' })
   // hash 只用于记忆位置,不触发路由重载
   history.replaceState(null, '', `#sec-${chunkId}`)
 }
 
-/** 建立 / 重建观察器:进入视口上部 1/3 的块算「当前节」 */
-function setupObserver(): void {
-  observer?.disconnect()
-  observer = null
-  if (toc.value.length === 0) return
+/**
+ * 滚动时反查「当前在看哪一节」。
+ *
+ * 用滚动位置直接算,不用 IntersectionObserver:后者的回调只带「状态变化的块」,
+ * 多块同时可见时会漏判,滚轮快速滑动时高亮容易停在上一个。
+ *
+ * 规则:取「顶部已经越过判定线(视口上沿往下 120px)」的最后一节;
+ * 一节都还没到就取第一节。这样滚到哪节,左边就跟到哪节。
+ */
+const ACTIVE_OFFSET_PX = 120
 
-  // root 用 null = 浏览器视口(整页滚动,不是 .content 内部滚动);
-  // 底部留 70% 空档,让「刚滚到顶部的块」成为当前节
-  observer = new IntersectionObserver(
-    (entries) => {
-      const visible = entries
-        .filter((e) => e.isIntersecting)
-        .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)
-      const first = visible[0]
-      if (first?.target instanceof HTMLElement) {
-        const parsed = Number(first.target.id.replace('sec-', ''))
-        if (Number.isFinite(parsed)) activeId.value = parsed
-      }
-    },
-    { root: null, rootMargin: '-10% 0px -70% 0px', threshold: 0 },
-  )
+function computeActive(): void {
+  if (Date.now() < lockUntil) return // 程序化滚动中,别和用户意图打架
+  if (toc.value.length === 0) return
+  let current = toc.value[0]?.parent.chunk_id ?? null
   for (const entry of toc.value) {
     const el = document.getElementById(`sec-${entry.parent.chunk_id}`)
-    if (el !== null) observer.observe(el)
+    if (el === null) continue
+    if (el.getBoundingClientRect().top - ACTIVE_OFFSET_PX <= 0) {
+      current = entry.parent.chunk_id
+    } else {
+      break // 后面的节都在下方,不用再看
+    }
   }
+  if (current !== activeId.value) {
+    activeId.value = current
+    syncTocScroll(current)
+  }
+}
+
+/** 让目录里高亮的那一项保持在可视区域内(目录自己会滚动) */
+function syncTocScroll(chunkId: number | null): void {
+  if (chunkId === null) return
+  const list = tocListEl.value
+  if (list === null) return
+  const active = list.querySelector<HTMLElement>(`[data-sec="${chunkId}"]`)
+  if (active === null) return
+  const listRect = list.getBoundingClientRect()
+  const itemRect = active.getBoundingClientRect()
+  const margin = 24
+  if (itemRect.top < listRect.top + margin) {
+    list.scrollTop -= listRect.top + margin - itemRect.top
+  } else if (itemRect.bottom > listRect.bottom - margin) {
+    list.scrollTop += itemRect.bottom - (listRect.bottom - margin)
+  }
+}
+
+/** 滚动监听:rAF 节流,一帧只算一次 */
+let rafPending = false
+
+function onScroll(): void {
+  if (rafPending) return
+  rafPending = true
+  requestAnimationFrame(() => {
+    rafPending = false
+    computeActive()
+  })
+}
+
+/** 绑定 / 解绑(window 滚动 + 尺寸变化) */
+function bindScrollTracking(): void {
+  window.addEventListener('scroll', onScroll, { passive: true })
+  window.addEventListener('resize', onScroll)
+}
+
+function unbindScrollTracking(): void {
+  window.removeEventListener('scroll', onScroll)
+  window.removeEventListener('resize', onScroll)
 }
 
 /** 首次进入:若带 hash 就滚过去,否则停在顶部 */
@@ -184,7 +233,7 @@ function restoreScroll(): void {
     const id = Number(hash.slice(5))
     if (Number.isFinite(id) && document.getElementById(hash) !== null) {
       activeId.value = id
-      void nextTick(() => scrollToSection(id))
+      void nextTick(() => scrollToSection(id, false))
       return
     }
   }
@@ -202,11 +251,13 @@ async function load(): Promise<void> {
   }
   loading.value = true
   errorText.value = ''
+  unbindScrollTracking() // 换笔记时先摘掉旧监听,避免叠加
   try {
     note.value = await getNote(noteId)
     await nextTick()
     restoreScroll()
-    setupObserver()
+    computeActive()
+    bindScrollTracking()
   } catch (error) {
     note.value = null
     errorText.value = describeApiError(error)
@@ -222,8 +273,7 @@ watch(
 )
 
 onBeforeUnmount(() => {
-  observer?.disconnect()
-  observer = null
+  unbindScrollTracking()
 })
 
 function qualityLabel(quality: string | null): string {
@@ -263,13 +313,14 @@ function qualityLabel(quality: string | null): string {
         <!-- 左栏:锚点目录(sticky,独立滚动) -->
         <aside class="toc" aria-label="章节目录">
           <p class="toc-title">目录</p>
-          <ul v-if="toc.length > 0" class="toc-list">
+          <ul v-if="toc.length > 0" ref="tocListEl" class="toc-list">
             <li v-for="entry in toc" :key="entry.parent.chunk_id">
               <button
                 class="toc-item"
                 :class="{ 'toc-item--active': entry.parent.chunk_id === activeId }"
                 :style="{ paddingLeft: `${10 + entry.depth * 14}px` }"
                 type="button"
+                :data-sec="entry.parent.chunk_id"
                 :title="entry.parent.heading_path"
                 @click="scrollToSection(entry.parent.chunk_id)"
               >
