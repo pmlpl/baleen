@@ -302,6 +302,23 @@
 
 **联网兜底**：库内未命中且设置页配了 Tavily key → 自动搜网，回答基于搜索结果、citations 带 `url`（`note_id=null`，前端渲染外链）、`used_web=true`；未配 key 或搜索失败 → 维持「没找到」口径。
 
+### `POST /api/qa/sessions/{id}/note-plan`（阶段4 增强）
+
+存笔记前的**主题分析**：跨主题对话让用户先选「拆几篇/要哪篇」。
+
+```json
+{
+  "topics": [
+    { "id": 0, "title": "数据库索引", "summary": "B+ 树结构", "msg_start": 0, "msg_end": 3 },
+    { "id": 1, "title": "SSD 硬件", "summary": "选购要点", "msg_start": 4, "msg_end": 7 }
+  ],
+  "suggestion": "split"
+}
+```
+
+- `suggestion`：`split`（主题间基本无关，建议拆）/ `single`（同一主题，建议一篇）
+- 会话消息 <2 → `400`；规划失败自动回退单主题（不报错）
+
 ### `POST /api/qa/sessions/{id}/save-note`（阶段4）
 
 会话整理成结构化 Markdown：LLM 组织 → 落 `notes_out/` 文件 + **no_llm 入库**（跳过 G2，走 G0/G1/切块/向量化，可检索）。响应 `{note_file, organized_chars, import_enqueued, import_job_id}`。会话不足 2 条消息 → 400。
@@ -378,6 +395,10 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 | `reject` | string[] | 不收什么（多选） |
 | `unsure` | string | `collect_low`（收下标低质量）/ `reject`（拒掉）/ `discuss`（提出来聊） |
 | `extra` | string | 补充说明（可选） |
+| `domains` | string[] | 技术领域多选（扩展问卷，可选） |
+| `sources` | string[] | 笔记来源偏好 |
+| `formats` | string[] | 喜欢的笔记形态 |
+| `quality_marks` | string[] | 好笔记的标准 |
 
 ```json
 { "charter": "## 这是谁的库\n我是一名软件工程本科生……" }
@@ -400,6 +421,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-30 | v7 | §5 新增 **note-plan**（存笔记前主题分析）与 save-note 请求体（mode/topic_ids/instruction 多篇生成，响应加 `notes[]`）；§8 charter 答案扩展 `domains/sources/formats/quality_marks`（向后兼容） |
 | 2026-10-30 | v6 | §2 新增**导入时标题结构二次加工**（LLM 规划 + 代码算编号；需非推理模型）；source 响应加 `headings_rewritten`；上传补 400（没配 API Key）
 | 2026-10-30 | v5 | 新增 **§9 认证**（注册/登录/me + 数据隔离）；**全站改为多用户**——所有业务接口需 `Authorization: Bearer`，`owner_id` 由 token 解出；`app_settings` 改每用户一行（章程随行归属），API Key 不再回退 `.env`；§7 移除「登录/注册」 |
 | 2026-10-30 | v4 | 新增 **§8 Charter 章程**（GET/POST generate/PUT）；worker 的 charter 改为 DB 优先（`resolve_charter`），§6 已知边界更新 |
