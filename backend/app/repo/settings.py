@@ -19,8 +19,9 @@ class SettingsRepo(Repo):
         llm_api_key: str | None = None,
         llm_model: str | None = None,
         tavily_api_key: str | None = None,
+        charter: str | None = None,
     ) -> AppSettings:
-        """按传入字段更新;None = 保持不变,空串 = 清空(回退 .env)。api_key 仅非空时更新。"""
+        """按传入字段更新;None = 保持不变,空串 = 清空(回退 .env/文件)。api_key 仅非空时更新。"""
         row = await self.get()
         if row is None:
             row = AppSettings(id=1)
@@ -33,5 +34,7 @@ class SettingsRepo(Repo):
             row.llm_model = llm_model or None
         if tavily_api_key is not None:
             row.tavily_api_key = tavily_api_key or None
+        if charter is not None:
+            row.charter = charter or None
         await self.session.flush()
         return row

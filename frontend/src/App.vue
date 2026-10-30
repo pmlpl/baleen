@@ -4,8 +4,9 @@
  * 健康检查走 GET /healthz(docs/api.md §1);status != ok 就给黄条,不是 ok 也不挡页面。
  */
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { RouterLink, RouterView } from 'vue-router'
+import { RouterLink, RouterView, useRouter } from 'vue-router'
 
+import { getCharter } from './api/charter'
 import { getHealth } from './api/health'
 import { describeApiError } from './api/http'
 
@@ -17,6 +18,20 @@ const backendHint = ref('')
 let timer: ReturnType<typeof setTimeout> | undefined
 /** 卸载后别再排下一次探测,避免遗留定时器 */
 let stopped = false
+
+const router = useRouter()
+
+/** 首次登录检测:没有 charter(问卷未填)→ 跳转向导。与健康检查并行,不互相阻塞。 */
+async function checkCharter(): Promise<void> {
+  try {
+    const status = await getCharter()
+    if (!status.has_charter && router.currentRoute.value.name !== 'charter') {
+      await router.push({ name: 'charter' })
+    }
+  } catch {
+    // 后端没起来也不挡,用户可以正常用(走 charter.md 文件兜底)
+  }
+}
 
 async function probe(): Promise<void> {
   try {
@@ -39,6 +54,7 @@ async function probe(): Promise<void> {
 
 onMounted(() => {
   void probe()
+  void checkCharter()
 })
 
 onBeforeUnmount(() => {
@@ -83,7 +99,7 @@ onBeforeUnmount(() => {
 
     <main class="container">
       <RouterView v-slot="{ Component }">
-        <keep-alive>
+        <keep-alive :exclude="['CharterWizard']">
           <component :is="Component" />
         </keep-alive>
       </RouterView>

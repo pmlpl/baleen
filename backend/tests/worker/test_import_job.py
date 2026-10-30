@@ -69,10 +69,32 @@ def test_remove_staging_refuses_paths_outside_root(tmp_path: Path, monkeypatch) 
 # ---------- import_file 编排(fake pipeline,不需要 DB 的部分)----------
 
 
+class _StubSession:
+    """最小假 session:scalar → None,resolve_charter 回退 charter.md 文件。
+
+    import_file 现在读 charter(需 session),这两个编排测试不连真 DB,
+    用 stub 避免跨 asyncio.run 事件循环复用 asyncpg 连接。
+    """
+
+    async def scalar(self, *_a, **_kw):
+        return None
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_a):
+        return False
+
+
+def _stub_factory():
+    return _StubSession()
+
+
 def test_import_file_success_removes_staging(tmp_path: Path, monkeypatch) -> None:
     import app.service.imports as imports_pkg
 
     monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path)
+    monkeypatch.setattr(worker_module, "session_factory", _stub_factory)
     staging = tmp_path / "1_a.md"
     staging.write_bytes(b"x")
     seen: dict[str, Any] = {}
@@ -96,6 +118,7 @@ def test_import_file_failure_keeps_staging_for_retry(tmp_path: Path, monkeypatch
     import app.service.imports as imports_pkg
 
     monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path)
+    monkeypatch.setattr(worker_module, "session_factory", _stub_factory)
     staging = tmp_path / "2_a.md"
     staging.write_bytes(b"x")
 

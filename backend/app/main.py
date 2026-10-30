@@ -6,6 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.api.charter import router as charter_router
 from app.api.health import router as health_router
 from app.api.library import router as library_router
 from app.api.qa import router as qa_router
@@ -38,6 +39,7 @@ def create_app() -> FastAPI:
     app.include_router(library_router)
     app.include_router(qa_router)
     app.include_router(settings_router)
+    app.include_router(charter_router)
     app.include_router(upload_router)
     return app
 

@@ -94,8 +94,15 @@ async def import_file(ctx: dict, file_path: str, *, no_llm: bool = False) -> dic
     # 延迟导入:上传 API 进程 import 本模块(拿 STAGING_ROOT/enqueue_import)时,
     # 不把 torch/解析栈拉进 api 进程
     from app.service.imports import run_import_async
+    from app.service.llm.resolve import resolve_charter
 
-    result = await run_import_async(file_path, no_llm=no_llm, worker=WORKER_NAME)
+    # 读 charter:DB(问卷生成的)优先 → charter.md 文件;G2 热用设置页/问卷的章程
+    async with session_factory() as session:
+        charter = await resolve_charter(session)
+
+    result = await run_import_async(
+        file_path, no_llm=no_llm, worker=WORKER_NAME, charter=charter
+    )
     if no_llm and not result.deduped and result.source_id is not None:
         await _mark_g2_skipped(result.source_id)
     _remove_staging(file_path)

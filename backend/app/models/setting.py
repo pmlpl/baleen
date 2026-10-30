@@ -23,6 +23,8 @@ class AppSettings(Base):
     llm_model: Mapped[str | None] = mapped_column(Text)
     # 工具链:库外问题的联网搜索(Tavily 免费档,1000 次/月)
     tavily_api_key: Mapped[str | None] = mapped_column(Text)
+    # 知识库章程(问卷生成的自然语言,DB 优先于 charter.md 文件;NULL = 回退文件)
+    charter: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

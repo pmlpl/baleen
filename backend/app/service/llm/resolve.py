@@ -33,3 +33,14 @@ async def resolve_tavily_key(session: AsyncSession) -> str | None:
     if row is not None and row.tavily_api_key:
         return row.tavily_api_key
     return os.getenv("TAVILY_API_KEY") or None
+
+
+async def resolve_charter(session: AsyncSession) -> str:
+    """返回 charter:app_settings.charter(问卷生成的)优先,回退 charter.md 文件 > env > 默认。
+
+    与 resolve_llm_config / resolve_tavily_key 同口径:DB 单行优先,热生效。
+    """
+    row = await session.scalar(select(AppSettings).where(AppSettings.id == 1))
+    if row is not None and row.charter:
+        return row.charter
+    return get_settings().resolve_charter()

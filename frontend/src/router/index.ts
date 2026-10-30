@@ -4,6 +4,7 @@ import { createRouter, createWebHistory } from 'vue-router'
 // 1) 总共就 5 个视图,体积很小,拆 chunk 省不下多少;
 // 2) 答辩演示时不想因为分块请求多一次网络往返(或断网)出现白屏;
 // 3) 静态 import 让 vue-tsc 一次性把全部视图都查一遍,漏写类型跑不过 type-check。
+import CharterWizard from '../views/CharterWizard.vue'
 import ImportView from '../views/ImportView.vue'
 import LibraryView from '../views/LibraryView.vue'
 import NoteView from '../views/NoteView.vue'
@@ -19,6 +20,7 @@ const router = createRouter({
     { path: '/notes', name: 'notes', component: LibraryView },
     { path: '/notes/:id', name: 'note', component: NoteView, props: true },
     { path: '/qa', name: 'qa', component: QaView },
+    { path: '/charter', name: 'charter', component: CharterWizard },
     { path: '/search', name: 'search', component: SearchView },
     { path: '/settings', name: 'settings', component: SettingsView },
     // 兜底:路径写错也回导入页,别让人看到空白

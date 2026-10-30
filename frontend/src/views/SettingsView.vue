@@ -4,9 +4,12 @@
  * api_key 只写不读:后端永不回显全文,只回末 4 位;留空 = 保持不变。
  */
 import { onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { getSettings, updateSettings } from '../api/settings'
+
+const router = useRouter()
 
 const baseUrl = ref('')
 const model = ref('')
@@ -123,6 +126,16 @@ onMounted(() => {
       </button>
       <p v-if="saved" class="muted save-ok">已保存,立即生效。</p>
     </div>
+
+    <div class="card charter-section">
+      <h2 class="section-title">知识库章程</h2>
+      <p class="muted">
+        章程决定导入时哪些笔记收、哪些不收。通过问卷向导生成,保存后 G2 热生效。
+      </p>
+      <button class="btn" type="button" @click="router.push({ name: 'charter' })">
+        重新生成章程
+      </button>
+    </div>
   </section>
 </template>
 
@@ -151,5 +164,16 @@ onMounted(() => {
 
 .save-ok {
   margin: 10px 0 0;
+}
+
+.charter-section {
+  max-width: 560px;
+  padding: 20px 24px;
+  margin-top: 16px;
+}
+
+.section-title {
+  margin: 0 0 8px;
+  font-size: 16px;
 }
 </style>
