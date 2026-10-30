@@ -94,6 +94,10 @@ export interface StreamMeta {
   session_id: number
   session_title: string
   search_query: string
+  /** 本次回答用的模型(后端从当前配置读) */
+  model?: string
+  /** 检索/改写耗时(毫秒):用于区分「在检索」还是「在等模型」 */
+  prepare_ms?: number
   user_message: QaMessage
 }
 

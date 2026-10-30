@@ -382,6 +382,9 @@ async def chat_stream_endpoint(
                     "session_title": qa_session.title,
                     "search_query": search_query,
                     "used_web": used_web,
+                    "model": llm.model,  # 本次回答用的模型,前端状态行显示
+                    # 检索/改写花了多久(秒):前端据此区分「在检索」还是「在等模型」
+                    "prepare_ms": int(round((time.perf_counter() - started) * 1000)),
                     "user_message": user_out.model_dump(),
                 },
             )

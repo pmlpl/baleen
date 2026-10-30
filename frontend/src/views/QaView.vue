@@ -6,7 +6,7 @@
  * 前缀缓存命中率(hit/(hit+miss)),首问没有缓存数据时不显示。
  * 数据全部来自 API(会话/消息已落库),本地 ref 不用 store,不引第三方库。
  */
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { getToken } from '../auth/token'
@@ -33,6 +33,40 @@ const errorText = ref('')
 
 const msgListEl = ref<HTMLElement | null>(null)
 
+/** 思考计时:发问到收到第一个 delta 之间的秒数(让长等待看得见进展) */
+const thinkingSec = ref(0)
+let thinkingTimer: ReturnType<typeof setInterval> | undefined
+
+function startThinkingTimer(): void {
+  stopThinkingTimer()
+  thinkingSec.value = 0
+  thinkingTimer = setInterval(() => {
+    thinkingSec.value += 1
+  }, 1000)
+}
+
+function stopThinkingTimer(): void {
+  if (thinkingTimer !== undefined) {
+    clearInterval(thinkingTimer)
+    thinkingTimer = undefined
+  }
+}
+
+/** 已开始输出正文(收到首个 delta)→ 不再显示「思考中」 */
+const streamingStarted = ref(false)
+
+/** 本轮正在用的模型(meta 事件带来,回答完成后由 lastModel 接管) */
+const pendingModel = ref<string | null>(null)
+
+/** 最近一条助手消息用的模型(后端返回 model 字段);null = 还没有回答 */
+const lastModel = computed<string | null>(() => {
+  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
+    const m = messages.value[i]
+    if (m.role === 'assistant' && m.model) return m.model
+  }
+  return null
+})
+
 /** 与 messages 一一对应的 assistant 消息 HTML(渲染器内部先 HTML 转义) */
 const rendered = computed(() =>
   messages.value.map((m) => (m.role === 'assistant' ? renderMarkdown(m.content) : '')),
@@ -49,6 +83,9 @@ const lastCacheRate = computed<number | null>(() => {
 
 const hasAssistantMessage = computed(() => messages.value.some((m) => m.role === 'assistant'))
 
+/** 状态行显示哪个模型:作答中显示本轮的,否则显示上一条回答用的 */
+const displayModel = computed<string | null>(() => pendingModel.value ?? lastModel.value)
+
 async function refreshSessions(): Promise<void> {
   try {
     sessions.value = (await listSessions()).items
@@ -56,6 +93,10 @@ async function refreshSessions(): Promise<void> {
     /* 侧栏拉取失败不打断聊天主流程 */
   }
 }
+
+onBeforeUnmount(() => {
+  stopThinkingTimer()
+})
 
 onMounted(() => {
   void refreshSessions()
@@ -136,6 +177,8 @@ async function send(): Promise<void> {
   }
   sending.value = true
   errorText.value = ''
+  streamingStarted.value = false
+  startThinkingTimer()
   // 乐观显示:你的消息立刻上屏;回答经 SSE 流式增量打进一条助手气泡(打字机效果)
   const tempId = -Date.now()
   messages.value.push({
@@ -151,6 +194,7 @@ async function send(): Promise<void> {
   scrollBottom()
   let streamingIdx: number | null = null
   let usedSearchQuery = ''
+  pendingModel.value = null
   try {
     await streamChat(
       currentSessionId.value,
@@ -158,6 +202,7 @@ async function send(): Promise<void> {
       {
         onMeta: (meta) => {
           usedSearchQuery = meta.search_query
+          pendingModel.value = meta.model ?? null
           currentSessionId.value = meta.session_id
           const idx = messages.value.findIndex((m) => m.id === tempId)
           if (idx !== -1) messages.value.splice(idx, 1, meta.user_message)
@@ -175,12 +220,17 @@ async function send(): Promise<void> {
           scrollBottom()
         },
         onDelta: (t) => {
+          if (!streamingStarted.value) {
+            streamingStarted.value = true // 正文开始,不再显示「思考中」
+            stopThinkingTimer()
+          }
           if (streamingIdx !== null && messages.value[streamingIdx] !== undefined) {
             messages.value[streamingIdx].content += t
             scrollBottom()
           }
         },
         onDone: (d) => {
+          stopThinkingTimer()
           if (streamingIdx !== null && messages.value[streamingIdx] !== undefined) {
             messages.value[streamingIdx] = {
               ...d.assistant_message,
@@ -190,6 +240,7 @@ async function send(): Promise<void> {
           void refreshSessions()
         },
         onError: (detail) => {
+          stopThinkingTimer()
           errorText.value = detail
         },
       },
@@ -205,6 +256,7 @@ async function send(): Promise<void> {
     input.value = text
     errorText.value = describeApiError(error)
   } finally {
+    stopThinkingTimer()
     sending.value = false
   }
 }
@@ -361,8 +413,18 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
             </div>
           </div>
 
-          <div v-if="sending" class="msg-row msg-row--assistant">
-            <div class="bubble bubble--assistant bubble--pending">思考中…</div>
+          <div v-if="sending && !streamingStarted" class="msg-row msg-row--assistant">
+            <div class="bubble bubble--assistant bubble--pending">
+              <span class="thinking">思考中</span>
+              <span class="thinking-dots" aria-hidden="true">…</span>
+              <span v-if="thinkingSec > 0" class="thinking-sec">{{ thinkingSec }}s</span>
+              <span v-if="pendingModel !== null" class="thinking-model">
+                · {{ pendingModel }}
+              </span>
+              <span v-if="thinkingSec >= 15" class="thinking-hint">
+                （模型较慢，最长可能需要 2 分钟）
+              </span>
+            </div>
           </div>
         </div>
 
@@ -381,6 +443,10 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
         </form>
 
         <p class="cache-status muted" aria-live="polite">
+          <template v-if="displayModel !== null">
+            <span class="model-tag" title="当前使用的模型">{{ displayModel }}</span>
+            <span class="status-sep">·</span>
+          </template>
           缓存命中率:
           <span v-if="lastCacheRate !== null" class="cache-value">
             {{ (lastCacheRate * 100).toFixed(1) }}%
@@ -636,5 +702,42 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 .cache-value {
   color: var(--accent-ink);
   font-weight: 650;
+}
+
+/* 思考中:秒数 + 久等提示 */
+.thinking-sec {
+  margin-left: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.thinking-hint {
+  display: block;
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 12px;
+}
+
+.thinking-model {
+  margin-left: 4px;
+  color: var(--ink-3);
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+}
+
+/* 状态行里的模型名 */
+.model-tag {
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--neutral-soft);
+  color: var(--ink-2);
+  font-size: 12px;
+  font-family: 'Cascadia Code', 'Consolas', monospace;
+}
+
+.status-sep {
+  margin: 0 6px;
+  color: var(--ink-3);
 }
 </style>
