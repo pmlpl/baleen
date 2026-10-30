@@ -313,7 +313,7 @@
 ```
 
 - 三字段均可省略（= 保持不变）；`llm_api_key` 传空串 = 保持不变，传新值 = 覆盖
-- 已知边界：worker（导入 G2）暂仍读 .env，设置页当前只影响问答/改写链路
+- 已知边界：worker 的 LLM 配置暂仍读 .env（设置页只影响问答/改写链路）；charter 已改为 DB 优先（见 §8）
 
 ---
 
@@ -328,10 +328,64 @@
 
 ---
 
+## 8. Charter 章程（**已实现**）
+
+首次登录弹问卷向导 → LLM 生成章程 → 存 `app_settings.charter` → G2 热生效。
+DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 → DEFAULT_CHARTER）。
+
+### `GET /api/charter`
+
+```json
+{ "has_charter": false, "charter": null }
+```
+
+`has_charter=true` 表示 DB 里已有问卷生成的章程；`false` = 回退 `charter.md` 文件。前端首次登录用它判断要不要弹问卷。
+
+### `POST /api/charter/generate`
+
+问卷答案 → LLM 生成章程文本（**不落库**，前端预览编辑后再 PUT）。
+
+```json
+{
+  "direction": "软件工程本科生",
+  "purpose": "课设、答辩",
+  "collect": ["讲清概念或方法的笔记（定义+例子）", "技术文档、论文、项目说明"],
+  "reject": ["单据与行政表格", "空文件、hello world、测试文件"],
+  "unsure": "collect_low",
+  "extra": "关注前端技术栈"
+}
+```
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `direction` | string | 专业方向 / 身份 |
+| `purpose` | string | 笔记库用途 |
+| `collect` | string[] | 想收什么（多选） |
+| `reject` | string[] | 不收什么（多选） |
+| `unsure` | string | `collect_low`（收下标低质量）/ `reject`（拒掉）/ `discuss`（提出来聊） |
+| `extra` | string | 补充说明（可选） |
+
+```json
+{ "charter": "## 这是谁的库\n我是一名软件工程本科生……" }
+```
+
+### `PUT /api/charter`
+
+保存章程到 DB（热生效：G2 下次调用即从 DB 读到新章程）。
+
+```json
+{ "charter": "## 这是谁的库\n我是一名软件工程本科生……" }
+```
+
+- 返回同 `GET` 的 `{ has_charter, charter }`
+- 空串 = 清空（回退 `charter.md` 文件）
+
+---
+
 ## 变更记录
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
-| 2026-10-30 | v3 | 线 Q 交付后新增：**§5 问答与会话**（chat 非流式 / SSE 流式 / 会话管理 / Markdown 导出）、**§6 设置**（app_settings 热生效）；§0 补 `role` 枚举；原 §5「明确不做」顺延为 §7 并**移除「流式 SSE 回答」行**（已实现）。同日修复 `.gitignore` 的 `**/models/` 误伤 ORM 源码问题（backend/app/models 首次入库） |
+| 2026-10-30 | v4 | 新增 **§8 Charter 章程**（GET/POST generate/PUT）；worker 的 charter 改为 DB 优先（`resolve_charter`），§6 已知边界更新 |
 | 2026-10-29 | v1 | 首版：把已实现的 `/healthz`、`POST /api/sources`、`GET /api/sources/{id}` 固化，并定下待实现的 4 个查询接口，供线 L（前端）与线 M（后端）并行开发 |
 | 2026-10-29 | v2 | 线 M / 线 L 交付后按**真实返回**订正，补齐 §0 枚举表。**v1 凭记忆写的枚举有 6 处与数据库 CHECK 不符**：`verdict` 写 `pass`（实为 `accept/partial/reject/skip`）、`quality` 写 `high`（实为 `core/normal/reference/junk`）、`action` 写 `accept`（实为 `index/extract_spans/topic_dialog/drop`）、`parse_status` 写 `failed`（实为 `error`）且漏了 `pending_ocr`、`job.status` 写 `cancelled`（实为 `dead`）、`ext` 写成无点。另补：`markdown`/`lang` 实测为 `null`、`parse_status` 只在 `job.status=done` 时有意义、`took_ms` 冷启动语义、检索无相关性阈值的取舍。**教训：契约里的枚举必须从数据库 CHECK 抄，不能凭记忆编。** |
