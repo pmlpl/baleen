@@ -8,6 +8,7 @@ device 自动降级(cuda if available else cpu)——答辩机器可能没有 GP
 from __future__ import annotations
 
 import logging
+import threading
 import time
 
 import numpy as np
@@ -23,6 +24,8 @@ QUERY_PREFIX = "为这个句子生成表示以用于检索相关文章："
 _model: SentenceTransformer | None = None
 _device: str | None = None
 _load_seconds: float | None = None
+# 并发首调(预热线程 + 同时进来的请求)只加载一次:双份加载会翻倍吃显存
+_load_lock = threading.Lock()
 
 
 def _choose_device() -> str:
@@ -47,6 +50,14 @@ def _load() -> SentenceTransformer:
     global _model, _load_seconds
     if _model is not None:
         return _model
+    with _load_lock:
+        if _model is not None:  # 等锁期间别人已加载好
+            return _model
+        return _load_unlocked()
+
+
+def _load_unlocked() -> SentenceTransformer:
+    global _model, _load_seconds
     path = get_settings().embedding_model_path
     if not path:
         raise RuntimeError("EMBEDDING_MODEL_PATH 未配置;请在 backend/.env 里设置(见 .env.example)")

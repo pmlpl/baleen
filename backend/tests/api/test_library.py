@@ -162,7 +162,6 @@ async def _seed_note(
             title=title,
             doc={"type": "doc", "content": []},
             quality="core",
-            markdown="# 标题\n\n正文段落。",
             lang="zh",
         )
         note.tags = ["笔记"]

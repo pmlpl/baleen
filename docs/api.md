@@ -194,8 +194,9 @@
 子块是检索用的中间产物，前端不展示（要看就展开「为什么命中」，用检索接口的 `child_text`）。
 
 > **`markdown`（2026-10-31 v11 起有值）**：由 `notes.doc` **现场序列化**的 markdown
-> （编辑器工作稿，见 `PUT /api/notes/{note_id}`）。笔记真源仍是 block JSON（ADR 0001），
-> 数据库的 `notes.markdown` 列从未生成过、接口不回读它。doc 为空的笔记该字段是空串。
+> （编辑器工作稿，见 `PUT /api/notes/{note_id}`）。笔记真源仍是 block JSON（ADR 0001）。
+> 数据库的 `notes.markdown` 列**已于 0010 迁移删除**（从未生成过的死列，主人拍板删列，
+> 以后真有用再加）；API 的 markdown 字段与该列无关。doc 为空的笔记该字段是空串。
 
 **404 = 没这条笔记**。`status = 'archived'` 的笔记按软删除语义也返回 404（不区分「不存在」和「已归档」）。
 
@@ -447,6 +448,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-31 | v12 | **0010 迁移：删除 `notes.markdown` 死列**（从未生成过，API 字段由 doc 现场序列化不受影响）；后端启动后台线程**预热嵌入模型**（消除重启后第一问冷启动，`EMBED_WARMUP_ON_STARTUP=false` 可关） |
 | 2026-10-31 | v11 | §3 新增 **`PUT /api/notes/{note_id}` 用户自编辑**（标题/markdown；内容编辑重建切块+向量，同事务回滚；图片块禁改正文）；`GET /api/notes/{id}` 的 `markdown` 改为 **doc 现场序列化**（不再恒 null） |
 | 2026-10-31 | v10 | §0 `parse_status` 枚举加 **`pending`**（0009 迁移）：新上传的 source 在 worker 解析前不再是 `error` 占位；切块器代码块超 480 token 按行切分（不再静默截断，超限分片带 `code_part`） |
 | 2026-10-31 | v9 | §5 问答加 **`[NO_KB]` 回答兜底协议**（KB 答不了→联网/AI 自身知识，不再拒答）；问答页会话 id 同步到 URL（`/qa?session=N`）；mermaid 图点击灯箱放大（滚轮缩放）与窄容器文字裁切修复 |

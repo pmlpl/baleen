@@ -31,7 +31,6 @@ class NotesRepo(Repo):
         title: str,
         doc: dict,
         quality: str | None = None,
-        markdown: str | None = None,
         lang: str | None = None,
     ) -> Note:
         note = Note(
@@ -40,7 +39,6 @@ class NotesRepo(Repo):
             title=title,
             doc=doc,
             quality=quality,
-            markdown=markdown,
             lang=lang,
             status="active",
         )
@@ -55,7 +53,6 @@ class NotesRepo(Repo):
         title: str | None = None,
         doc: dict | None = None,
         quality: str | None = None,
-        markdown: str | None = None,
         lang: str | None = None,
         status: str | None = None,
     ) -> None:
@@ -65,7 +62,6 @@ class NotesRepo(Repo):
                 "title": title,
                 "doc": doc,
                 "quality": quality,
-                "markdown": markdown,
                 "lang": lang,
                 "status": status,
             }.items()

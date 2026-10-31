@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     # bge-large-zh-v1.5 的本地 HF cache 路径(AGENTS.md §6:.env.example 有,代码不许硬编码绝对路径)
     embedding_model_path: str = ""
+    # 首答提速:API 进程启动后后台线程预加载嵌入模型(消除第一问的冷启动等待)
+    embed_warmup_on_startup: bool = True
 
     # ---------- LLM(AGENTS.md 决策 9:OpenAI 兼容协议,用户自带 key)----------
     # v1 单库:charter 就是一个自然语言字符串,不建 knowledge_bases 表(HANDOFF §2 已拍板)

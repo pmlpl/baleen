@@ -314,7 +314,7 @@ def test_summarizer_creates_import_session(
 
     # 假笔记读取(不种 note 行):monkeypatch 掉 LibraryRepo 的两个读取方法
     async def fake_get(self, note_id):  # noqa: ANN001
-        return SimpleNamespace(id=note_id, title="Agent 应用开发学习指南", markdown="", doc={})
+        return SimpleNamespace(id=note_id, title="Agent 应用开发学习指南", doc={})
 
     async def fake_parents(self, note_id):  # noqa: ANN001
         return [

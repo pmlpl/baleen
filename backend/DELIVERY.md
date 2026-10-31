@@ -7,7 +7,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-10-31 · 技术债小批 + mermaid 截断根因#2 + 笔记自编辑(v11)
+**最后更新**：2026-10-31 · 笔记自编辑(v11) + markdown 死列删除(0010) + 启动预热嵌入模型
 
 ### 已完成模块
 
@@ -38,6 +38,8 @@
 | **parse_status=pending** | `0009` 迁移 + 上传/流水线创建点 | ✅ 上传到 G0 之间的窗口不再伪装 `error`;CHECK 加枚举,dev 库已应用,往返验证 |
 | **mermaid 截断根因 #2** | `frontend/src/utils/mermaid.ts` | ✅ v12 给顶点标签钳 max-width≈120px + fastdom 异步竞态;`wrappingWidth:500` 修复,主人真实会话 10 标签零裁切(d9ba566) |
 | **笔记自编辑** | `app/service/notes_edit.py` + `PUT /api/notes/{id}` + NoteView 编辑模式 | ✅ 标题/markdown 编辑;内容编辑重建切块+向量(同事务);不跑 LLM、回填不覆写;图片块禁改正文;GET 详情 markdown 改 doc 现场序列化 |
+| **markdown 死列删除(0010)** | `alembic/versions/0010_*` | ✅ 从未生成过、全表 null,主人拍板删;dev 库已应用+往返验证;API 字段(doc 现场序列化)不受影响 |
+| **启动预热嵌入模型** | `app/main.py` + `EMBED_WARMUP_ON_STARTUP` | ✅ 后台线程启动即加载 bge,消除重启后第一问 3~8s 冷启动;真机实证自动加载;测试用例显式关掉 |
 
 ### 测试基线
 

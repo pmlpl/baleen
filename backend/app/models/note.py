@@ -1,4 +1,4 @@
-"""notes —— 笔记真源(ADR 0003 §2.3)。doc 是 block JSON,markdown 是缓存。"""
+"""notes —— 笔记真源(ADR 0003 §2.3)。doc 是 block JSON;markdown 列已删(0010)。"""
 
 from __future__ import annotations
 
@@ -40,7 +40,7 @@ class Note(Base):
     )
     title: Mapped[str] = mapped_column(Text, nullable=False)
     doc: Mapped[dict] = mapped_column(JSONB, nullable=False)
-    markdown: Mapped[str | None] = mapped_column(Text)
+    # markdown 列已于 0010 迁移删除(从未生成过的死列);API 的 markdown 字段由 doc 现场序列化
     lang: Mapped[str | None] = mapped_column(Text)
     tags: Mapped[list[str]] = mapped_column(
         ARRAY(Text), server_default=text("'{}'"), nullable=False
