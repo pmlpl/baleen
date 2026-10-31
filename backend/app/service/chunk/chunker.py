@@ -5,8 +5,8 @@
 是用 bge tokenizer 实算的,而不是字数估算(ADR §6)。
 
 三层结构:note → section(父块,不 embed)→ chunk(子块 250–400 字,embed)。
-五类难处理单元:表格按行+重复表头、代码按函数边界、无标题长文按句子累积、
-目录页 skipped_embed、图片块文本极少不 embed。
+五类难处理单元:表格按行+重复表头、代码按函数边界(超硬上限再按行切)、
+无标题长文按句子累积、目录页 skipped_embed、图片块文本极少不 embed。
 """
 
 from __future__ import annotations
@@ -305,6 +305,7 @@ def _chunk_code(
     if not code.strip():
         return [], warnings
     ctx = f"# {heading_path or '代码'}" + (f" ({language})" if language else "")
+    ctx_tc = token_counter(ctx)
 
     lines = code.splitlines()
     groups: list[list[str]] = []
@@ -329,27 +330,63 @@ def _chunk_code(
         if cur:
             groups.append(cur)
 
+    def split_by_lines(g: list[str]) -> tuple[list[list[str]], list[str]]:
+        """函数体超硬上限时按行再切(超限子块会被 bge 静默截断,HANDOFF §1 真问题 5)。
+
+        行是代码的最小语义单元:单行超预算时整行保留并告警,
+        与正文路径「单句超长整句保留」同一口径(宁可超长也不毁语义,ADR §3)。
+        """
+        group_warnings: list[str] = []
+        budget = HARD_TOKEN_LIMIT - ctx_tc
+        if budget <= 0:
+            return [g], [f"代码块标题前缀超 {HARD_TOKEN_LIMIT} token,整段保留未切"]
+        parts: list[list[str]] = []
+        buf: list[str] = []
+        buf_tc = 0
+        for ln in g:
+            ln_tc = token_counter(ln) + 1  # +1 换行
+            if buf and buf_tc + ln_tc > budget:
+                parts.append(buf)
+                buf, buf_tc = [], 0
+            if ln_tc > budget:
+                parts.append([ln])
+                group_warnings.append(f"单行超 {HARD_TOKEN_LIMIT} token,整行保留未切")
+                continue
+            buf.append(ln)
+            buf_tc += ln_tc
+        if buf:
+            parts.append(buf)
+        return parts, group_warnings
+
     chunks: list[Chunk] = []
     ord_n = ord_start
     for g in groups:
         body = "\n".join(g)
         text = f"{ctx}\n{body}"
-        tc = token_counter(text)
-        # 代码不受 MAX_CHARS 严格约束,但 HARD_TOKEN_LIMIT 仍生效;超了给 warning 整段保留
-        if tc > MODEL_MAX_TOKENS:
-            warnings.append(f"代码块 token={tc} 超 {MODEL_MAX_TOKENS},整段保留未切")
-        chunks.append(
-            Chunk(
-                text=text,
-                heading_path=heading_path,
-                ord=ord_n,
-                is_parent=False,
-                token_count=tc,
-                meta={"block_type": "code", "language": language},
-                section_idx=section_idx,
+        # 代码不受 MAX_CHARS 严格约束,但 HARD_TOKEN_LIMIT 必须守住:超限按行再切
+        if token_counter(text) <= HARD_TOKEN_LIMIT:
+            parts = [g]
+        else:
+            parts, w = split_by_lines(g)
+            warnings.extend(w)
+        total = len(parts)
+        for k, part in enumerate(parts, start=1):
+            ptext = f"{ctx}\n" + "\n".join(part)
+            meta = {"block_type": "code", "language": language}
+            if total > 1:
+                meta["code_part"] = k
+            chunks.append(
+                Chunk(
+                    text=ptext,
+                    heading_path=heading_path,
+                    ord=ord_n,
+                    is_parent=False,
+                    token_count=token_counter(ptext),
+                    meta=meta,
+                    section_idx=section_idx,
+                )
             )
-        )
-        ord_n += 1
+            ord_n += 1
     return chunks, warnings
 
 

@@ -146,6 +146,76 @@ class TestCode:
             assert f"func_{i}" in joined
         _assert_hard_metrics(r)
 
+    def test_over_limit_code_split_by_lines(self):
+        # 单个函数超硬上限:按行再切成多片,每片 ≤ 480,不再整段静默截断(HANDOFF 真问题 5)
+        lines = [f"    step_{i:02d} = 计算第{i:02d}步的结果值并写回缓冲区" for i in range(35)]
+        code = "def big():" + "\n" + "\n".join(lines)
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "大函数"),
+                {
+                    "type": "codeBlock",
+                    "attrs": {"language": "python"},
+                    "content": [{"type": "text", "text": code}],
+                },
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        code_chunks = [c for c in r.chunks if c.meta.get("block_type") == "code"]
+        assert len(code_chunks) >= 2, "超限函数应按行切成多片"
+        for c in code_chunks:
+            assert c.token_count <= 480, f"切片仍超硬上限:{c.token_count}"
+            assert c.text.startswith("# "), "每片重复 context 行(检索消歧)"
+        assert sorted(c.meta["code_part"] for c in code_chunks) == list(
+            range(1, len(code_chunks) + 1)
+        ), "分片编号连续"
+        joined = "\n".join(c.text for c in code_chunks)
+        for i in range(35):
+            assert f"step_{i:02d}" in joined, "切分不丢内容"
+        _assert_hard_metrics(r)
+
+    def test_single_monster_line_kept_with_warning(self):
+        # 单行超预算:整行保留(行是代码最小语义单元,同正文「单句超长」口径),但必须显式告警
+        code = "data = '" + "x" * 600 + "'"
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "坏样例"),
+                {
+                    "type": "codeBlock",
+                    "attrs": {"language": "python"},
+                    "content": [{"type": "text", "text": code}],
+                },
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        code_chunks = [c for c in r.chunks if c.meta.get("block_type") == "code"]
+        assert len(code_chunks) == 1, "单行不可再切,整行保留"
+        assert code_chunks[0].token_count > 480
+        assert any("整行保留未切" in w for w in r.metrics["warnings"]), "必须告警不许静默"
+        assert r.metrics["chunks_truncated"] == 1
+
+    def test_small_functions_unaffected(self):
+        # 未超限的代码块行为与旧版一致:不加分片编号
+        code = "\n".join(f"def func_{i}():\n    return {i}\n" for i in range(2))
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "小函数"),
+                {
+                    "type": "codeBlock",
+                    "attrs": {"language": "python"},
+                    "content": [{"type": "text", "text": code}],
+                },
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        for c in r.chunks:
+            if c.meta.get("block_type") == "code":
+                assert "code_part" not in c.meta
+        _assert_hard_metrics(r)
+
 
 class TestTocAndImage:
     def test_toc_page_skipped_embed(self):
