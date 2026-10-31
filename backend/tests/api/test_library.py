@@ -375,7 +375,9 @@ def test_note_detail_returns_fields_and_parents_in_ord_order(env: SimpleNamespac
     assert body["id"] == seed["note_id"]
     assert body["title"] == "线M-详情"
     assert body["source_id"] == source_id
-    assert body["markdown"] == "# 标题\n\n正文段落。"
+    # 2026-10-31 起 markdown 字段 = doc 现场序列化(编辑器工作稿),不再回读 markdown 列
+    # (该列从未被生成过;本测试种子的 doc 为空 → 序列化空串)
+    assert body["markdown"] == ""
     assert body["tags"] == ["笔记"]
 
     parents = body["parents"]

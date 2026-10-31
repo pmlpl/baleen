@@ -15,7 +15,7 @@ import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { getNote } from '../api/notes'
+import { getNote, updateNote } from '../api/notes'
 import type { NoteDetail, NoteParent } from '../api/notes'
 
 const props = defineProps<{ id: string }>()
@@ -23,6 +23,16 @@ const props = defineProps<{ id: string }>()
 const note = ref<NoteDetail | null>(null)
 const loading = ref(false)
 const errorText = ref('')
+
+/** ---- 编辑模式(用户自编辑) ---- */
+const editing = ref(false)
+const editTitle = ref('')
+const editMarkdown = ref('')
+/** 进入编辑时的快照:只提交真正改过的字段(含图笔记只改标题才不会撞 400) */
+const editSnapshot = ref<{ title: string; markdown: string }>({ title: '', markdown: '' })
+const saving = ref(false)
+const saveError = ref('')
+const savedHint = ref('')
 
 /** 当前视口内的章节 id,用于目录高亮 */
 const activeId = ref<number | null>(null)
@@ -264,6 +274,7 @@ async function load(): Promise<void> {
   }
   loading.value = true
   errorText.value = ''
+  savedHint.value = ''
   unbindScrollTracking() // 换笔记时先摘掉旧监听,避免叠加
   try {
     note.value = await getNote(noteId)
@@ -303,6 +314,50 @@ function qualityLabel(quality: string | null): string {
   }
   return labels[quality] ?? quality
 }
+
+/** ---- 编辑模式 ---- */
+
+function startEdit(): void {
+  if (note.value === null) return
+  editSnapshot.value = { title: note.value.title, markdown: note.value.markdown }
+  editTitle.value = note.value.title
+  editMarkdown.value = note.value.markdown
+  saveError.value = ''
+  savedHint.value = ''
+  editing.value = true
+}
+
+function cancelEdit(): void {
+  editing.value = false
+  saveError.value = ''
+}
+
+async function saveEdit(): Promise<void> {
+  if (note.value === null || saving.value) return
+  const snap = editSnapshot.value
+  const body: { title?: string; markdown?: string } = {}
+  if (editTitle.value !== snap.title) body.title = editTitle.value
+  if (editMarkdown.value !== snap.markdown) body.markdown = editMarkdown.value
+  if (body.title === undefined && body.markdown === undefined) {
+    savedHint.value = '没有改动。'
+    editing.value = false
+    return
+  }
+  saving.value = true
+  saveError.value = ''
+  try {
+    const result = await updateNote(note.value.id, body)
+    editing.value = false
+    await load() // 目录/正文按新 doc 重新渲染(load 会清 savedHint,提示要在其后赋值)
+    savedHint.value = result.content_changed
+      ? `已保存,检索索引已重建(父块 ${result.chunks_parents} / 子块 ${result.chunks_children})`
+      : '已保存。'
+  } catch (error) {
+    saveError.value = describeApiError(error)
+  } finally {
+    saving.value = false
+  }
+}
 </script>
 
 <template>
@@ -314,7 +369,11 @@ function qualityLabel(quality: string | null): string {
 
     <template v-else-if="note !== null">
       <header class="page-head note-head">
-        <h1 class="page-title">{{ note.title }}</h1>
+        <div class="note-head-row">
+          <h1 class="page-title">{{ note.title }}</h1>
+          <button class="btn" type="button" :disabled="editing" @click="startEdit">编辑</button>
+        </div>
+        <p v-if="savedHint !== ''" class="note note--ok saved-hint">{{ savedHint }}</p>
         <div class="detail-meta">
           <span class="badge badge--neutral">质量:{{ qualityLabel(note.quality) }}</span>
           <span v-if="note.lang !== ''" class="muted">语言:{{ note.lang }}</span>
@@ -324,7 +383,36 @@ function qualityLabel(quality: string | null): string {
         </div>
       </header>
 
-      <div class="reader">
+      <!-- 编辑模式:标题 + markdown 源码;保存后后端重建切块与向量 -->
+      <div v-if="editing" class="editor">
+        <label class="editor-field">
+          <span class="editor-label">标题</span>
+          <input v-model="editTitle" class="input" type="text" maxlength="200" />
+        </label>
+        <label class="editor-field">
+          <span class="editor-label">正文(markdown 源码)</span>
+          <textarea
+            v-model="editMarkdown"
+            class="editor-md"
+            spellcheck="false"
+            placeholder="# 标题&#10;&#10;正文…"
+          ></textarea>
+        </label>
+        <p class="muted editor-hint">
+          保存后按新内容重建检索索引(切块 + 向量化),同内容重复保存不会重嵌;含图片的笔记暂不支持改正文,可以先只改标题。
+        </p>
+        <p v-if="saveError !== ''" class="note note--error">{{ saveError }}</p>
+        <div class="editor-actions">
+          <button class="btn btn--primary" type="button" :disabled="saving" @click="saveEdit">
+            {{ saving ? '保存中…' : '保存' }}
+          </button>
+          <button class="btn btn--ghost" type="button" :disabled="saving" @click="cancelEdit">
+            取消
+          </button>
+        </div>
+      </div>
+
+      <div v-else class="reader">
         <!-- 左栏:锚点目录(sticky,独立滚动) -->
         <aside ref="tocEl" class="toc" aria-label="章节目录">
           <div class="toc-inner">
@@ -389,6 +477,68 @@ function qualityLabel(quality: string | null): string {
 
 .note-head {
   margin-bottom: 18px;
+}
+
+.note-head-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.saved-hint {
+  margin: 8px 0 0;
+}
+
+/* ---------- 编辑模式 ---------- */
+
+.editor {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.editor-label {
+  color: var(--ink-3);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.editor-md {
+  flex: 1;
+  min-height: 260px;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--ink);
+  font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.7;
+  resize: none;
+}
+
+.editor-md:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.editor-hint {
+  margin: 0;
+  font-size: 12.5px;
+}
+
+.editor-actions {
+  display: flex;
+  gap: 10px;
 }
 
 .detail-meta {

@@ -180,7 +180,9 @@
 {
   "id": 7, "title": "读书笔记", "lang": null, "tags": [],
   "quality": "core", "status": "active", "source_id": 12,
-  "markdown": null,
+  "markdown": "# 第一章 概述
+
+父块全文……",
   "parents": [
     { "chunk_id": 55, "ord": 0, "heading_path": "第一章 > 概述",
       "text": "父块全文……", "token_count": 320 }
@@ -191,13 +193,31 @@
 `parents` 按 `ord ASC`，只含 `is_parent=true` 的块。**详情页只渲染父块**，
 子块是检索用的中间产物，前端不展示（要看就展开「为什么命中」，用检索接口的 `child_text`）。
 
-> ⚠️ **`markdown` 现在实测全是 `null`**（类型是 `string | null`）。
-> ADR 0001 决策 2 说「笔记真源 = block JSON，markdown 只是渲染」，
-> 而导入侧目前只落了父块、没生成 markdown。
-> **所以详情页的正文真源是 `parents[]`，不是 `markdown`** —— 前端必须两者都渲染，
-> `markdown` 为 null 时退化成「按 `heading_path` + `text` 列父块」，不要显示空白页。
+> **`markdown`（2026-10-31 v11 起有值）**：由 `notes.doc` **现场序列化**的 markdown
+> （编辑器工作稿，见 `PUT /api/notes/{note_id}`）。笔记真源仍是 block JSON（ADR 0001），
+> 数据库的 `notes.markdown` 列从未生成过、接口不回读它。doc 为空的笔记该字段是空串。
 
 **404 = 没这条笔记**。`status = 'archived'` 的笔记按软删除语义也返回 404（不区分「不存在」和「已归档」）。
+
+### `PUT /api/notes/{note_id}`（用户自编辑，2026-10-31 v11）
+
+```json
+// 请求体:两个都可选,至少给一个;同内容重复保存是 no-op(不重嵌)
+{ "title": "新标题", "markdown": "# 新结构
+
+正文…" }
+
+// 响应
+{ "id": 7, "title": "新标题", "title_changed": true, "content_changed": true,
+  "chunks_parents": 2, "chunks_children": 3, "embeddings": 3 }
+```
+
+- **不跑 LLM**：用户写什么就是什么，不做标题二次加工；回填幂等闸（`parse_meta.headings_rewritten`）保持原值，
+  后续回填不会覆写用户 edits；`parse_meta.user_edited=true` 标记
+- **内容编辑 = 换 doc + 删光 chunks 重建 + 重嵌**（同一事务，失败整体回滚，与线 R 回填同配方）
+- `400` = 笔记含**图片块**时改正文（markdown 往返会把图压成 alt 文本，静默丢块 → 显式拒绝，可只改标题）
+- `404` = 没这条笔记；`422` = 两个都缺 / title 或 markdown 空白
+- 首次调用会加载嵌入模型（bge，冷启动数秒），之后热态毫秒级
 
 ---
 
@@ -427,6 +447,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-31 | v11 | §3 新增 **`PUT /api/notes/{note_id}` 用户自编辑**（标题/markdown；内容编辑重建切块+向量，同事务回滚；图片块禁改正文）；`GET /api/notes/{id}` 的 `markdown` 改为 **doc 现场序列化**（不再恒 null） |
 | 2026-10-31 | v10 | §0 `parse_status` 枚举加 **`pending`**（0009 迁移）：新上传的 source 在 worker 解析前不再是 `error` 占位；切块器代码块超 480 token 按行切分（不再静默截断，超限分片带 `code_part`） |
 | 2026-10-31 | v9 | §5 问答加 **`[NO_KB]` 回答兜底协议**（KB 答不了→联网/AI 自身知识，不再拒答）；问答页会话 id 同步到 URL（`/qa?session=N`）；mermaid 图点击灯箱放大（滚轮缩放）与窄容器文字裁切修复 |
 | 2026-10-31 | v8 | chat 请求加 **`note_ids` 引用笔记**（`<referenced_notes>` 优先上下文 + 检索照跑）；**前端收敛为会话优先**——导入/检索并入对话（`/导入` 文件选择器、`/检索` 引用选择器），删除 `/import` `/search` 路由页，导航只剩 笔记库/问答/设置 |

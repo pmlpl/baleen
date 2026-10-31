@@ -163,10 +163,15 @@ def _tokens_to_blocks(tokens: list[Token]) -> tuple[list[blocks.Block], int]:
     return root["content"], chars
 
 
+def parse_md_text(text: str) -> tuple[list[blocks.Block], int]:
+    """markdown 字符串 → block JSON 数组(笔记编辑保存走这里;文件入口 parse_md 同款转换)。"""
+    md = MarkdownIt("commonmark").enable(["table", "strikethrough"])
+    return _tokens_to_blocks(md.parse(text))
+
+
 def parse_md(path: Path) -> ParseResult:
     raw = path.read_text(encoding="utf-8")
-    md = MarkdownIt("commonmark").enable(["table", "strikethrough"])
-    content, chars = _tokens_to_blocks(md.parse(raw))
+    content, chars = parse_md_text(raw)
     return ParseResult(
         parse_status=ParseStatus.OK,
         blocks={"type": "doc", "content": content},

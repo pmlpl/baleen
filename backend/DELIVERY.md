@@ -7,7 +7,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-10-31 · 技术债小批:代码块超限切分 + parse_status 加 pending(0009)
+**最后更新**：2026-10-31 · 技术债小批 + mermaid 截断根因#2 + 笔记自编辑(v11)
 
 ### 已完成模块
 
@@ -25,7 +25,7 @@
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
 | **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
 | **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效 |
-| **API 端点总览** | `app/main.py` | ✅ 15 个：`/healthz` · 上传 2 · 列表/详情/检索 4 · 问答/会话/导出 6 · 设置 2 |
+| **API 端点总览** | `app/main.py` | ✅ 16 个：`/healthz` · 上传 2 · 列表/详情/编辑/检索 5 · 问答/会话/导出 6 · 设置 2 |
 | **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页 + 登录注册 + 书架 + 笔记两栏阅读 |
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
 | **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷 → LLM 生成章程 → 存 DB → G2 热生效；每用户一份 |
@@ -36,17 +36,19 @@
 | **[NO_KB] 兜底** | `answerer.py` + `qa.py` | ✅ KB 答不了不再拒答：联网二次回答或 AI 自身知识（带标注）；防瞎编纪律保留 |
 | **切块·代码超限修复** | `app/service/chunk/chunker.py` | ✅ 超硬上限(480 tok)的函数体按行切分(`code_part` 编号),不再被 bge 静默截断;15 篇语料超限 0,20 query 期望路径失配 0 |
 | **parse_status=pending** | `0009` 迁移 + 上传/流水线创建点 | ✅ 上传到 G0 之间的窗口不再伪装 `error`;CHECK 加枚举,dev 库已应用,往返验证 |
+| **mermaid 截断根因 #2** | `frontend/src/utils/mermaid.ts` | ✅ v12 给顶点标签钳 max-width≈120px + fastdom 异步竞态;`wrappingWidth:500` 修复,主人真实会话 10 标签零裁切(d9ba566) |
+| **笔记自编辑** | `app/service/notes_edit.py` + `PUT /api/notes/{id}` + NoteView 编辑模式 | ✅ 标题/markdown 编辑;内容编辑重建切块+向量(同事务);不跑 LLM、回填不覆写;图片块禁改正文;GET 详情 markdown 改 doc 现场序列化 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  250 passed
+cd backend && uv run pytest -q     →  263 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
 → 183（阶段3/4+工具链）→ 199（多用户）→ 228（标题整理 + 认证/隔离）
-→ 247（引用笔记 + [NO_KB] 兜底 + 线 R 回填测试）
-→ **250**（代码超限切分 3 测试 + parse_status=pending）
+→ 247（引用笔记 + [NO_KB] 兜底 + 线 R 回填测试）→ 250（代码超限切分 + parse_status=pending）
+→ **263**（笔记自编辑:序列化往返 7 + 端点 6）
 
 **任何新任务都不许把这个数降下来。**
 

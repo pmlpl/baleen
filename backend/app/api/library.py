@@ -94,6 +94,37 @@ class NoteDetailOut(BaseModel):
     parents: list[ParentChunkOut]
 
 
+class NoteEditRequest(BaseModel):
+    """PUT /api/notes/{id} 请求体:两个都省略没意义;同内容重复保存是 no-op。"""
+
+    title: Annotated[str | None, Field(min_length=1, max_length=200)] = None
+    markdown: str | None = None
+
+    @field_validator("title")
+    @classmethod
+    def _title_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("title 不能是空白")
+        return value
+
+    @field_validator("markdown")
+    @classmethod
+    def _markdown_not_blank(cls, value: str | None) -> str | None:
+        if value is not None and not value.strip():
+            raise ValueError("markdown 不能是空白")
+        return value
+
+
+class NoteEditOut(BaseModel):
+    id: int
+    title: str | None
+    title_changed: bool
+    content_changed: bool
+    chunks_parents: int
+    chunks_children: int
+    embeddings: int
+
+
 class SearchRequest(BaseModel):
     """POST /api/search 请求体:query 1–500 字(纯空白算空),top_k 1–20 默认 5。"""
 
@@ -225,6 +256,9 @@ async def get_note_detail(
     if note is None:
         raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
     parents = await repo.list_parent_chunks(note.id)
+    # markdown 由 doc 现场序列化(编辑器工作稿);notes.markdown 列从未生成过,不信它
+    from app.service.notes_edit import doc_to_markdown  # 延迟导入:启动不拉 torch
+
     return NoteDetailOut(
         id=note.id,
         title=note.title,
@@ -233,7 +267,7 @@ async def get_note_detail(
         quality=note.quality,
         status=note.status,
         source_id=note.source_id,
-        markdown=note.markdown,
+        markdown=doc_to_markdown(note.doc),
         parents=[
             ParentChunkOut(
                 chunk_id=chunk.id,
@@ -244,6 +278,55 @@ async def get_note_detail(
             )
             for chunk in parents
         ],
+    )
+
+
+@router.put("/notes/{note_id}", response_model=NoteEditOut)
+async def edit_note(
+    note_id: int, payload: NoteEditRequest, session: SessionDep, owner_id: CurrentOwnerDep
+) -> NoteEditOut:
+    """用户自编辑:改标题/改内容;内容编辑会换 doc 并重建切块+向量(同事务,失败回滚)。
+
+    不跑 LLM——用户写什么就是什么;回填幂等闸不动,后续回填不会覆写用户 edits。
+    """
+    if payload.title is None and payload.markdown is None:
+        raise HTTPException(status_code=422, detail="title 和 markdown 至少给一个")
+    repo = LibraryRepo(session, owner_id)
+    note = await repo.get_active_note(note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
+
+    if payload.markdown is not None:
+        from app.service.notes_edit import doc_has_image_blocks  # 延迟导入:启动不拉 torch
+
+        if doc_has_image_blocks(note.doc):
+            raise HTTPException(
+                status_code=400,
+                detail="这篇笔记含图片块,暂不支持内容编辑(markdown 往返会丢图);可以先只改标题",
+            )
+
+    from app.repo.repos import Repos
+    from app.service.notes_edit import apply_note_edit
+
+    def _embed(texts: list[str]) -> Any:
+        from app.service.embed import embed_passage  # 延迟导入:首次编辑才加载 bge
+
+        return embed_passage(texts)
+
+    repos = Repos(session, owner_id)
+    outcome = await apply_note_edit(
+        session, repos, note,
+        title=payload.title, markdown=payload.markdown, embed_func=_embed,
+    )
+    note_after = await repo.get_active_note(note_id)
+    return NoteEditOut(
+        id=outcome.note_id,
+        title=note_after.title if note_after is not None else "",
+        title_changed=outcome.title_changed,
+        content_changed=outcome.content_changed,
+        chunks_parents=outcome.chunks_parents,
+        chunks_children=outcome.chunks_children,
+        embeddings=outcome.embeddings,
     )
 
 

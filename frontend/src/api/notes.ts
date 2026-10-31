@@ -136,3 +136,33 @@ export async function listNotes(params: NoteListParams = {}): Promise<NoteListRe
 export async function getNote(noteId: number): Promise<NoteDetail> {
   return toNoteDetail(await http.get<unknown>(`/notes/${noteId}`))
 }
+
+export interface NoteEditResult {
+  id: number
+  title: string
+  title_changed: boolean
+  content_changed: boolean
+  chunks_parents: number
+  chunks_children: number
+  embeddings: number
+}
+
+/**
+ * PUT /api/notes/{id} —— 用户自编辑;内容编辑会重建切块+向量(同内容 no-op)。
+ * 400 = 含图片块的内容编辑(暂不支持,可只改标题);404 = 没这条笔记。
+ */
+export async function updateNote(
+  noteId: number,
+  body: { title?: string; markdown?: string },
+): Promise<NoteEditResult> {
+  const data = asRecord(await http.put<unknown>(`/notes/${noteId}`, body))
+  return {
+    id: asNumber(data.id),
+    title: asText(data.title, '(无标题)'),
+    title_changed: data.title_changed === true,
+    content_changed: data.content_changed === true,
+    chunks_parents: asNumber(data.chunks_parents),
+    chunks_children: asNumber(data.chunks_children),
+    embeddings: asNumber(data.embeddings),
+  }
+}
