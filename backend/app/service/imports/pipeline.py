@@ -237,7 +237,7 @@ async def run_import_async(
                     size_bytes=len(data),
                     storage_path=str(storage_path),
                     mime=mimetypes.guess_type(path.name)[0],
-                    parse_status="error",  # 占位;G0 后立刻改为真实状态
+                    parse_status="pending",  # 等 G0;解析完立刻改为真实状态
                 )
                 result.source_id = source.id
             else:

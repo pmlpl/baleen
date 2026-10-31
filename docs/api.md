@@ -25,7 +25,7 @@
 
 | 字段 | 表 | 全部可能值 |
 |---|---|---|
-| `parse_status` | `sources` | `ok` · `no_text_expected` · `unsupported_format` · `error` · `pending_ocr` |
+| `parse_status` | `sources` | `pending` · `ok` · `no_text_expected` · `unsupported_format` · `error` · `pending_ocr` |
 | `job.status` | `jobs` | `queued` · `running` · `done` · `failed` · `dead` |
 | `job.kind` | `jobs` | `import` · `reindex` |
 | `gate` | `review_runs` | `G0` · `G1` · `G2` |
@@ -37,7 +37,7 @@
 | `role` | `qa_messages` | `user` · `assistant` |
 
 **说明**：
-- `parse_status = error` 是**解析失败**（不是 `failed`）；`pending_ocr` 表示等着走 OCR，前端画成「排队中」别画成错误。
+- `parse_status = pending` 表示**已上传、还没轮到 worker 解析**（瞬态）；`error` 是**解析失败**（不是 `failed`）；`pending_ocr` 表示等着走 OCR，前端画成「排队中」别画成错误。
 - `job.status = dead` 是**重试耗尽放弃**（不是 `cancelled`，系统里没有"取消"这个状态）。
 - `quality` 的四个值里，**真实数据现在全是 `core`**（G1/G2 的实际口径见 `service/gate/`）。
 - `ext` **带点**：`.docx` / `.pdf` / `.md`（存的是 `Path().suffix`），前端别自己 strip。
@@ -121,8 +121,8 @@
 **取值一律看 §0 的枚举表**（那里是数据库 CHECK 抄下来的）。补充三点：
 - `parse_status = error` 是解析失败；`pending_ocr` 是等 OCR，**画成「排队中」不要画成错误**。
 - `job.status = dead` 是重试耗尽放弃；系统里**没有**「已取消」这个状态。
-- **`parse_status` 只在 `job.status = done` 时有意义。** 刚上传、还没被 worker 处理时，
-  它的值是不可信的（实测会出现 `error` 但 `message=null`、`parse_meta={}` 的空壳）。
+- **`parse_status` 只在 `job.status = done` 时有意义。** 2026-10-31（0009 迁移）之前，
+  刚上传还没被 worker 处理时它是 `error` 占位（`message=null`、`parse_meta={}` 的空壳）；现在这段窗口是 `pending`。
   **前端一律先看 `job.status`**：不是 `done` 就显示「排队中 / 处理中」，不要去解读 `parse_status`。
 
 **轮询建议**：`job.status` 是 `queued`/`running` 时每 1 秒拉一次；到 `done`/`failed`/`dead` 就停。别无限轮询。
@@ -427,6 +427,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-10-31 | v10 | §0 `parse_status` 枚举加 **`pending`**（0009 迁移）：新上传的 source 在 worker 解析前不再是 `error` 占位；切块器代码块超 480 token 按行切分（不再静默截断，超限分片带 `code_part`） |
 | 2026-10-31 | v9 | §5 问答加 **`[NO_KB]` 回答兜底协议**（KB 答不了→联网/AI 自身知识，不再拒答）；问答页会话 id 同步到 URL（`/qa?session=N`）；mermaid 图点击灯箱放大（滚轮缩放）与窄容器文字裁切修复 |
 | 2026-10-31 | v8 | chat 请求加 **`note_ids` 引用笔记**（`<referenced_notes>` 优先上下文 + 检索照跑）；**前端收敛为会话优先**——导入/检索并入对话（`/导入` 文件选择器、`/检索` 引用选择器），删除 `/import` `/search` 路由页，导航只剩 笔记库/问答/设置 |
 | 2026-10-30 | v7 | §5 新增 **note-plan**（存笔记前主题分析）与 save-note 请求体（mode/topic_ids/instruction 多篇生成，响应加 `notes[]`）；§8 charter 答案扩展 `domains/sources/formats/quality_marks`（向后兼容） |

@@ -59,7 +59,7 @@ def test_upload_new_file_creates_source_job_and_blob(env) -> None:
             assert source is not None
             assert source.sha256 == sha
             assert source.filename == "hello.md"
-            assert source.parse_status == "error"  # 占位;G0 完成后由流水线改真值
+            assert source.parse_status == "pending"  # 等 worker 跑 G0;解析完由流水线改真值
             job = await repos.jobs.get_by_dedupe_key("import:" + sha)
             assert job is not None
             assert job.status == "queued"
@@ -145,7 +145,7 @@ def test_get_source_status_after_upload(env) -> None:
     assert body["id"] == source_id
     assert body["filename"] == "hello.md"
     assert body["ext"] == ".md"
-    assert body["parse_status"] == "error"  # 占位,任务跑完才是真值
+    assert body["parse_status"] == "pending"  # 等 G0;任务跑完才是真值
     assert body["job"]["status"] == "queued"
     assert body["job"]["attempts"] == 0
     assert body["review_runs"] == []

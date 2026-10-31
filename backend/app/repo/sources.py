@@ -29,7 +29,7 @@ class SourcesRepo(Repo):
         size_bytes: int,
         storage_path: str,
         mime: str | None = None,
-        parse_status: str = "error",
+        parse_status: str = "pending",
     ) -> tuple[Source, bool]:
         """按 (owner_id, sha256) 幂等创建;返回 (source, 是否新建)。"""
         existing = await self.get_by_sha256(sha256)

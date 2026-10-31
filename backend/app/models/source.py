@@ -25,7 +25,8 @@ class Source(Base):
     __table_args__ = (
         UniqueConstraint("owner_id", "sha256", name="sources_sha_uq"),
         CheckConstraint(
-            "parse_status IN ('ok','no_text_expected','unsupported_format','error','pending_ocr')",
+            "parse_status IN ('pending','ok','no_text_expected','unsupported_format','error',"
+            "'pending_ocr')",
             name="sources_parse_status_chk",
         ),
         Index("sources_owner_created_idx", "owner_id", text("created_at DESC")),

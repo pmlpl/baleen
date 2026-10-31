@@ -168,7 +168,7 @@ async def upload_source(
         size_bytes=size,
         storage_path=str(blob),
         mime=mimetypes.guess_type(raw_name)[0],
-        parse_status="error",  # 占位;G0 完成后由流水线改为真实状态(与 CLI 导入一致)
+        parse_status="pending",  # 等 worker 跑 G0;解析完由流水线改为真实状态(与 CLI 导入一致)
     )
     job, job_created = await repos.jobs.create_or_get(
         dedupe_key=DEDUPE_PREFIX + sha,

@@ -5,6 +5,8 @@
  * ⚠️ 实测偏差(2026-10-29):
  * - `parse_status` 实测会出现 `error`(解析层就是这么报的,见 HANDOFF §1 线 B 的统计口径),
  *   而契约 v1 写的是 `failed`。两个都收,视图都按「解析失败」显示。
+ * - 2026-10-31 起 `pending` 是合法值:刚上传、还没轮到 worker 解析的瞬态(0009 迁移),
+ *   之前这段窗口一直是 `error` 占位,视图照旧先看 `job.status` 就不受影响。
  * - `message` / `last_error` 允许为 null(契约里也是 null)。
  * 轮询是最频繁的路径,这里的归一化保证 null 不会漏进视图把页面打挂。
  */
@@ -16,8 +18,17 @@ export const MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 /** job.status 五态 —— docs/api.md §2「前端就按这五个画状态机,别自己发明」 */
 export type JobStatus = 'queued' | 'running' | 'done' | 'failed' | 'cancelled'
 
-/** parse_status:后四个都是「没拿到正文」,只有 ok 是正常解析 */
-export type ParseStatus = 'ok' | 'no_text_expected' | 'unsupported_format' | 'failed' | 'error'
+/**
+ * parse_status:pending 是「上传了还没轮到 worker 解析」的瞬态(0009 迁移起),
+ * ok 之外的后四个都是「没拿到正文」。
+ */
+export type ParseStatus =
+  | 'pending'
+  | 'ok'
+  | 'no_text_expected'
+  | 'unsupported_format'
+  | 'failed'
+  | 'error'
 
 export interface JobInfo {
   id: number
@@ -66,6 +77,7 @@ export interface UploadResponse {
 
 const JOB_STATUSES: readonly JobStatus[] = ['queued', 'running', 'done', 'failed', 'cancelled']
 const PARSE_STATUSES: readonly ParseStatus[] = [
+  'pending',
   'ok',
   'no_text_expected',
   'unsupported_format',
@@ -100,7 +112,7 @@ function toJobStatus(value: unknown): JobStatus {
   return JOB_STATUSES.find((status) => status === value) ?? 'queued'
 }
 
-/** 认不出来的 parse_status 当成 failed(视图会显示「解析失败 + 原因」) */
+/** 认不出来的 parse_status 当成 failed(视图会显示「解析失败 + 原因」;pending 已显式收编) */
 function toParseStatus(value: unknown): ParseStatus {
   return PARSE_STATUSES.find((status) => status === value) ?? 'failed'
 }
