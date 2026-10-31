@@ -22,7 +22,16 @@ async function loadMermaid(): Promise<typeof import('mermaid').default> {
         securityLevel: 'strict',
         theme: 'neutral',
         fontFamily: "'Segoe UI', 'Microsoft YaHei', 'PingFang SC', sans-serif",
-        flowchart: { useMaxWidth: false, htmlLabels: true, padding: 14 },
+        flowchart: {
+          useMaxWidth: false,
+          htmlLabels: true,
+          padding: 14,
+          // v12 会给顶点标签钳 max-width(默认按 node.width-2*padding 算,实测只有 120px),
+          // 再用 fastdom 异步量宽决定走 nowrap 还是换行路径——rAF 时机不稳时走 nowrap,
+          // 长中文标签就被硬裁(根因 #2,与窄容器测量是两个独立问题)。
+          // wrappingWidth 抬到 500:标签 ≤500px 按自然宽度展开,更长的自动换行,两条路径都不裁。
+          wrappingWidth: 500,
+        },
       })
       return mermaid
     })
