@@ -85,7 +85,12 @@
 > ⚠️ **需要非推理模型**。推理模型（如 sensenova）会把 `max_tokens` 全用在 reasoning 上、
 > `content` 返回空，导致整理静默失败。实测 deepseek-flash 正常。
 
-### `GET /api/sources/{source_id}`（已实现）
+### `GET /api/sources/{source_id}`
+
+> **图片文件（ADR 0006，2026-11-01 v13）**：配置了 LLM 后，图片(jpg/png/gif/webp/bmp/tif)导入时
+> 由该用户的视觉模型转写为 Markdown 正文 → 正常过闸入库（`parse_status=ok`，`warnings` 带
+> 「AI 视觉识别转写,可能有误差」）。没配 key / `no_llm` / 识别失败 → `no_text_expected`（旧语义）。
+> 转写模型用推理型网关时可能返回空转写而被 G1 拒——换非推理视觉模型。（已实现）
 
 前端**轮询这一个接口**即可拿到全链路状态。
 
@@ -448,6 +453,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-01 | v13 | **图片视觉理解（ADR 0006）**：图片文件导入时由用户配置的视觉模型转写为 Markdown 正文（失败降级 `no_text_expected`，`warnings` 带「AI 视觉识别转写」提示）；问答命中图片来源的笔记时**回传原图**给模型（最多 2 张），流式 meta 增加 **`images_attached`**；非流式 chat 响应不变 |
 | 2026-10-31 | v12 | **0010 迁移：删除 `notes.markdown` 死列**（从未生成过，API 字段由 doc 现场序列化不受影响）；后端启动后台线程**预热嵌入模型**（消除重启后第一问冷启动，`EMBED_WARMUP_ON_STARTUP=false` 可关） |
 | 2026-10-31 | v11 | §3 新增 **`PUT /api/notes/{note_id}` 用户自编辑**（标题/markdown；内容编辑重建切块+向量，同事务回滚；图片块禁改正文）；`GET /api/notes/{id}` 的 `markdown` 改为 **doc 现场序列化**（不再恒 null） |
 | 2026-10-31 | v10 | §0 `parse_status` 枚举加 **`pending`**（0009 迁移）：新上传的 source 在 worker 解析前不再是 `error` 占位；切块器代码块超 480 token 按行切分（不再静默截断，超限分片带 `code_part`） |

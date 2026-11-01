@@ -164,10 +164,10 @@ class TestRouter:
         assert parse_file(f).parse_status == ParseStatus.UNSUPPORTED_FORMAT
 
     def test_image_no_text_expected(self):
-        """纯图片归 no_text_expected 而非 unsupported(ADR §2.1)。"""
+        """纯图片无 client(未配 key)→ no_text_expected 而非 unsupported(ADR §2.1/0006)。"""
         r = parse_file(FIX / "photo.png")
         assert r.parse_status == ParseStatus.NO_TEXT_EXPECTED
-        assert "OCR" in (r.message or "")
+        assert "识别" in (r.message or "")  # 提示里说明跳过了视觉识别(0006)
 
     def test_unknown_ext(self, tmp_path: Path):
         f = tmp_path / "a.zip"

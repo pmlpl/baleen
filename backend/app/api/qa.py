@@ -13,6 +13,7 @@ LLM 异常向上抛(与 G2 同口径)。一条提问 = 建/找会话 + 存两条
 from __future__ import annotations
 
 import asyncio
+import base64
 import hashlib
 import json
 import re
@@ -38,6 +39,7 @@ from app.service.qa.answerer import (
     QaResult,
     answer,
     answer_web,
+    attach_images,
     build_citations,
     build_qa_messages,
     build_web_citations,
@@ -214,6 +216,69 @@ async def _load_ref_notes(session: AsyncSession, owner_id: int, note_ids: list[i
     return out
 
 
+# ---- 命中图片笔记回传原图(caption 路线的后半步,ADR 0006)----
+# 检索靠识别出的文字;回答时把原图一并给视觉模型「看着补细节」。
+_HIT_IMAGE_MIME = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+}
+MAX_HIT_IMAGES = 2
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+
+async def _load_hit_images(
+    session: AsyncSession, owner_id: int, kb_hits: list[ContextHit]
+) -> list[dict]:
+    """按命中顺序找出「来自图片文件」的笔记,读原图转 data URL;最多 MAX_HIT_IMAGES 张。
+
+    大图/读不到/不是图片来源的命中静默跳过——回传原图是增强,不能让它拖垮回答。
+    """
+    ids: list[int] = []
+    for h in kb_hits:
+        if h.note_id not in ids:
+            ids.append(h.note_id)
+    if not ids:
+        return []
+    from sqlalchemy import select
+
+    from app.models import Note, Source
+
+    rows = (
+        await session.execute(
+            select(Note.id, Source.ext, Source.storage_path)
+            .join(Source, Note.source_id == Source.id)
+            .where(Note.id.in_(ids), Note.owner_id == owner_id)
+        )
+    ).all()
+    by_note = {nid: (ext, sp) for nid, ext, sp in rows}
+    images: list[dict] = []
+    for nid in ids:
+        if len(images) >= MAX_HIT_IMAGES:
+            break
+        ext, storage_path = by_note.get(nid, (None, None))
+        mime = _HIT_IMAGE_MIME.get(ext or "")
+        if mime is None or not storage_path:
+            continue
+        try:
+            raw = await asyncio.to_thread(Path(storage_path).read_bytes)
+        except OSError:
+            continue
+        if len(raw) > MAX_IMAGE_BYTES:
+            continue
+        images.append(
+            {
+                "note_id": nid,
+                "mime": mime,
+                "data_url": f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}",
+            }
+        )
+    return images
+
+
 def _message_out(m: QaMessage) -> MessageOut:
     return MessageOut(
         id=m.id,
@@ -303,6 +368,8 @@ async def chat(
 
     # 5) LLM(同步 → to_thread,不阻塞事件循环):联网结果走 web 版,否则库内版
     used_web = bool(web_results)
+    # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图,上下文来自搜索结果)
+    hit_images = [] if used_web else await _load_hit_images(session, owner_id, kb_hits)
     if used_web:
         qa: QaResult = await asyncio.to_thread(
             answer_web,
@@ -314,7 +381,13 @@ async def chat(
         )
     else:
         qa = await asyncio.to_thread(
-            answer, payload.question, kb_hits, history=history, client=llm, ref_notes=ref_notes
+            answer,
+            payload.question,
+            kb_hits,
+            history=history,
+            client=llm,
+            ref_notes=ref_notes,
+            images=hit_images,
         )
         # 二段兜底:LLM 用 [NO_KB] 标记「笔记答不了」→ 联网搜;没配 Tavily 就用它自己的
         # 知识正面回答(带标注)。相关性检查只认字面(「数据库」会命中发票笔记),
@@ -444,6 +517,9 @@ async def chat_stream_endpoint(
         except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
             web_results = []
     used_web = bool(web_results)
+    # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图);须在 gen() 闭包捕获 messages 前完成
+    hit_images = [] if used_web else await _load_hit_images(session, owner_id, kb_hits)
+    attach_images(messages, hit_images)
 
     user_msg = await repo.add_message(
         qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
@@ -463,6 +539,7 @@ async def chat_stream_endpoint(
                     "session_title": qa_session.title,
                     "search_query": search_query,
                     "used_web": used_web,
+                    "images_attached": len(hit_images),  # 本次回答附带了几张原图(ADR 0006)
                     "model": llm.model,  # 本次回答用的模型,前端状态行显示
                     # 检索/改写花了多久(秒):前端据此区分「在检索」还是「在等模型」
                     "prepare_ms": int(round((time.perf_counter() - started) * 1000)),

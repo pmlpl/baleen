@@ -320,6 +320,22 @@ def answer_web(
     )
 
 
+def attach_images(messages: list[dict], images: list[dict]) -> None:
+    """把原图附到最后一条 user 消息(OpenAI 视觉格式 content 数组),原文字保留为首段。
+
+    caption 路线的后半步(ADR 0006):检索靠识别出的文字,回答时回传原图给
+    视觉模型「看着补细节」。images 是 [{note_id, mime, data_url}];空列表不动。
+    """
+    if not images:
+        return
+    last = messages[-1]
+    text = last["content"]
+    last["content"] = [
+        {"type": "text", "text": text},
+        *({"type": "image_url", "image_url": {"url": img["data_url"]}} for img in images),
+    ]
+
+
 def answer(
     question: str,
     hits: list[ContextHit],
@@ -329,6 +345,7 @@ def answer(
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
     ref_notes: list[dict[str, str]] | None = None,
+    images: list[dict] | None = None,
 ) -> QaResult:
     """问答:命中片段 + 对话历史 → LLM → 带出处的答案。
 
@@ -341,6 +358,8 @@ def answer(
 
     cli = client or LLMClient.from_settings()
     messages, meta = build_qa_messages(question, hits, history=history, ref_notes=ref_notes)
+    if images:
+        attach_images(messages, images)
     started = time.perf_counter()
     chat = cli.chat(messages, max_tokens=max_tokens, temperature=temperature)
     elapsed = (time.perf_counter() - started) * 1000

@@ -254,8 +254,9 @@ async def run_import_async(
             if source.doc is not None and g0_run is not None:
                 pr = _from_source(source)
             else:
-                # blob 无扩展名(内容寻址),G0 按扩展名路由 → 解析原始路径(字节完全相同)
-                pr = parse_file(path)
+                # blob 无扩展名(内容寻址),G0 按扩展名路由 → 解析原始路径(字节完全相同)。
+                # client 随路下发:图片文件会走视觉转写(ADR 0006);no_llm 时不烧视觉
+                pr = parse_file(path, client=None if no_llm else client)
                 await repos.sources.update_parse(
                     source_id,
                     parse_status=pr.parse_status.value,

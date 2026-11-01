@@ -75,17 +75,25 @@ UNSUPPORTED_MESSAGES = {
 }
 
 
-def parse_file(path: Path | str) -> ParseResult:
-    """G0 唯一入口:按扩展名路由;任何解析异常都收敛为 ParseResult。"""
+def parse_file(path: Path | str, *, client: object | None = None) -> ParseResult:
+    """G0 唯一入口:按扩展名路由;任何解析异常都收敛为 ParseResult。
+
+    ``client``:视觉模型用的 LLMClient(可选注入)。纯图片扩展名 + 有 client →
+    走视觉转写(ADR 0006);没 client(没配 key / no_llm)→ 维持旧语义 no_text_expected。
+    """
     p = Path(path)
     ext = p.suffix.lower()
 
     if ext in IMAGE_EXTS:
-        return ParseResult(
-            parse_status=ParseStatus.NO_TEXT_EXPECTED,
-            message="纯图片没有文本层,G0 不解析其内容;该文件应排入 OCR 队列(后续流程),暂不入库",
-            meta={"engine": "none", "chars": 0},
-        )
+        if client is None:
+            return ParseResult(
+                parse_status=ParseStatus.NO_TEXT_EXPECTED,
+                message="纯图片没有文本层;未配置 LLM(或 no_llm),跳过视觉识别,暂不入正文",
+                meta={"engine": "none", "chars": 0},
+            )
+        from .vision import parse_image_vision  # 延迟导入:识别失败不拖垮 G0 其他格式
+
+        return parse_image_vision(p, client=client)
     if ext in UNSUPPORTED_MESSAGES:
         return ParseResult(
             parse_status=ParseStatus.UNSUPPORTED_FORMAT,
