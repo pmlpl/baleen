@@ -1,8 +1,8 @@
 """G0 格式路由:扩展名 → 解析器,统一产出 ParseResult。
 
-- .pdf / .docx / .md / .pptx → 对应解析器;.txt 纯文本直通(ADR §2.1);
-- .doc 报「请转成 .docx」;.xlsx/.xls 暂不支持;纯图片 → no_text_expected(该走 OCR,
-  不是格式错误);其他扩展名 → unsupported_format;
+- .pdf / .docx / .md / .pptx → 对应解析器;.txt 纯文本直通;.csv 整篇表格(首行表头);
+- .doc 报「请转成 .docx」;.xlsx/.xls 暂不支持(提示里让转的 .csv 已支持);纯图片 →
+  no_text_expected 或视觉转写(ADR 0006);其他扩展名 → unsupported_format;
 - 认识的格式解析时抛异常(损坏/加密)→ error,不让异常逃出 G0。
 """
 
@@ -11,6 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from . import blocks
+from .csv_parser import parse_csv
 from .docx_parser import parse_docx
 from .md_parser import parse_md
 from .pdf_parser import parse_pdf
@@ -63,6 +64,7 @@ PARSERS = {
     ".markdown": parse_md,
     ".pptx": parse_pptx,
     ".txt": parse_txt,
+    ".csv": parse_csv,
 }
 
 # 纯图片:没有文本层,该走 OCR,不归 unsupported(ADR §2.1)

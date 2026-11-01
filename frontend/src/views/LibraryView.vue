@@ -9,7 +9,7 @@ import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { listNotes } from '../api/notes'
+import { deleteNote, listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
 
 /** 输入停下来 300ms 才查(任务书要求的防抖值) */
@@ -128,6 +128,26 @@ const SPINES = ['#1a73a7', '#2f855a', '#9a5b00', '#7c5cb0', '#b8474d', '#38618c'
 function spineColor(id: number): string {
   return SPINES[id % SPINES.length] as string
 }
+
+/** ---- 删除(真删除:正文/切块/向量/原文件一起清,所以必须二次确认) ---- */
+const deletingId = ref<number | null>(null)
+
+async function removeNote(note: NoteListItem): Promise<void> {
+  if (deletingId.value !== null) return
+  const label = note.title === '' ? `#${note.id}` : `《${note.title}》`
+  const ok = window.confirm(`确定删除${label}吗?正文、检索索引和原文件会一起删除,不可恢复。`)
+  if (!ok) return
+  deletingId.value = note.id
+  errorText.value = ''
+  try {
+    await deleteNote(note.id)
+    await load()
+  } catch (error) {
+    errorText.value = describeApiError(error)
+  } finally {
+    deletingId.value = null
+  }
+}
 </script>
 
 <template>
@@ -173,7 +193,17 @@ function spineColor(id: number): string {
           <span class="badge" :class="`badge--${qualityTone(note.quality)}`">
             {{ qualityLabel(note.quality) }}
           </span>
-          <span class="muted book-date">{{ formatTime(note.created_at) }}</span>
+          <span class="book-meta-right">
+            <span class="muted book-date">{{ formatTime(note.created_at) }}</span>
+            <button
+              class="book-del"
+              type="button"
+              :disabled="deletingId !== null"
+              @click="removeNote(note)"
+            >
+              {{ deletingId === note.id ? '删除中…' : '删除' }}
+            </button>
+          </span>
         </span>
       </li>
     </ul>
@@ -335,6 +365,34 @@ function spineColor(id: number): string {
 .book-date {
   font-size: 11.5px;
   font-variant-numeric: tabular-nums;
+}
+
+.book-meta-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 删除:平时低调,悬停才透出危险色 */
+.book-del {
+  padding: 2px 5px;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--ink-3);
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.13s ease, background 0.13s ease;
+}
+
+.book-del:hover:not(:disabled) {
+  background: #fbeeef;
+  color: #b8474d;
+}
+
+.book-del:disabled {
+  opacity: 0.5;
+  cursor: wait;
 }
 
 /* ---------- 翻页 ---------- */

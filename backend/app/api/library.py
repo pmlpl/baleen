@@ -13,9 +13,12 @@
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from collections.abc import Awaitable
 from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -25,6 +28,8 @@ from app.api.deps import CurrentOwnerDep, SessionDep
 from app.repo.library import LibraryRepo
 
 router = APIRouter(prefix="/api", tags=["library"])
+
+logger = logging.getLogger(__name__)
 
 
 DEFAULT_LIMIT = 20
@@ -315,8 +320,12 @@ async def edit_note(
 
     repos = Repos(session, owner_id)
     outcome = await apply_note_edit(
-        session, repos, note,
-        title=payload.title, markdown=payload.markdown, embed_func=_embed,
+        session,
+        repos,
+        note,
+        title=payload.title,
+        markdown=payload.markdown,
+        embed_func=_embed,
     )
     note_after = await repo.get_active_note(note_id)
     return NoteEditOut(
@@ -328,6 +337,44 @@ async def edit_note(
         chunks_children=outcome.chunks_children,
         embeddings=outcome.embeddings,
     )
+
+
+def _unlink_blob(path: str) -> None:
+    """删原文件 blob(best-effort):文件没了不影响删除结果,失败记日志不抛。"""
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("删除笔记原文件失败(%s):%s", path, exc)
+
+
+@router.delete("/notes/{note_id}", status_code=204)
+async def delete_note(note_id: int, session: SessionDep, owner_id: CurrentOwnerDep) -> None:
+    """删除笔记(真删除,不是软删):
+
+    - chunks/embeddings 由 DB 级联(FK ondelete=CASCADE)一并清空,检索立刻不再命中;
+    - source 行在没有其他笔记引用时一并删除,原文件 blob 从事务提交后从磁盘清除
+      (best-effort,失败只记日志);qa 消息里的引用角标会 404,引用文字不受影响。
+    """
+    note = await LibraryRepo(session, owner_id).get_active_note(note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
+
+    from app.repo.repos import Repos  # 与 edit_note 同款延迟导入
+
+    repos = Repos(session, owner_id)
+    deleted = await repos.notes.delete_active(note_id)
+    if not deleted:  # 极端并发:检查与删除之间被别的请求删了,按 404 口径
+        raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
+
+    blob_path: str | None = None
+    if note.source_id is not None:
+        # sources:notes = 1:N(ADR 0003);还有别的笔记挂着这个 source 就只删笔记
+        if await repos.sources.count_notes_for(note.source_id) == 0:
+            blob_path = await repos.sources.delete(note.source_id)
+    await session.commit()
+
+    if blob_path is not None:
+        await asyncio.to_thread(_unlink_blob, blob_path)
 
 
 @router.post("/search", response_model=SearchResponse)

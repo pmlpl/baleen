@@ -12,14 +12,17 @@
  * 笔记里写了 <script> 也只显示成文字。
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { getNote, updateNote } from '../api/notes'
+import { deleteNote, getNote, updateNote } from '../api/notes'
 import type { NoteDetail, NoteParent } from '../api/notes'
 import { renderMermaidIn } from '../utils/mermaid'
+import { renderSvgsIn } from '../utils/svg'
 
 const props = defineProps<{ id: string }>()
+
+const router = useRouter()
 
 const note = ref<NoteDetail | null>(null)
 const loading = ref(false)
@@ -101,6 +104,12 @@ function renderSectionText(raw: string): string {
 
   const lines = raw.replace(/\r\n?/g, '\n').split('\n')
 
+  // SVG 插图块:<svg 开行收块,到 </svg> 或明显中文段落收(渲染交给 renderSvgsIn 沙箱)
+  const SVG_START = /^\s*<svg\b/i
+  const SVG_END = /^\s*<\/svg\s*>\s*$/i
+  const svgish = (line: string): boolean =>
+    line.includes('<') || line.includes('/>') || line.includes('=')
+
   // mermaid 源码块:起始关键字行 + 连续的语法行(空行后仍是 mermaid 语法就继续收)
   // 完整渲染交给 renderMermaidIn(懒加载,失败退化成代码块+角标)
   const MERMAID_START =
@@ -148,6 +157,28 @@ function renderSectionText(raw: string): string {
 
   for (let i = 0; i < lines.length; i++) {
     const line = (lines[i] as string)!
+    // SVG 优先于普通代码启发式:<svg 开块,到 </svg> 收;没闭合就收到明显中文段落为止
+    if (SVG_START.test(line)) {
+      flush()
+      const block: string[] = [line]
+      let j = i + 1
+      while (
+        j < lines.length &&
+        !SVG_END.test(lines[j] as string) &&
+        (svgish(lines[j] as string) || (lines[j] as string).trim() === '')
+      ) {
+        block.push(lines[j] as string)
+        j++
+      }
+      if (j < lines.length && SVG_END.test(lines[j] as string)) {
+        block.push(lines[j] as string)
+        i = j
+      } else {
+        i = j - 1 // 没找到闭合:收到哪里算哪里,后续行走普通启发式
+      }
+      out.push(`<pre><code>${escaped(block.join('\n'))}</code></pre>`)
+      continue
+    }
     // mermaid 优先于普通代码启发式:起始关键字开块,空行后语法行仍连续则继续收
     if (MERMAID_START.test(line)) {
       flush()
@@ -328,7 +359,11 @@ async function load(): Promise<void> {
   // 等 v-if 把正文渲染出来再取容器:contentEl/tocEl 到这一步才存在
   await nextTick()
   // mermaid 代码块渲染成图(懒加载;失败退化为代码块+角标,绝不抛错)
-  if (contentEl.value !== null) void renderMermaidIn(contentEl.value)
+  // SVG 插图同理:沙箱 iframe 展示,失败退化代码块
+  if (contentEl.value !== null) {
+    void renderMermaidIn(contentEl.value)
+    void renderSvgsIn(contentEl.value)
+  }
   restoreScroll()
   computeActive()
   bindScrollTracking()
@@ -400,6 +435,25 @@ async function saveEdit(): Promise<void> {
     saving.value = false
   }
 }
+
+/** ---- 删除(真删除:正文/切块/向量/原文件一起清,所以必须二次确认) ---- */
+const deleting = ref(false)
+
+async function removeNote(): Promise<void> {
+  if (note.value === null || deleting.value) return
+  const ok = window.confirm(
+    `确定删除《${note.value.title}》吗?正文、检索索引和原文件会一起删除,不可恢复。`,
+  )
+  if (!ok) return
+  deleting.value = true
+  try {
+    await deleteNote(note.value.id)
+    await router.push({ name: 'notes' })
+  } catch (error) {
+    errorText.value = describeApiError(error)
+    deleting.value = false
+  }
+}
 </script>
 
 <template>
@@ -413,7 +467,17 @@ async function saveEdit(): Promise<void> {
       <header class="page-head note-head">
         <div class="note-head-row">
           <h1 class="page-title">{{ note.title }}</h1>
-          <button class="btn" type="button" :disabled="editing" @click="startEdit">编辑</button>
+          <div class="note-actions">
+            <button class="btn" type="button" :disabled="editing" @click="startEdit">编辑</button>
+            <button
+              class="btn btn--danger"
+              type="button"
+              :disabled="editing || deleting"
+              @click="removeNote"
+            >
+              {{ deleting ? '删除中…' : '删除' }}
+            </button>
+          </div>
         </div>
         <p v-if="savedHint !== ''" class="note note--ok saved-hint">{{ savedHint }}</p>
         <div class="detail-meta">
@@ -526,6 +590,11 @@ async function saveEdit(): Promise<void> {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.note-actions {
+  display: flex;
+  gap: 8px;
 }
 
 .saved-hint {

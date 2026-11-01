@@ -166,3 +166,8 @@ export async function updateNote(
     embeddings: asNumber(data.embeddings),
   }
 }
+
+/** DELETE /api/notes/{id} —— 真删除:正文、切块、向量和原文件一起清,不可恢复。404 = 没这条笔记。 */
+export async function deleteNote(noteId: number): Promise<void> {
+  await http.del(`/notes/${noteId}`)
+}

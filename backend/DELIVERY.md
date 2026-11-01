@@ -7,13 +7,13 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-01 · 图片视觉理解(ADR 0006) + NoteView mermaid 渲染;基线 274
+**最后更新**：2026-11-02 · 三小批(笔记删除 + CSV 导入 + SVG 插图);基线 290
 
 ### 已完成模块
 
 | 模块 | 路径 | 状态 |
 |---|---|---|
-| **G0 解析** | `app/service/parse/` | ✅ 7 格式 + txt 直通；35 样本 smoke 通过 |
+| **G0 解析** | `app/service/parse/` | ✅ 8 格式(.csv v14 起) + txt 直通；35 样本 smoke 通过 |
 | **数据模型** | `app/models/`、`alembic/versions/0002_*` | ✅ 6 表 + `halfvec(1024)` + HNSW + trgm GIN |
 | **切块** | `app/service/chunk/` | ✅ 同节内合并；真实笔记 in_range 64%–100% |
 | **向量化** | `app/service/embed/` | ✅ torch 2.14.1+cu126，cuda 52 items/s |
@@ -25,7 +25,7 @@
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
 | **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
 | **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效 |
-| **API 端点总览** | `app/main.py` | ✅ 16 个：`/healthz` · 上传 2 · 列表/详情/编辑/检索 5 · 问答/会话/导出 6 · 设置 2 |
+| **API 端点总览** | `app/main.py` | ✅ 17 个：`/healthz` · 上传 2 · 列表/详情/编辑/删除/检索 6 · 问答/会话/导出 6 · 设置 2 |
 | **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页 + 登录注册 + 书架 + 笔记两栏阅读 |
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
 | **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷 → LLM 生成章程 → 存 DB → G2 热生效；每用户一份 |
@@ -43,11 +43,14 @@
 | **图片视觉理解(ADR 0006)** | `app/service/parse/vision.py` + `parse_file(client=)` + qa.py `_load_hit_images` | ✅ 导入时视觉模型转写 Markdown 进流水线(降级 no_text_expected);问答命中图片来源笔记回传原图(≤2 张),流式 meta 加 `images_attached`;e2e 全通:识别→G1/G2 accept→检索→看着答 |
 | **NoteView mermaid** | `frontend/src/views/NoteView.vue` | ✅ 阅读页 mermaid 代码块渲染成图(mermaid 感知启发式 + renderMermaidIn,失败退化代码块);截图实证 |
 | ~~worker LLM 配置统一~~ | — | ✅ 核实早已实现(import_file/summarize 都走 resolve_llm_config),悬账销账 |
+| **笔记删除** | `DELETE /api/notes/{id}` + `NotesRepo.delete_active` + 书架/详情删除入口 | ✅ 真删除:chunks/embeddings DB 级联清;孤儿 source 连行带 blob 删(1:N 防护);确认弹窗;7 测试 |
+| **CSV 导入** | `app/service/parse/csv_parser.py` + PARSERS | ✅ 整篇表格、首行表头、分隔符嗅探(逗号/分号/制表符/竖线)、GB18030 兼容、>200 行分表;9 测试;xlsx 提示话术成真 |
+| **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  263 passed
+cd backend && uv run pytest -q     →  290 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -55,6 +58,7 @@ cd backend && uv run pytest -q     →  263 passed
 → 247（引用笔记 + [NO_KB] 兜底 + 线 R 回填测试）→ 250（代码超限切分 + parse_status=pending）
 → 263（笔记自编辑:序列化往返 7 + 端点 6）
 → **274**（视觉解析 7 + 问答回传原图 4;2026-11-01）
+→ **290**（笔记删除 7 + CSV 解析 9;2026-11-02）
 
 **任何新任务都不许把这个数降下来。**
 
@@ -63,7 +67,7 @@ cd backend && uv run pytest -q     →  263 passed
 1. ~~切块参数 300/250/400/480 是推导值~~ → 2026-10-31 已消融校准（维持 300，见 eval/ablation.md §12）；**代码块超 480 tok 静默截断也已修复**（按行切分）
 2. **G1 的 quality 恒为 core，无区分度** —— 质量分级须由 G2 决定
 3. **embeddings.vec 是 HALFVEC(1024)** —— 换不同维度的模型必须**新建表**，不能改配置
-4. `.doc` / `.xlsx` / 纯图片**不支持**（ADR 0002 §2.1）；扫描件 → `no_text_expected`，**不做 OCR**
+4. `.doc` / `.xlsx` / `.xls` **不支持**（显式拒绝+转换提示；`.csv` 已支持,纯图片 v13 起走视觉转写）；扫描件 PDF → `no_text_expected`，**逐页栅格化视觉识别未做**
 5. **所有单测都用合成 fixture**，真实样本只在 `scripts/*_smoke.py` 里验 —— 真实数据曾抓出「27 测试全绿但 in_range 只剩 11.6%」
 6. **问答严格只用库内内容**（防瞎编，刻意选择）；追问检索脱靶已由问题改写缓解（线 Q 批6）；库外问题需联网搜索工具链（主人会话实测提出，设计待排）
 7. **API Key 不继承 .env**（多用户决策）：每个账号必须自己配，没配时上传会 400

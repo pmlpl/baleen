@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from app.models import Note
 
@@ -73,3 +73,19 @@ class NotesRepo(Repo):
                 .where(Note.id == note_id, Note.owner_id == self.owner_id)
                 .values(**values)
             )
+
+    async def delete_active(self, note_id: int) -> bool:
+        """硬删一篇 active 笔记,返回是否真删了(不存在/已归档 = False,404 口径同详情)。
+
+        故意走 Core 级 delete 而不是 session.delete():Note.chunks 的 ORM 级 cascade
+        会把全部子块 load 进内存再逐行删,大笔记又慢又占内存;Core delete 一条语句,
+        chunks/embeddings 的级联(FK ondelete=CASCADE)由数据库自己完成。
+        """
+        result = await self.session.execute(
+            delete(Note).where(
+                Note.id == note_id,
+                Note.owner_id == self.owner_id,
+                Note.status == "active",
+            )
+        )
+        return (result.rowcount or 0) > 0

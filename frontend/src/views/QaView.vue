@@ -32,6 +32,7 @@ import type {
 } from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
 import { renderMermaidIn } from '../utils/mermaid'
+import { renderSvgsIn } from '../utils/svg'
 
 const TOP_K = 5
 
@@ -527,9 +528,12 @@ async function openSession(id: number): Promise<void> {
     messages.value = detail.messages
     syncSessionUrl(id)
     scrollBottom()
-    // 历史消息里可能有 mermaid 图
+    // 历史消息里可能有 mermaid 图 / SVG 插图
     await nextTick()
-    if (msgListEl.value !== null) void renderMermaidIn(msgListEl.value)
+    if (msgListEl.value !== null) {
+      void renderMermaidIn(msgListEl.value)
+      void renderSvgsIn(msgListEl.value)
+    }
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {
@@ -655,7 +659,10 @@ async function send(): Promise<void> {
           }
           // 流式结束才渲染图表:中途渲染会随增量重画抖动
           void nextTick(() => {
-            if (msgListEl.value !== null) void renderMermaidIn(msgListEl.value)
+            if (msgListEl.value !== null) {
+              void renderMermaidIn(msgListEl.value)
+              void renderSvgsIn(msgListEl.value)
+            }
           })
           void refreshSessions()
         },
