@@ -7,7 +7,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-10-31 · 笔记自编辑(v11) + markdown 死列删除(0010) + 启动预热嵌入模型
+**最后更新**：2026-11-01 · 图片视觉理解(ADR 0006) + NoteView mermaid 渲染;基线 274
 
 ### 已完成模块
 
@@ -40,6 +40,9 @@
 | **笔记自编辑** | `app/service/notes_edit.py` + `PUT /api/notes/{id}` + NoteView 编辑模式 | ✅ 标题/markdown 编辑;内容编辑重建切块+向量(同事务);不跑 LLM、回填不覆写;图片块禁改正文;GET 详情 markdown 改 doc 现场序列化 |
 | **markdown 死列删除(0010)** | `alembic/versions/0010_*` | ✅ 从未生成过、全表 null,主人拍板删;dev 库已应用+往返验证;API 字段(doc 现场序列化)不受影响 |
 | **启动预热嵌入模型** | `app/main.py` + `EMBED_WARMUP_ON_STARTUP` | ✅ 后台线程启动即加载 bge,消除重启后第一问 3~8s 冷启动;真机实证自动加载;测试用例显式关掉 |
+| **图片视觉理解(ADR 0006)** | `app/service/parse/vision.py` + `parse_file(client=)` + qa.py `_load_hit_images` | ✅ 导入时视觉模型转写 Markdown 进流水线(降级 no_text_expected);问答命中图片来源笔记回传原图(≤2 张),流式 meta 加 `images_attached`;e2e 全通:识别→G1/G2 accept→检索→看着答 |
+| **NoteView mermaid** | `frontend/src/views/NoteView.vue` | ✅ 阅读页 mermaid 代码块渲染成图(mermaid 感知启发式 + renderMermaidIn,失败退化代码块);截图实证 |
+| ~~worker LLM 配置统一~~ | — | ✅ 核实早已实现(import_file/summarize 都走 resolve_llm_config),悬账销账 |
 
 ### 测试基线
 
@@ -50,7 +53,8 @@ cd backend && uv run pytest -q     →  263 passed
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
 → 183（阶段3/4+工具链）→ 199（多用户）→ 228（标题整理 + 认证/隔离）
 → 247（引用笔记 + [NO_KB] 兜底 + 线 R 回填测试）→ 250（代码超限切分 + parse_status=pending）
-→ **263**（笔记自编辑:序列化往返 7 + 端点 6）
+→ 263（笔记自编辑:序列化往返 7 + 端点 6）
+→ **274**（视觉解析 7 + 问答回传原图 4;2026-11-01）
 
 **任何新任务都不许把这个数降下来。**
 

@@ -17,6 +17,7 @@ import { RouterLink } from 'vue-router'
 import { describeApiError } from '../api/http'
 import { getNote, updateNote } from '../api/notes'
 import type { NoteDetail, NoteParent } from '../api/notes'
+import { renderMermaidIn } from '../utils/mermaid'
 
 const props = defineProps<{ id: string }>()
 
@@ -100,6 +101,16 @@ function renderSectionText(raw: string): string {
 
   const lines = raw.replace(/\r\n?/g, '\n').split('\n')
 
+  // mermaid 源码块:起始关键字行 + 连续的语法行(空行后仍是 mermaid 语法就继续收)
+  // 完整渲染交给 renderMermaidIn(懒加载,失败退化成代码块+角标)
+  const MERMAID_START =
+    /^\s*(graph|flowchart|mindmap|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|xychart-beta|quadrantChart|timeline|gitGraph)\b/i
+  const mermaidish = (line: string): boolean =>
+    MERMAID_START.test(line) ||
+    /^\s*(subgraph\b|end\b|style\b|classDef|click\b|linkStyle|%%|direction\b)/i.test(line) ||
+    /-->|---|-\.->|==>|--x|-o\)/.test(line) ||
+    /\w\[.*\]|\w\(.*\)|\w\{.*\}/.test(line)
+
   const looksLikeCode = (line: string): boolean => {
     if (line.trim() === '') return false
     if (/^\s{4,}\S/.test(line)) return true
@@ -135,7 +146,36 @@ function renderSectionText(raw: string): string {
     bufferIsCode = null
   }
 
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = (lines[i] as string)!
+    // mermaid 优先于普通代码启发式:起始关键字开块,空行后语法行仍连续则继续收
+    if (MERMAID_START.test(line)) {
+      flush()
+      const block: string[] = [line]
+      let j = i + 1
+      while (j < lines.length) {
+        const cur = lines[j] as string
+        if (cur.trim() === '') {
+          // 空行:向后看第一个非空行,还是 mermaid 语法就吞掉空行继续,否则收块
+          let k = j + 1
+          while (k < lines.length && (lines[k] as string)!.trim() === '') k++
+          if (k < lines.length && mermaidish((lines[k] as string)!)) {
+            block.push(cur)
+            j++
+            continue
+          }
+          break
+        }
+        if (!mermaidish(cur) && /[\u4e00-\u9fa5]/.test(cur) && cur.trim().length > 30 && !/[[{(]/.test(cur)) {
+          break // 明显是普通中文段落,收块
+        }
+        block.push(cur)
+        j++
+      }
+      i = j - 1
+      out.push(`<pre><code>${escaped(block.join('\n'))}</code></pre>`)
+      continue
+    }
     const isCode = looksLikeCode(line)
     if (bufferIsCode === null) {
       bufferIsCode = isCode
@@ -287,6 +327,8 @@ async function load(): Promise<void> {
   if (note.value === null) return
   // 等 v-if 把正文渲染出来再取容器:contentEl/tocEl 到这一步才存在
   await nextTick()
+  // mermaid 代码块渲染成图(懒加载;失败退化为代码块+角标,绝不抛错)
+  if (contentEl.value !== null) void renderMermaidIn(contentEl.value)
   restoreScroll()
   computeActive()
   bindScrollTracking()
