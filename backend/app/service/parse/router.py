@@ -2,7 +2,8 @@
 
 - .pdf / .docx / .md / .pptx → 对应解析器;.txt 纯文本直通;.csv 整篇表格(首行表头);
 - .doc 报「请转成 .docx」;.xlsx/.xls 暂不支持(提示里让转的 .csv 已支持);纯图片 →
-  no_text_expected 或视觉转写(ADR 0006);其他扩展名 → unsupported_format;
+  no_text_expected 或视觉转写(ADR 0006);扫描件 PDF 有 client 时逐页视觉识别;
+  其他扩展名 → unsupported_format;
 - 认识的格式解析时抛异常(损坏/加密)→ error,不让异常逃出 G0。
 """
 
@@ -110,6 +111,9 @@ def parse_file(path: Path | str, *, client: object | None = None) -> ParseResult
             meta={"engine": "none", "chars": 0},
         )
     try:
+        if ext == ".pdf":
+            # PDF 解析器要吃 client:扫描件才逐页视觉识别,有文本层时 client 不参与
+            return parse_pdf(p, client=client)
         return parser(p)
     except Exception as exc:  # G0 不允许异常外逃,统一收敛为 error
         return ParseResult(

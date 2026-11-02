@@ -7,7 +7,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-02 · 三小批(笔记删除 + CSV 导入 + SVG 插图);基线 290
+**最后更新**：2026-11-02 · 扫描件 PDF 视觉识别(ADR 0006 §6);基线 301
 
 ### 已完成模块
 
@@ -45,12 +45,13 @@
 | ~~worker LLM 配置统一~~ | — | ✅ 核实早已实现(import_file/summarize 都走 resolve_llm_config),悬账销账 |
 | **笔记删除** | `DELETE /api/notes/{id}` + `NotesRepo.delete_active` + 书架/详情删除入口 | ✅ 真删除:chunks/embeddings DB 级联清;孤儿 source 连行带 blob 删(1:N 防护);确认弹窗;7 测试 |
 | **CSV 导入** | `app/service/parse/csv_parser.py` + PARSERS | ✅ 整篇表格、首行表头、分隔符嗅探(逗号/分号/制表符/竖线)、GB18030 兼容、>200 行分表;9 测试;xlsx 提示话术成真 |
+| **扫描件 PDF 视觉识别** | `vision.parse_scanned_pdf` + `parse_pdf(client=)` | ✅ 无文本层 PDF 逐页 150dpi 栅格化→视觉转写;单页失败跳过留痕、全失败降级;30 页上限明说;有文本层 PDF 不烧视觉;e2e 中文两页全通(G1/G2 accept,标题正确)| 
 | **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  290 passed
+cd backend && uv run pytest -q     →  301 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -59,6 +60,7 @@ cd backend && uv run pytest -q     →  290 passed
 → 263（笔记自编辑:序列化往返 7 + 端点 6）
 → **274**（视觉解析 7 + 问答回传原图 4;2026-11-01）
 → **290**（笔记删除 7 + CSV 解析 9;2026-11-02）
+→ **301**（扫描件 PDF 视觉 11;2026-11-02）
 
 **任何新任务都不许把这个数降下来。**
 
@@ -67,7 +69,7 @@ cd backend && uv run pytest -q     →  290 passed
 1. ~~切块参数 300/250/400/480 是推导值~~ → 2026-10-31 已消融校准（维持 300，见 eval/ablation.md §12）；**代码块超 480 tok 静默截断也已修复**（按行切分）
 2. **G1 的 quality 恒为 core，无区分度** —— 质量分级须由 G2 决定
 3. **embeddings.vec 是 HALFVEC(1024)** —— 换不同维度的模型必须**新建表**，不能改配置
-4. `.doc` / `.xlsx` / `.xls` **不支持**（显式拒绝+转换提示；`.csv` 已支持,纯图片 v13 起走视觉转写）；扫描件 PDF → `no_text_expected`，**逐页栅格化视觉识别未做**
+4. `.doc` / `.xlsx` / `.xls` **不支持**（显式拒绝+转换提示；`.csv` 已支持）；纯图片与**扫描件 PDF** v13/v15 起走视觉转写（需配置支持视觉的模型，**推理型网关模型不行**）
 5. **所有单测都用合成 fixture**，真实样本只在 `scripts/*_smoke.py` 里验 —— 真实数据曾抓出「27 测试全绿但 in_range 只剩 11.6%」
 6. **问答严格只用库内内容**（防瞎编，刻意选择）；追问检索脱靶已由问题改写缓解（线 Q 批6）；库外问题需联网搜索工具链（主人会话实测提出，设计待排）
 7. **API Key 不继承 .env**（多用户决策）：每个账号必须自己配，没配时上传会 400

@@ -93,6 +93,12 @@
 > 由该用户的视觉模型转写为 Markdown 正文 → 正常过闸入库（`parse_status=ok`，`warnings` 带
 > 「AI 视觉识别转写,可能有误差」）。没配 key / `no_llm` / 识别失败 → `no_text_expected`（旧语义）。
 > 转写模型用推理型网关时可能返回空转写而被 G1 拒——换非推理视觉模型。（已实现）
+>
+> **扫描件 PDF（ADR 0006 §6，2026-11-02 v15）**：无文本层的 PDF（扫描件/纯图 PDF）在配置了 LLM 时
+> **逐页栅格化(150dpi)走视觉转写**，页间以普通段落 `—— 第 N 页 ——` 分隔（不是标题，避免污染
+> 笔记标题与目录）。单页失败只跳过该页并写进 `warnings`/`meta.failed_pages`；全部页失败才降级
+> `no_text_expected`。页数上限 **30 页**（`PDF_VISION_MAX_PAGES`），超出部分**明确警告不静默截断**。
+> 有文本层的 PDF 永远走 pymupdf 正常解析，不烧视觉调用。`meta.engine=pdf-vision(<模型>)`。
 
 前端**轮询这一个接口**即可拿到全链路状态。
 
@@ -462,6 +468,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-02 | v15 | **扫描件 PDF 视觉识别（ADR 0006 §6）**：无文本层 PDF 在有 LLM 配置时逐页栅格化(150dpi)走视觉转写，页间 `—— 第 N 页 ——` 普通段落分隔；单页失败跳过留痕、全失败降级 `no_text_expected`；页数上限 30 明说警告；有文本层的 PDF 不受影响（不烧视觉）。`meta.engine=pdf-vision(<模型>)` |
 | 2026-11-02 | v14 | **三小批**：§3 新增 **`DELETE /api/notes/{note_id}`**（真删除：chunks/embeddings DB 级联清，孤儿 source 连行带 blob 一起删，204/404）；导入格式加 **`.csv`**（整篇表格、首行表头、分隔符嗅探、GB18030 兼容——xlsx 提示里「另存为 CSV」从此是真的）；问答 FORMAT_GUIDE 与存为笔记 prompt 支持 **```svg 插图**（前端沙箱 iframe 渲染，`sandbox` 无 allow-* + CSP `default-src 'none'`，解析失败退化代码块）；§7 删掉已过时的「站内编辑笔记不做」行 |
 | 2026-11-01 | v13 | **图片视觉理解（ADR 0006）**：图片文件导入时由用户配置的视觉模型转写为 Markdown 正文（失败降级 `no_text_expected`，`warnings` 带「AI 视觉识别转写」提示）；问答命中图片来源的笔记时**回传原图**给模型（最多 2 张），流式 meta 增加 **`images_attached`**；非流式 chat 响应不变 |
 | 2026-10-31 | v12 | **0010 迁移：删除 `notes.markdown` 死列**（从未生成过，API 字段由 doc 现场序列化不受影响）；后端启动后台线程**预热嵌入模型**（消除重启后第一问冷启动，`EMBED_WARMUP_ON_STARTUP=false` 可关） |

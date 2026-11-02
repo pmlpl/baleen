@@ -131,7 +131,9 @@ def _cell_text(rawdict_page: dict, rect: tuple[float, float, float, float]) -> s
     return _join_lines([t for _, t in line_out])
 
 
-def parse_pdf(path: Path) -> ParseResult:
+def parse_pdf(path: Path, *, client: object | None = None) -> ParseResult:
+    """PDF → block JSON。``client`` 非空且判定为扫描件时,逐页栅格化走视觉识别
+    (ADR 0006 扩展,见 ``vision.parse_scanned_pdf``);否则维持「无文本层」旧语义。"""
     doc = pymupdf.open(path)
     if doc.page_count == 0:
         return ParseResult(
@@ -153,6 +155,14 @@ def parse_pdf(path: Path) -> ParseResult:
         max(per_page_chars) < PAGE_HAS_TEXT_CHARS
         or has_text_pages / doc.page_count < TEXT_PAGE_RATIO
     ):
+        if client is not None:
+            from .vision import parse_scanned_pdf  # 延迟导入:与图片路径共用同一实现
+
+            doc.close()
+            result = parse_scanned_pdf(path, client=client)  # type: ignore[arg-type]
+            # 留一份文本层诊断:以后排查「为什么走了视觉」不用再开 PDF
+            result.meta.setdefault("per_page_chars", per_page_chars)
+            return result
         return ParseResult(
             parse_status=ParseStatus.NO_TEXT_EXPECTED,
             message="未检测到文本层(扫描件或纯图 PDF),应走 OCR 流程;G0 已拦截,不进入切块",
