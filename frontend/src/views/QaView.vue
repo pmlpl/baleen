@@ -103,21 +103,27 @@ async function waitImportDone(
   return getSource(sourceId)
 }
 
-async function importOneFile(file: File): Promise<void> {
+const IMAGE_FILE_RE = /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i
+
+async function importOneFile(file: File, attachments: File[] = []): Promise<void> {
   if (file.size > MAX_UPLOAD_BYTES) {
     pushSystemBubble(`❌ 《${file.name}》超过 50MB 上限,没有导入。`)
     return
   }
-  const pending = pushSystemBubble(`⏳ 正在导入:《${file.name}》(排队中)…`)
+  const pending = pushSystemBubble(
+    attachments.length > 0
+      ? `⏳ 正在导入:《${file.name}》(含 ${attachments.length} 张图片,排队中)…`
+      : `⏳ 正在导入:《${file.name}》(排队中)…`,
+  )
   let upload
   try {
     try {
-      upload = await createSource(file)
+      upload = await createSource(file, false, attachments)
     } catch (error) {
       // 没配 API Key(要跑 G2 会 400)→ 自动降级为「跳过 AI 判定」再试一次
       const msg = describeApiError(error)
       if (msg.includes('API Key')) {
-        upload = await createSource(file, true)
+        upload = await createSource(file, true, attachments)
         pushSystemBubble('ℹ️ 这个账号还没配 API Key,本次跳过了 AI 归属判断。')
       } else {
         throw error
@@ -150,6 +156,12 @@ async function importOneFile(file: File): Promise<void> {
   }
 }
 
+/**
+ * 多文件导入(v16):一批里「文档」逐个导入,同批的图片作为附件跟着每一个文档上传。
+ *
+ * 依据是 md 里的相对引用:用户把 md 和它引用的图片一起选中/拖进来时,图片就该随文档走。
+ * 图片不会被单独导入成笔记(那是另一条「AI 看图」路径,不该被这里的批量操作误触发)。
+ */
 async function importChatFiles(files: FileList | File[]): Promise<void> {
   if (importingFiles.value) return
   const list = Array.from(files)
@@ -157,8 +169,15 @@ async function importChatFiles(files: FileList | File[]): Promise<void> {
   importingFiles.value = true
   errorText.value = ''
   try {
-    for (const f of list) {
-      await importOneFile(f)
+    const images = list.filter((f) => IMAGE_FILE_RE.test(f.name))
+    const docs = list.filter((f) => !IMAGE_FILE_RE.test(f.name))
+    if (docs.length === 0) {
+      // 只选了图片:按「导入图片笔记」处理,不算附件
+      for (const f of images) await importOneFile(f)
+      return
+    }
+    for (const f of docs) {
+      await importOneFile(f, images)
     }
   } finally {
     importingFiles.value = false

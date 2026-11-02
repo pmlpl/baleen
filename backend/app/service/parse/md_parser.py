@@ -2,10 +2,18 @@
 
 token 流直转:块级 token 用栈组装,行内 token 递归处理 marks
 (bold/italic/link/strikethrough/code)。文件按 UTF-8 读(仅 .txt 走编码探测链,ADR §2.1)。
+
+**图片(2026-11-02 v16)**:`![alt](src)` 不再展平成 alt 文本(ADR §2.1「图片不静默丢」)。
+解析期先产出行内标记节点 ``imageMarker``,再由 ``split_image_markers`` 把段落拆开、
+在图片原位插入块级 ``image`` 节点;``image_resolver`` 决定这个 src 怎么落地:
+- md 文件导入 → 相对路径解析 + 存字节,attrs 带 ``media``(内容寻址 key)
+- 笔记编辑往返 → ``baleen-image:N`` 还原成编辑前的原 image 节点
+- 解析不了(文件不存在/外链) → 退回 alt 文本并记 warning,不丢正文
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from markdown_it import MarkdownIt
@@ -15,6 +23,12 @@ from . import blocks
 from .types import ParseResult, ParseStatus, dist_version
 
 ENGINE = f"markdown-it-py {dist_version('markdown-it-py')}"
+
+# 图片 src → image 节点 attrs;返回 None 表示「这个 src 落不了地」,退回 alt 文本
+ImageResolver = Callable[[str, str], dict | None]
+
+# 笔记编辑往返用的伪 scheme:``![alt](baleen-image:0)`` 指回原 doc 里的第 0 张图
+IMAGE_SCHEME = "baleen-image:"
 
 
 def _mark_for_open(tok: Token) -> dict | None:
@@ -51,12 +65,51 @@ def _render_inlines(children: list[Token]) -> list[blocks.Inline]:
         elif tok.type.endswith("_close"):
             if stack:
                 stack.pop()
-        elif tok.type == "image":  # 自闭合 image token:alt 在 children
-            alt = "".join(c.content for c in tok.children or [] if c.type == "text")
-            if alt.strip():
-                holders[-1].append(blocks.text_node(alt.strip()))
+        elif tok.type == "image":  # 自闭合 image token:alt 在 children,src 在 attrs
+            alt = "".join(c.content for c in tok.children or [] if c.type == "text").strip()
+            holders[-1].append(
+                {"type": "imageMarker", "attrs": {"src": tok.attrGet("src") or "", "alt": alt}}
+            )
         # softbreak/hardbreak:中文场景直接吞掉(段落内不产换行节点)
     return nodes
+
+
+def _split_paragraph_images(node: dict, resolve: ImageResolver, warnings: list[str]) -> list[dict]:
+    """含 imageMarker 的段落 → 按图片位置拆成 [段落, 图, 段落, …]。
+
+    TipTap 的 image 是块级节点,不能塞在 paragraph 的行内 content 里,
+    所以拆分是必须的;拆完段落顺序与原文档一致,图片停在原来的位置。
+    """
+    inlines: list[dict] = node.get("content") or []
+    if not any(n.get("type") == "imageMarker" for n in inlines):
+        return [node]
+
+    out: list[dict] = []
+    buf: list[dict] = []
+
+    def flush() -> None:
+        if buf:
+            out.append({"type": "paragraph", "content": list(buf)})
+            buf.clear()
+
+    for inline in inlines:
+        if inline.get("type") != "imageMarker":
+            buf.append(inline)
+            continue
+        attrs = inline.get("attrs") or {}
+        src = (attrs.get("src") or "").strip()
+        alt = (attrs.get("alt") or "").strip()
+        resolved = resolve(src, alt)
+        if resolved is None:
+            # 落不了地:保留 alt 文本(与旧行为一致的空安全兜底),并明确记一条
+            if alt:
+                buf.append(blocks.text_node(alt))
+            warnings.append(f"图片未能导入,已保留替代文字:{alt or src or '(无)'}")
+            continue
+        flush()
+        out.append({"type": "image", "attrs": {"alt": alt, **resolved}})
+    flush()
+    return out or [{"type": "paragraph", "content": []}]
 
 
 def _tokens_to_blocks(tokens: list[Token]) -> tuple[list[blocks.Block], int]:
@@ -163,17 +216,94 @@ def _tokens_to_blocks(tokens: list[Token]) -> tuple[list[blocks.Block], int]:
     return root["content"], chars
 
 
-def parse_md_text(text: str) -> tuple[list[blocks.Block], int]:
+_NESTED_CONTAINERS = ("blockquote", "listItem")
+
+
+def split_image_markers(
+    nodes: list[dict], resolve: ImageResolver, warnings: list[str]
+) -> list[dict]:
+    """递归把含 imageMarker 的段落拆开,图片升成块级节点(容器内也递归)。"""
+    out: list[dict] = []
+    for node in nodes:
+        if node.get("type") == "paragraph":
+            out.extend(_split_paragraph_images(node, resolve, warnings))
+            continue
+        if node.get("type") in _NESTED_CONTAINERS and node.get("content"):
+            node = {**node, "content": split_image_markers(node["content"], resolve, warnings)}
+        out.append(node)
+    return out
+
+
+def _default_resolver(src: str, _alt: str) -> dict | None:
+    """没有媒体后端时的口径:保留 src 引用(不下载、不展平),图片节点仍然成立。"""
+    if not src or src.startswith("data:"):
+        return None
+    return {"src": src}
+
+
+def parse_md_text(
+    text: str,
+    *,
+    image_resolver: ImageResolver | None = None,
+    warnings: list[str] | None = None,
+) -> tuple[list[blocks.Block], int]:
     """markdown 字符串 → block JSON 数组(笔记编辑保存走这里;文件入口 parse_md 同款转换)。"""
     md = MarkdownIt("commonmark").enable(["table", "strikethrough"])
-    return _tokens_to_blocks(md.parse(text))
+    content, chars = _tokens_to_blocks(md.parse(text))
+    warn_bucket = warnings if warnings is not None else []
+    content = split_image_markers(content, image_resolver or _default_resolver, warn_bucket)
+    return content, chars
 
 
-def parse_md(path: Path) -> ParseResult:
+def parse_md(
+    path: Path,
+    *,
+    media_sink: Callable[[bytes, str], str] | None = None,
+) -> ParseResult:
+    """md 文件 → blocks;引用到的本地图片可以经 ``media_sink`` 存字节。
+
+    ``media_sink(bytes, alt) -> key``:由调用方决定存哪(流水线存内容寻址目录)。
+    没给 sink 时图片只保留 src 引用(不丢节点,也不复制文件)。
+    """
     raw = path.read_text(encoding="utf-8")
-    content, chars = parse_md_text(raw)
+    warnings: list[str] = []
+    base = path.parent
+
+    def resolve(src: str, alt: str) -> dict | None:
+        if src.startswith(IMAGE_SCHEME) or src.startswith("data:"):
+            return None
+        if "://" in src:  # 外链:不联网抓取(G0 不做网络 IO),只记引用
+            return {"src": src}
+        target = (base / src).resolve()
+        if not target.is_file():
+            return None
+        try:
+            data = target.read_bytes()  # noqa: ASYNC240 —— 纯本地小文件同步读,与其它解析器一致
+        except OSError:
+            return None
+        if media_sink is None:
+            return {"src": src, "filename": target.name}
+        return {"media": media_sink(data, alt), "src": src, "filename": target.name}
+
+    content, chars = parse_md_text(raw, image_resolver=resolve, warnings=warnings)
+    images = _count_images(content)
+    meta: dict = {"engine": ENGINE, "chars": chars}
+    if images:
+        meta["images"] = images
+    if media_sink is not None and images:
+        warnings.append(f"已随笔记导入 {images} 张本地图片(按内容寻址存库,笔记详情页可查看)")
     return ParseResult(
         parse_status=ParseStatus.OK,
         blocks={"type": "doc", "content": content},
-        meta={"engine": ENGINE, "chars": chars},
+        warnings=warnings,
+        meta=meta,
     )
+
+
+def _count_images(nodes: list[dict]) -> int:
+    total = 0
+    for node in nodes:
+        if node.get("type") == "image":
+            total += 1
+        total += _count_images(node.get("content") or [])
+    return total

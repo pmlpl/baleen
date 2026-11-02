@@ -28,6 +28,7 @@ from app.service.embed import EMBEDDING_MODEL, count_tokens, embed_passage
 from app.service.gate import judge as judge_g1
 from app.service.gate.g2 import judge as judge_g2
 from app.service.llm import LLMClient
+from app.service.media import store_media
 from app.service.parse import ParseResult, ParseStatus, parse_file
 from app.service.parse.blocks import empty_doc
 from app.service.rewrite.outline import (
@@ -255,8 +256,9 @@ async def run_import_async(
                 pr = _from_source(source)
             else:
                 # blob 无扩展名(内容寻址),G0 按扩展名路由 → 解析原始路径(字节完全相同)。
-                # client 随路下发:图片文件会走视觉转写(ADR 0006);no_llm 时不烧视觉
-                pr = parse_file(path, client=None if no_llm else client)
+                # client 随路下发:图片文件会走视觉转写(ADR 0006);no_llm 时不烧视觉。
+                # md 里的本地图片经 media_sink 存字节(内容寻址),doc 只留 key(v16)
+                pr = parse_file(path, client=None if no_llm else client, media_sink=store_media)
                 await repos.sources.update_parse(
                     source_id,
                     parse_status=pr.parse_status.value,

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Annotated, Any, Protocol
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, field_validator
 
 from app.api.deps import CurrentOwnerDep, SessionDep
@@ -87,6 +88,14 @@ class ParentChunkOut(BaseModel):
     token_count: int
 
 
+class NoteImageOut(BaseModel):
+    """笔记里的一张图(文档顺序)。``media`` 有值就走 /api/media/{key} 取原图。"""
+
+    alt: str
+    media: str | None
+    src: str | None
+
+
 class NoteDetailOut(BaseModel):
     id: int
     title: str
@@ -97,6 +106,8 @@ class NoteDetailOut(BaseModel):
     source_id: int | None
     markdown: str | None
     parents: list[ParentChunkOut]
+    # v16:文档顺序的图片清单;前端按 [图片] alt 标记原位替换成真实插图
+    images: list[NoteImageOut] = []
 
 
 class NoteEditRequest(BaseModel):
@@ -252,6 +263,27 @@ async def list_notes(
     return NotesPage(total=total, items=items)
 
 
+def _collect_images(doc: dict | None) -> list[NoteImageOut]:
+    """文档顺序收集 image 节点(含容器内嵌套),供前端原位替换 [图片] 标记。"""
+    found: list[NoteImageOut] = []
+
+    def walk(nodes: list[dict]) -> None:
+        for node in nodes:
+            if node.get("type") == "image":
+                attrs = node.get("attrs") or {}
+                found.append(
+                    NoteImageOut(
+                        alt=attrs.get("alt") or "",
+                        media=attrs.get("media") or None,
+                        src=attrs.get("src") or None,
+                    )
+                )
+            walk(node.get("content") or [])
+
+    walk((doc or {}).get("content") or [])
+    return found
+
+
 @router.get("/notes/{note_id}", response_model=NoteDetailOut)
 async def get_note_detail(
     note_id: int, session: SessionDep, owner_id: CurrentOwnerDep
@@ -273,6 +305,7 @@ async def get_note_detail(
         status=note.status,
         source_id=note.source_id,
         markdown=doc_to_markdown(note.doc),
+        images=_collect_images(note.doc),
         parents=[
             ParentChunkOut(
                 chunk_id=chunk.id,
@@ -293,6 +326,8 @@ async def edit_note(
     """用户自编辑:改标题/改内容;内容编辑会换 doc 并重建切块+向量(同事务,失败回滚)。
 
     不跑 LLM——用户写什么就是什么;回填幂等闸不动,后续回填不会覆写用户 edits。
+    **含图笔记也可改正文**:图片以 ``![alt](baleen-image:N)`` 标记往返,保存时按 N
+    重新关联编辑前的原图片节点(见 ``notes_edit`` 模块说明)。
     """
     if payload.title is None and payload.markdown is None:
         raise HTTPException(status_code=422, detail="title 和 markdown 至少给一个")
@@ -300,15 +335,6 @@ async def edit_note(
     note = await repo.get_active_note(note_id)
     if note is None:
         raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
-
-    if payload.markdown is not None:
-        from app.service.notes_edit import doc_has_image_blocks  # 延迟导入:启动不拉 torch
-
-        if doc_has_image_blocks(note.doc):
-            raise HTTPException(
-                status_code=400,
-                detail="这篇笔记含图片块,暂不支持内容编辑(markdown 往返会丢图);可以先只改标题",
-            )
 
     from app.repo.repos import Repos
     from app.service.notes_edit import apply_note_edit
@@ -345,6 +371,22 @@ def _unlink_blob(path: str) -> None:
         Path(path).unlink(missing_ok=True)
     except OSError as exc:
         logger.warning("删除笔记原文件失败(%s):%s", path, exc)
+
+
+@router.get("/media/{key}")
+async def get_media(key: str) -> FileResponse:
+    """取笔记里引用的图片(md 导入时按内容寻址存的字节)。
+
+    ``key`` 是 sha256 hex;只做 key → 路径的映射,**不接受任何路径输入**。
+    media 不带 owner 归属:key 本身就是内容哈希,知道 key 才取得到,
+    且同一内容多用户共享一份文件(与源文件 blob 同一思路)。
+    """
+    from app.service.media import media_mime, media_path  # 延迟导入
+
+    path = media_path(key)
+    if path is None:
+        raise HTTPException(status_code=404, detail="图片不存在")
+    return FileResponse(path, media_type=media_mime(key))
 
 
 @router.delete("/notes/{note_id}", status_code=204)

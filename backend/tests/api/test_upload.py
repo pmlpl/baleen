@@ -212,3 +212,72 @@ def test_get_source_with_runs_note_and_g2_skipped(env) -> None:
     assert run["score"] == 1.0
     assert run["action"] == "index"
     assert run["reasons"] == ["r1"]
+
+
+# ---------------------------------------------------------------- md 附件(v16)
+
+PNG_1X1 = bytes.fromhex(
+    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489"
+    "0000000d4944415478da63fcffff3f030005fe02fea72d1f440000000049454e44ae426082"
+)
+
+
+def test_upload_md_with_attachments_lands_in_same_staging_dir(env) -> None:
+    """附件与主文件落在同一个暂存目录里,且保持相对路径(md 解析才能找到图)。"""
+    md = "正文。\n\n![架构图](img/a.png)\n".encode()
+    resp = env.client.post(
+        "/api/sources",
+        files={
+            "file": ("note.md", md, "text/markdown"),
+            "attachments": ("img/a.png", PNG_1X1, "image/png"),
+        },
+        params={"no_llm": False},
+    )
+    assert resp.status_code == 201, resp.text
+    # enqueue 收到的是主文件路径;它和附件必须在同一目录里
+    file_path = Path(env.calls[-1]["file_path"])
+    assert file_path.name == "note.md"
+    attached = file_path.parent / "img" / "a.png"
+    assert attached.is_file(), f"附件应落在暂存目录的相对路径上:{attached}"
+    assert attached.read_bytes() == PNG_1X1
+    # md 解析器按 md 所在目录解析相对路径 → 能读到同一张图
+    from app.service.parse.md_parser import parse_md
+
+    stored: list[bytes] = []
+
+    def sink(data: bytes, _alt: str) -> str:
+        stored.append(data)
+        return "0" * 64
+
+    result = parse_md(file_path, media_sink=sink)
+    assert stored == [PNG_1X1], "相对路径解析到同一张附件"
+    assert [b for b in result.blocks["content"] if b["type"] == "image"]
+
+
+def test_upload_rejects_non_image_attachment(env) -> None:
+    resp = env.client.post(
+        "/api/sources",
+        files={
+            "file": ("note.md", b"# hi\n", "text/markdown"),
+            "attachments": ("evil.exe", b"MZ", "application/octet-stream"),
+        },
+        params={"no_llm": False},
+    )
+    assert resp.status_code == 415
+    assert "图片" in resp.json()["detail"]
+
+
+def test_upload_attachment_path_traversal_blocked(env) -> None:
+    """文件名带 ../ 试图写出暂存目录 → 层级被剥掉,文件仍落在目录内。"""
+    resp = env.client.post(
+        "/api/sources",
+        files={
+            "file": ("note.md", b"# hi\n", "text/markdown"),
+            "attachments": ("../../escape.png", PNG_1X1, "image/png"),
+        },
+        params={"no_llm": False},
+    )
+    assert resp.status_code == 201, resp.text
+    staging_dir = Path(env.calls[-1]["file_path"]).parent
+    assert (staging_dir / "escape.png").is_file(), "剥离 .. 后落在暂存目录内"
+    assert not (staging_dir.parent.parent / "escape.png").exists(), "不许穿出暂存根"

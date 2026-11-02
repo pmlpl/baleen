@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 
 from . import blocks
@@ -78,11 +79,19 @@ UNSUPPORTED_MESSAGES = {
 }
 
 
-def parse_file(path: Path | str, *, client: object | None = None) -> ParseResult:
+def parse_file(
+    path: Path | str,
+    *,
+    client: object | None = None,
+    media_sink: Callable[[bytes, str], str] | None = None,
+) -> ParseResult:
     """G0 唯一入口:按扩展名路由;任何解析异常都收敛为 ParseResult。
 
     ``client``:视觉模型用的 LLMClient(可选注入)。纯图片扩展名 + 有 client →
     走视觉转写(ADR 0006);没 client(没配 key / no_llm)→ 维持旧语义 no_text_expected。
+
+    ``media_sink``:md 里本地图片的存储回调(``bytes, alt -> key``)。给了就存字节、
+    doc 只留 ``media`` key(v16);不给则图片只保留 src 引用。
     """
     p = Path(path)
     ext = p.suffix.lower()
@@ -114,6 +123,8 @@ def parse_file(path: Path | str, *, client: object | None = None) -> ParseResult
         if ext == ".pdf":
             # PDF 解析器要吃 client:扫描件才逐页视觉识别,有文本层时 client 不参与
             return parse_pdf(p, client=client)
+        if ext in (".md", ".markdown") and media_sink is not None:
+            return parse_md(p, media_sink=media_sink)
         return parser(p)
     except Exception as exc:  # G0 不允许异常外逃,统一收敛为 error
         return ParseResult(

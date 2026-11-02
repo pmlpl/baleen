@@ -173,10 +173,19 @@ function toUploadResponse(raw: unknown): UploadResponse {
   }
 }
 
-/** POST /api/sources —— multipart/form-data,单文件 ≤ 50 MB */
-export async function createSource(file: File, noLlm = false): Promise<UploadResponse> {
+/**
+ * POST /api/sources —— multipart/form-data,单文件 ≤ 50 MB。
+ * v16:``attachments`` 是 md 里引用的本地图片,按原相对路径一起上传,
+ * 后端放进同一次上传的暂存目录里,md 解析器才能按相对路径找到图。
+ */
+export async function createSource(
+  file: File,
+  noLlm = false,
+  attachments: File[] = [],
+): Promise<UploadResponse> {
   const form = new FormData()
   form.append('file', file)
+  for (const att of attachments) form.append('attachments', att, att.name)
   const query = noLlm ? '?no_llm=true' : ''
   return toUploadResponse(await http.postForm<unknown>(`/sources${query}`, form))
 }

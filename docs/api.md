@@ -69,8 +69,18 @@
 | `no_llm` | bool（query） | ❌ | `true` 时跳过 G2（不耗额度），结果打 `g2_skipped=true` |
 
 ```json
-{ "source_id": 12, "job_id": 34, "job_status": "queued", "deduped": false }
+{ "id": 12, "job_id": 34, "job_status": "queued", "deduped": false }
 ```
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `attachments` | file[] | ❌ | **v16**：md 里引用的本地图片，按**原相对路径**随主文件一起传（最多 40 个，仅图片扩展名） |
+
+> **md 带图片导入（v16）**：md 里的 `![alt](相对路径)` 会解析到「本次上传目录」下的同名相对路径。
+> 解析到的图片**按内容寻址存库**（`storage/media/{sha256}`），doc 里只留 `media` key；
+> 详情页按 `GET /api/media/{key}` 取原图。文件不存在 → 退回替代文字并在 `warnings` 里说明；
+> 外链（`http(s)://`）保留 `src` 引用、**不联网抓取**（G0 不做网络 IO）。
+> 旧的单文件上传完全兼容（不传 `attachments` 即旧行为）。
 
 - `deduped=true` 表示同 `sha256` 已存在且已处理完，**不会再入队**，直接拿已有 `source_id`。
 - **支持格式**：.pdf / .docx / .pptx / .md / .markdown / .txt / **.csv（v14 新增：整篇表格，首行当表头，
@@ -229,7 +239,10 @@
 - **不跑 LLM**：用户写什么就是什么，不做标题二次加工；回填幂等闸（`parse_meta.headings_rewritten`）保持原值，
   后续回填不会覆写用户 edits；`parse_meta.user_edited=true` 标记
 - **内容编辑 = 换 doc + 删光 chunks 重建 + 重嵌**（同一事务，失败整体回滚，与线 R 回填同配方）
-- `400` = 笔记含**图片块**时改正文（markdown 往返会把图压成 alt 文本，静默丢块 → 显式拒绝，可只改标题）
+- **含图笔记也能改正文（v16）**：图片在 markdown 里以位置标记 `![说明](baleen-image:N)` 出现，
+  保存时按 `N` 重新关联编辑前的原图片节点（`N` 是编辑前文档里的图片序号，从 0 起）。
+  用户挪动标记行图片跟着挪、删掉标记行图片即删除——都是显式意图，不算丢数据。
+  越界或手写错的编号退化为替代文字不报错
 - `404` = 没这条笔记；`422` = 两个都缺 / title 或 markdown 空白
 - 首次调用会加载嵌入模型（bge，冷启动数秒），之后热态毫秒级
 
@@ -468,6 +481,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-02 | v16 | **含图笔记可编辑 + md 带图片导入**：① `PUT /api/notes/{id}` 不再对含图笔记返回 400——图片以位置标记 `![alt](baleen-image:N)` 往返，保存时按 N 重关联原节点（删标记=删图）；② `POST /api/sources` 新增可选 `attachments`（md 引用的本地图片，按相对路径随主文件上传，≤40 个仅图片），md 解析把图按内容寻址存进 `storage/media/{sha256}`、doc 只留 `media` key；③ 新端点 **`GET /api/media/{key}`** 取原图（key 必须 64 位 hex，不接受路径输入）；④ `GET /api/notes/{id}` 新增 **`images`** 字段（文档顺序，供前端把 `[图片] alt` 原位换成真实插图）；⑤ 上传暂存改为「每次上传一个目录」，worker 清理兼容目录 |
 | 2026-11-02 | v15 | **扫描件 PDF 视觉识别（ADR 0006 §6）**：无文本层 PDF 在有 LLM 配置时逐页栅格化(150dpi)走视觉转写，页间 `—— 第 N 页 ——` 普通段落分隔；单页失败跳过留痕、全失败降级 `no_text_expected`；页数上限 30 明说警告；有文本层的 PDF 不受影响（不烧视觉）。`meta.engine=pdf-vision(<模型>)` |
 | 2026-11-02 | v14 | **三小批**：§3 新增 **`DELETE /api/notes/{note_id}`**（真删除：chunks/embeddings DB 级联清，孤儿 source 连行带 blob 一起删，204/404）；导入格式加 **`.csv`**（整篇表格、首行表头、分隔符嗅探、GB18030 兼容——xlsx 提示里「另存为 CSV」从此是真的）；问答 FORMAT_GUIDE 与存为笔记 prompt 支持 **```svg 插图**（前端沙箱 iframe 渲染，`sandbox` 无 allow-* + CSP `default-src 'none'`，解析失败退化代码块）；§7 删掉已过时的「站内编辑笔记不做」行 |
 | 2026-11-01 | v13 | **图片视觉理解（ADR 0006）**：图片文件导入时由用户配置的视觉模型转写为 Markdown 正文（失败降级 `no_text_expected`，`warnings` 带「AI 视觉识别转写」提示）；问答命中图片来源的笔记时**回传原图**给模型（最多 2 张），流式 meta 增加 **`images_attached`**；非流式 chat 响应不变 |

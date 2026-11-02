@@ -27,9 +27,7 @@ def _fake_token_counter(text: str) -> int:
 def fake_embed(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """embed_passage / count_tokens 换假货,记录调用次数。"""
     calls = {"embed": 0}
-    monkeypatch.setattr(
-        "app.service.notes_edit.count_tokens", _fake_token_counter, raising=True
-    )
+    monkeypatch.setattr("app.service.notes_edit.count_tokens", _fake_token_counter, raising=True)
 
     def fake_embed_passage(texts: list[str]) -> list[list[float]]:
         calls["embed"] += 1
@@ -126,7 +124,9 @@ def test_edit_markdown_rebuilds_index(env: SimpleNamespace, fake_embed: dict[str
         lambda: _chunk_count(env.shared["factory"], note_id)
     )
     assert (parents, children, embeddings) == (
-        body["chunks_parents"], body["chunks_children"], body["embeddings"]
+        body["chunks_parents"],
+        body["chunks_children"],
+        body["embeddings"],
     )
     assert fake_embed["embed"] == 1
     detail = env.client.get(f"/api/notes/{note_id}").json()
@@ -153,7 +153,8 @@ def test_edit_same_markdown_is_noop(env: SimpleNamespace, fake_embed: dict[str, 
     assert fake_embed["embed"] == calls_after_first, "同内容保存不重嵌"
 
 
-def test_edit_image_note_content_rejected(env: SimpleNamespace) -> None:
+def test_edit_image_note_content_preserves_image(env: SimpleNamespace) -> None:
+    """含图笔记现在可以改正文(v16):图片以位置标记往返,原节点原样保留。"""
     doc = {
         "type": "doc",
         "content": [
@@ -164,12 +165,39 @@ def test_edit_image_note_content_rejected(env: SimpleNamespace) -> None:
     note_id = env.client.portal.call(
         lambda: _seed_note(env.shared["factory"], title=MARKER + " 有图", doc=doc)
     )
-    resp = env.client.put(f"/api/notes/{note_id}", json={"markdown": "# 想改内容"})
-    assert resp.status_code == 400
-    assert "图片" in resp.json()["detail"]
-    # 只改标题放行
-    ok = env.client.put(f"/api/notes/{note_id}", json={"title": MARKER + " 有图·改题"})
-    assert ok.status_code == 200 and ok.json()["title_changed"] is True
+    detail = env.client.get(f"/api/notes/{note_id}").json()
+    assert "![架构图](baleen-image:0)" in detail["markdown"], "序列化应给位置标记"
+
+    edited = detail["markdown"].replace("带图的笔记。", "改过的正文,长度够切块用。") + (
+        "\n\n新增一段,让内容变化足够大到重建切块。\n"
+    )
+    resp = env.client.put(f"/api/notes/{note_id}", json={"markdown": edited})
+    assert resp.status_code == 200, resp.text
+    after = env.client.get(f"/api/notes/{note_id}").json()
+    assert "改过的正文" in after["markdown"]
+    assert "baleen-image:0" in after["markdown"], "图片标记还在"
+    images = [b for b in after["parents"] if "图片" in b["text"]]
+    assert images, "图片块仍留在笔记里(重关联成功)"
+
+
+def test_edit_image_note_can_delete_image(env: SimpleNamespace) -> None:
+    """用户删掉标记行 = 显式意图删图,不该被当成数据丢失拦下。"""
+    doc = {
+        "type": "doc",
+        "content": [
+            blocks.paragraph_from_text("正文。"),
+            {"type": "image", "attrs": {"alt": "要删的图", "index": 0}},
+        ],
+    }
+    note_id = env.client.portal.call(
+        lambda: _seed_note(env.shared["factory"], title=MARKER + " 删图", doc=doc)
+    )
+    edited = "# 新标题\n\n只剩文字了,这一行足够长以便重建切块不出警告。\n"
+    resp = env.client.put(f"/api/notes/{note_id}", json={"markdown": edited})
+    assert resp.status_code == 200, resp.text
+    after = env.client.get(f"/api/notes/{note_id}").json()
+    assert "baleen-image" not in after["markdown"]
+    assert not [b for b in after["parents"] if "要删的图" in b["text"]]
 
 
 def test_edit_validation(env: SimpleNamespace) -> None:

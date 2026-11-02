@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import mimetypes
+import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from typing import Annotated
 from fastapi import (
     APIRouter,
     Depends,
+    File,
     HTTPException,
     Query,
     Request,
@@ -41,6 +43,10 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 BODY_LIMIT_BYTES = 55 * 1024 * 1024
 READ_CHUNK = 1024 * 1024
 ALLOWED_EXTS = set(PARSERS) | set(IMAGE_EXTS) | set(UNSUPPORTED_MESSAGES)
+# md 里引用的本地图片随主文件一起上传(v16):一次最多带这么多附件
+MAX_ATTACHMENTS = 40
+# 附件允许的扩展名:只有图片(md 的插图;其它类型没有引用场景)
+ATTACHMENT_EXTS = set(IMAGE_EXTS)
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
@@ -52,6 +58,28 @@ class UploadResponse(BaseModel):
     job_id: int
     job_status: str
     deduped: bool
+
+
+async def _write_attachments(attachments: list[UploadFile], target_dir: Path) -> None:
+    """附件按原始相对路径写进本次上传的暂存目录(md 里的相对引用才能解析)。
+
+    multipart 里的文件名可能带路径(webkitdirectory 上传),保留相对层级但挡掉
+    ``..`` 与绝对路径——绝不允许写出暂存目录。
+    """
+    root = target_dir.resolve()
+    for att in attachments:
+        raw = (att.filename or "").replace("\\", "/").lstrip("/")
+        parts = [p for p in raw.split("/") if p not in ("", ".", "..")]
+        if not parts:
+            continue
+        target = (target_dir / Path(*parts)).resolve()
+        if root not in target.parents:  # 防穿越(理论上上面已挡,.resolve 后双保险)
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("wb") as out:
+            while chunk := await att.read(READ_CHUNK):
+                out.write(chunk)
+        await att.close()
 
 
 class JobOut(BaseModel):
@@ -112,6 +140,10 @@ async def upload_source(
     no_llm: Annotated[
         bool, Query(description="跳过 G2(不写 G2 判定行,parse_meta 记 g2_skipped)")
     ] = False,
+    attachments: Annotated[
+        list[UploadFile] | None,
+        File(description="md 里引用的本地图片(v16):按相对路径随主文件一起上传"),
+    ] = None,
 ) -> UploadResponse:
     # 延迟导入:api 进程不因 import 本模块而加载 torch/解析栈,只在真正上传时才拉
     from app.service.imports.pipeline import DEDUPE_PREFIX, _store_blob
@@ -123,6 +155,15 @@ async def upload_source(
     ext = Path(raw_name).suffix.lower()
     if ext not in ALLOWED_EXTS:
         raise HTTPException(status_code=415, detail=f"暂不支持的格式:{ext or '(无扩展名)'}")
+    attachments = attachments or []
+    if len(attachments) > MAX_ATTACHMENTS:
+        raise HTTPException(status_code=413, detail=f"附件太多:一次最多 {MAX_ATTACHMENTS} 个")
+    for att in attachments:
+        att_ext = Path(Path(att.filename or "").name).suffix.lower()
+        if att_ext not in ATTACHMENT_EXTS:
+            raise HTTPException(
+                status_code=415, detail=f"附件只支持图片:{att.filename or '(无文件名)'}"
+            )
 
     # 预检:要跑 G2 却没配 API Key → 当场提示去设置页,别让任务在队列里静默降级
     if not no_llm:
@@ -133,11 +174,13 @@ async def upload_source(
                 detail="这个账号还没配置 API Key,请先到设置页配置,或勾选「跳过 AI 判定」后再上传",
             )
 
-    # 流式落暂存区(保留原文件名/扩展名,文件名本身是判定特征):边读边算 sha256、边限大小;
-    # blob 仍由流水线存,这里先存一份让 source.storage_path 立即有效
-    suffix = Path(raw_name).suffix
-    staging = STAGING_ROOT / f"{uuid.uuid4().hex}_{Path(raw_name).stem[:190]}{suffix}"
-    STAGING_ROOT.mkdir(parents=True, exist_ok=True)
+    # 流式落暂存区:**每次上传建一个目录**,主文件按原文件名放进去、附件也放进去 ——
+    # md 解析器按「相对 md 文件所在目录」解析图片路径,目录结构天然对上,
+    # 且同一批上传的附件不会和别的上传串味(v16)。
+    unique = uuid.uuid4().hex
+    staging_dir = STAGING_ROOT / unique
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staging = staging_dir / raw_name
     digest = hashlib.sha256()
     size = 0
     try:
@@ -151,8 +194,9 @@ async def upload_source(
                     )
                 digest.update(chunk)
                 out.write(chunk)
+        await _write_attachments(attachments, staging_dir)
     except HTTPException:
-        staging.unlink(missing_ok=True)
+        shutil.rmtree(staging_dir, ignore_errors=True)
         raise
     finally:
         await file.close()
@@ -178,8 +222,8 @@ async def upload_source(
 
     deduped = not job_created  # 同一内容此前提交过(不论任务是否已完成)
     if job.status in ("done", "running"):
-        # 已完成或在途:不再入队,本次暂存文件也不会被任务用到,当场删掉
-        staging.unlink(missing_ok=True)
+        # 已完成或在途:不再入队,本次暂存目录也不会被任务用到,当场删掉
+        shutil.rmtree(staging_dir, ignore_errors=True)
     else:
         # queued/failed/dead:重入队(arq _job_id 幂等挡重复;队列丢失时也借此自愈)。
         # 此时暂存文件可能被任务用到,不删;真正的孤儿由 worker 启动时的 24h 清理兜底

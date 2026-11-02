@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shutil
 import time
 from dataclasses import asdict
 from pathlib import Path
@@ -35,35 +36,47 @@ WORKER_NAME = "arq-worker"
 
 
 def _remove_staging(file_path: str | Path) -> bool:
-    """删除暂存文件。只删 STAGING_ROOT 之下的路径(任务参数不可信,防误删)。"""
+    """删除暂存内容。只删 STAGING_ROOT 之下的路径(任务参数不可信,防误删)。
+
+    v16 起每次上传是一个目录(主文件 + 附件);兼容旧的平铺文件路径。
+    """
     path = Path(file_path).resolve()
     root = STAGING_ROOT.resolve()
     if root not in path.parents:
         return False
+    if path.is_dir():
+        shutil.rmtree(path, ignore_errors=True)
+        return True
     path.unlink(missing_ok=True)
+    # 顺手清掉已空的上传目录(主文件删掉后附件就是孤儿)
+    parent = path.parent
+    if parent != root and parent.is_dir() and not any(parent.iterdir()):
+        parent.rmdir()
     return True
 
 
 def clean_stale_uploads(max_age_hours: int = STALE_UPLOAD_TTL_HOURS) -> list[str]:
-    """清理暂存区里超过 max_age_hours 的孤儿文件,返回被删文件名。
+    """清理暂存区里超过 max_age_hours 的孤儿条目(文件或上传目录),返回被删名称。
 
     孤儿来源:上传后任务一直没成功(失败保留供重试)、重复上传在途任务被 arq 幂等挡掉等。
-    成功导入的暂存文件在任务结束时当场已删,不会出现在这里。
+    成功导入的暂存内容在任务结束时当场已删,不会出现在这里。
     """
     removed: list[str] = []
     if not STAGING_ROOT.is_dir():
         return removed
     cutoff = time.time() - max_age_hours * 3600
     for entry in STAGING_ROOT.iterdir():
-        if not entry.is_file():
-            continue
         try:
             stale = entry.stat().st_mtime < cutoff
         except OSError:
             continue
-        if stale:
+        if not stale:
+            continue
+        if entry.is_dir():
+            shutil.rmtree(entry, ignore_errors=True)
+        else:
             entry.unlink(missing_ok=True)
-            removed.append(entry.name)
+        removed.append(entry.name)
     return removed
 
 

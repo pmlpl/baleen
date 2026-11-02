@@ -16,7 +16,7 @@ import { RouterLink, useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { deleteNote, getNote, updateNote } from '../api/notes'
-import type { NoteDetail, NoteParent } from '../api/notes'
+import type { NoteDetail, NoteImage, NoteParent } from '../api/notes'
 import { renderMermaidIn } from '../utils/mermaid'
 import { renderSvgsIn } from '../utils/svg'
 
@@ -81,12 +81,14 @@ const toc = computed<TocEntry[]>(() => {
   })
 })
 
-/** 每个父块 id → 它的排版后 HTML */
+/** 每个父块 id → 它的排版后 HTML(按父块顺序消费图片清单,v16) */
 const htmlById = computed<Map<number, string>>(() => {
   const map = new Map<number, string>()
   if (note.value === null) return map
+  // 游标容器:父块按 ord 顺序渲染,图片清单也是文档顺序,顺序消费即可对上原位
+  const cursor = { i: 0 }
   for (const parent of note.value.parents) {
-    map.set(parent.chunk_id, renderSectionText(parent.text))
+    map.set(parent.chunk_id, renderSectionText(parent.text, note.value.images, cursor))
   }
   return map
 })
@@ -98,9 +100,34 @@ const htmlById = computed<Map<number, string>>(() => {
  * renderMarkdown。按启发式分块:代码特征行聚成代码块,其余聚成段落。
  * 全部先 HTML 转义,原文含 <script> 也只显示成文字。
  */
-function renderSectionText(raw: string): string {
+function renderSectionText(
+  raw: string,
+  images: NoteImage[] = [],
+  cursor: { i: number } = { i: 0 },
+): string {
   const escaped = (s: string): string =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+
+  /**
+   * `[图片] alt` 标记 → 真实插图(chunker 给 image 块产的就是这行文本)。
+   * 按文档顺序取下一张图;取完了就保留原标记文字,不假装有图。
+   * media key 走 /api/media/,外链走 src 原值(可能加载不出来,给 alt 兜底)。
+   */
+  const renderImageMarker = (line: string): string | null => {
+    if (!/^\s*\[图片\]\s*/.test(line)) return null
+    const image = images[cursor.i]
+    if (image === undefined) return null
+    cursor.i += 1
+    const url = image.media !== null ? `/api/media/${image.media}` : (image.src ?? '')
+    const alt = escaped(image.alt === '' ? '笔记插图' : image.alt)
+    if (url === '') {
+      return `<p class="img-missing">[图片] ${alt}(原图未随笔记导入)</p>`
+    }
+    return (
+      `<figure class="note-img"><img src="${escaped(url)}" alt="${alt}" loading="lazy" />` +
+      `<figcaption>${alt}</figcaption></figure>`
+    )
+  }
 
   const lines = raw.replace(/\r\n?/g, '\n').split('\n')
 
@@ -157,6 +184,13 @@ function renderSectionText(raw: string): string {
 
   for (let i = 0; i < lines.length; i++) {
     const line = (lines[i] as string)!
+    // 图片标记优先:原位替换成真实插图
+    const imgHtml = renderImageMarker(line)
+    if (imgHtml !== null) {
+      flush()
+      out.push(imgHtml)
+      continue
+    }
     // SVG 优先于普通代码启发式:<svg 开块,到 </svg> 收;没闭合就收到明显中文段落为止
     if (SVG_START.test(line)) {
       flush()
@@ -505,7 +539,8 @@ async function removeNote(): Promise<void> {
           ></textarea>
         </label>
         <p class="muted editor-hint">
-          保存后按新内容重建检索索引(切块 + 向量化),同内容重复保存不会重嵌;含图片的笔记暂不支持改正文,可以先只改标题。
+          保存后按新内容重建检索索引(切块 + 向量化),同内容重复保存不会重嵌。
+          图片以 <code>![说明](baleen-image:N)</code> 标记出现:挪动标记行图片就跟着挪,删掉标记行图片也会删除。
         </p>
         <p v-if="saveError !== ''" class="note note--error">{{ saveError }}</p>
         <div class="editor-actions">
@@ -812,6 +847,30 @@ async function removeNote(): Promise<void> {
   font-size: 13px;
   line-height: 1.7;
   white-space: pre;
+}
+
+/* 笔记插图:md 导入时随笔记存字节,阅读页按原位渲染 */
+.sec :deep(.note-img) {
+  margin: 0 0 16px;
+  text-align: center;
+}
+
+.sec :deep(.note-img img) {
+  max-width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.sec :deep(.note-img figcaption) {
+  margin-top: 6px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+}
+
+.sec :deep(.img-missing) {
+  color: var(--ink-3);
+  font-size: 13px;
 }
 
 .sec-end {

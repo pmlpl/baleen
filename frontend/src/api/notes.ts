@@ -34,6 +34,14 @@ export interface NoteParent {
   token_count: number
 }
 
+export interface NoteImage {
+  alt: string
+  /** 内容寻址 key:有值就走 /api/media/{key} 取原图 */
+  media: string | null
+  /** 外链或未存字节时的原始引用 */
+  src: string | null
+}
+
 export interface NoteDetail {
   id: number
   title: string
@@ -44,6 +52,8 @@ export interface NoteDetail {
   source_id: number | null
   markdown: string
   parents: NoteParent[]
+  /** 文档顺序的图片清单(v16);前端按 [图片] 标记原位替换 */
+  images: NoteImage[]
 }
 
 export interface NoteListParams {
@@ -102,6 +112,15 @@ function toNoteParent(raw: unknown): NoteParent {
   }
 }
 
+function toNoteImage(raw: unknown): NoteImage {
+  const image = asRecord(raw)
+  return {
+    alt: asText(image.alt),
+    media: asNullableText(image.media),
+    src: asNullableText(image.src),
+  }
+}
+
 function toNoteDetail(raw: unknown): NoteDetail {
   const data = asRecord(raw)
   return {
@@ -115,6 +134,7 @@ function toNoteDetail(raw: unknown): NoteDetail {
     // 实测为 null → 归一化成空串,视图里再给「没有 markdown 正文」的提示
     markdown: asText(data.markdown),
     parents: Array.isArray(data.parents) ? data.parents.map(toNoteParent) : [],
+    images: Array.isArray(data.images) ? data.images.map(toNoteImage) : [],
   }
 }
 

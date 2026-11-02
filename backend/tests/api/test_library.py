@@ -62,6 +62,7 @@ NOTE_DETAIL_FIELDS = {
     "source_id",
     "markdown",
     "parents",
+    "images",  # v16:笔记图片清单(文档顺序,前端原位替换 [图片] 标记)
 }
 PARENT_FIELDS = {"chunk_id", "ord", "heading_path", "text", "token_count"}
 HIT_FIELDS = {
