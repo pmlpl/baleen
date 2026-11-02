@@ -21,6 +21,10 @@ eval/samples/_inbox/*
 # ---------- 评测产物：可随时重跑生成 ----------
 eval/preds.csv
 eval/candidates.csv
+eval/candidates_log.csv
+# C 路线「使用即积累」:导入的原始文件副本(gitignore,复核选中才挪进 samples 提交)
+eval/candidates/*
+!eval/candidates/.gitkeep
 eval/*.tmp
 
 # ---------- Python ----------

@@ -122,12 +122,35 @@ def _counts(rows: list) -> tuple[int, int, int]:
     return len(rows), parents, len(rows) - parents
 
 
+def _capture_info(
+    result: ImportResult,
+    path: Path,
+    sha: str,
+    owner_id: int,
+    worker: str,
+    note_id: int | None,
+) -> dict[str, Any]:
+    """组装候选归档参数(「使用即积累」);dedupe 路径不调用。"""
+    return {
+        "file_path": str(path),
+        "sha256": sha,
+        "parse_status": result.parse_status,
+        "g1_verdict": result.g1_verdict,
+        "g2_verdict": result.g2_verdict,
+        "quality": result.quality,
+        "note_id": note_id,
+        "owner_id": owner_id,
+        "via": f"import:{worker}",
+    }
+
+
 async def _finish(
     repos: Repos,
     job_id: int,
     result: ImportResult,
     note_id: int | None,
     session: AsyncSession,
+    capture: dict[str, Any] | None = None,
 ) -> ImportResult:
     if note_id is not None:
         rows = await repos.chunks.get_by_note(note_id)
@@ -147,6 +170,12 @@ async def _finish(
         },
     )
     await session.commit()
+    if capture is not None:
+        # 「使用即积累」(主人 C 路线):真实导入(非 dedupe)完成后归档候选样本。
+        # best-effort:失败只记日志,绝不动导入结果;同步 IO 丢线程不阻塞事件循环。
+        from app.service.eval_capture import capture_candidate
+
+        await asyncio.to_thread(capture_candidate, **capture)
     return result
 
 
@@ -319,7 +348,10 @@ async def run_import_async(
             mark("G1", t)
 
             if result.g1_verdict == "reject":
-                return await _finish(repos, job_id, result, None, session)
+                return await _finish(
+                    repos, job_id, result, None, session,
+                    capture=_capture_info(result, path, sha, owner_id, worker, None),
+                )
 
             # ---- G2 归属闸(可选)----
             if no_llm:
@@ -361,7 +393,10 @@ async def run_import_async(
                 await session.commit()
                 mark("G2", t)
                 if result.g2_verdict == "reject":
-                    return await _finish(repos, job_id, result, None, session)
+                    return await _finish(
+                        repos, job_id, result, None, session,
+                        capture=_capture_info(result, path, sha, owner_id, worker, None),
+                    )
 
             # ---- 标题结构二次加工(可选)----
             # 放在建笔记之前:改的是 pr.blocks,同一份会流向 notes.doc 与 chunk(),
@@ -442,7 +477,10 @@ async def run_import_async(
             await session.commit()
             mark("embed", t)
 
-            return await _finish(repos, job_id, result, note_id, session)
+            return await _finish(
+                repos, job_id, result, note_id, session,
+                capture=_capture_info(result, path, sha, owner_id, worker, note_id),
+            )
 
         except Exception as exc:
             await session.rollback()

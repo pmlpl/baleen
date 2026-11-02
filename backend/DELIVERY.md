@@ -7,7 +7,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-02 · 含图笔记编辑 + md 带图导入(api.md v16);基线 320
+**最后更新**：2026-11-03 · 评测候选自动归档(C)+bootstrap 置信区间(D)+边界测试批;基线 334
 
 ### 已完成模块
 
@@ -45,6 +45,9 @@
 | ~~worker LLM 配置统一~~ | — | ✅ 核实早已实现(import_file/summarize 都走 resolve_llm_config),悬账销账 |
 | **笔记删除** | `DELETE /api/notes/{id}` + `NotesRepo.delete_active` + 书架/详情删除入口 | ✅ 真删除:chunks/embeddings DB 级联清;孤儿 source 连行带 blob 删(1:N 防护);确认弹窗;7 测试 |
 | **CSV 导入** | `app/service/parse/csv_parser.py` + PARSERS | ✅ 整篇表格、首行表头、分隔符嗅探(逗号/分号/制表符/竖线)、GB18030 兼容、>200 行分表;9 测试;xlsx 提示话术成真 |
+| **评测候选自动归档(C 路线)** | `app/service/eval_capture.py` + pipeline 接线 | ✅ 真实导入(非 dedupe)完成→原文件副本进 `eval/candidates/`(gitignore)+登记 `eval/candidates_log.csv`;best-effort 不影响导入;`EVAL_CAPTURE_ENABLED` 开关;主人复核后挪 samples 转正 |
+| **bootstrap 置信区间(D 路线)** | `eval/scripts/bootstrap.py` + `ci_g12_*.md`/`ci_retrieval.md` | ✅ B=2000/seed=42/百分位法;误拒率 10% CI [0%,33.3%](test)、R@5 94.4% CI [83.3%,100%]——n 小的诚实表述;test/dev 交叉视角;⚠️ q10 语料漂移(rank 12,回填改标题所致,待主人复核) |
+| **边界测试批** | `tests/service/parse/test_edge_cases.py` 等 | ✅ 混合 PDF 阈值行为/容器内嵌套图往返(**抓到并修复 2 个真 bug**)/CSV RFC4180/media 孤儿语义钉住/dedupe×附件语义钉住 |
 | **含图笔记可编辑** | `notes_edit` 位置标记往返 + `PUT /api/notes/{id}` 解除 400 | ✅ 图片经 `![alt](baleen-image:N)` 往返,保存按 N 重关联原节点;删标记=删图;旧 400 分支移除 |
 | **md 带图片导入** | `parse/md_parser.py` + `service/media.py` + `POST /api/sources attachments` + `GET /api/media/{key}` | ✅ 图片按相对路径随主文件上传→内容寻址存 `storage/media/`;doc 只留 `media` key;缺文件退 alt 并警告;外链不抓;暂存改每上传一目录(worker 清理兼容) |
 | **扫描件 PDF 视觉识别** | `vision.parse_scanned_pdf` + `parse_pdf(client=)` | ✅ 无文本层 PDF 逐页 150dpi 栅格化→视觉转写;单页失败跳过留痕、全失败降级;30 页上限明说;有文本层 PDF 不烧视觉;e2e 中文两页全通(G1/G2 accept,标题正确)| 
@@ -53,7 +56,7 @@
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  320 passed
+cd backend && uv run pytest -q     →  334 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -64,6 +67,7 @@ cd backend && uv run pytest -q     →  320 passed
 → **290**（笔记删除 7 + CSV 解析 9;2026-11-02）
 → **301**（扫描件 PDF 视觉 11;2026-11-02）
 → **320**（md 图片导入 8 + media 端点 2 + 含图编辑改写 2 + 附件上传 3;2026-11-02）
+→ **334**（候选归档 7 + 边界测试批 7;2026-11-03）
 
 **任何新任务都不许把这个数降下来。**
 
@@ -73,6 +77,7 @@ cd backend && uv run pytest -q     →  320 passed
 2. **G1 的 quality 恒为 core，无区分度** —— 质量分级须由 G2 决定
 3. **embeddings.vec 是 HALFVEC(1024)** —— 换不同维度的模型必须**新建表**，不能改配置
 4. `.doc` / `.xlsx` / `.xls` **不支持**（显式拒绝+转换提示；`.csv` 已支持）；纯图片与**扫描件 PDF** v13/v15 起走视觉转写（需配置支持视觉的模型，**推理型网关模型不行**）
+4a. **评测集语料漂移**：线 R 回填改了标题结构 → q10 的 expected_heading_path 失配(rank 12)——query 期望要不要跟随更新待主人复核;数字引用以 `eval/ci_*.md`(带 CI)为准
 4b. **docx/pptx 内嵌图片只有占位节点、没有像素**（G0 从未提取字节）——阅读页显示为 `[图片] alt` 文字；
    **md 导入的图片才有真实字节**（v16 内容寻址存 `storage/media/`）。要补齐 docx/pptx 需另做「提取内嵌媒体」增量
 5. **所有单测都用合成 fixture**，真实样本只在 `scripts/*_smoke.py` 里验 —— 真实数据曾抓出「27 测试全绿但 in_range 只剩 11.6%」

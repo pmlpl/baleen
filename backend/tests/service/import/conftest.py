@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
@@ -17,6 +18,9 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.core.config import get_settings
+
+# 「使用即积累」评测候选归档:测试一律不往 eval/candidates/ 写东西
+os.environ.setdefault("EVAL_CAPTURE_ENABLED", "false")
 from app.service.imports import pipeline as pipeline_module
 
 

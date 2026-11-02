@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     embedding_model_path: str = ""
     # 首答提速:API 进程启动后后台线程预加载嵌入模型(消除第一问的冷启动等待)
     embed_warmup_on_startup: bool = True
+    # 评测候选自动归档(C 路线「使用即积累」):真实导入完成后把原文件副本归档进
+    # eval/candidates/(gitignore)并登记,主人复核后转正进 samples;测试 conftest 显式关
+    eval_capture_enabled: bool = True
 
     # ---------- LLM(AGENTS.md 决策 9:OpenAI 兼容协议,用户自带 key)----------
     # v1 单库:charter 就是一个自然语言字符串,不建 knowledge_bases 表(HANDOFF §2 已拍板)

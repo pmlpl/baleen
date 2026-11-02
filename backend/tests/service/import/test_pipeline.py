@@ -13,9 +13,11 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -347,9 +349,7 @@ class TestHeadingRewrite:
                     # 笔记标题仍是原文派生(没被重写的 H1 顶掉)
                     assert note.title == "plain"
                     doc_headings = [
-                        b
-                        for b in (note.doc or {}).get("content", [])
-                        if b.get("type") == "heading"
+                        b for b in (note.doc or {}).get("content", []) if b.get("type") == "heading"
                     ]
                     assert doc_headings, "应当插入了标题块"
                     text = "".join(n.get("text", "") for n in doc_headings[0]["content"])
@@ -407,3 +407,54 @@ class TestHeadingRewrite:
                 assert llm.calls.count("g2") == 1  # G2 照常跑
 
         asyncio.run(case())
+
+
+class TestEvalCapture:
+    """「使用即积累」:真实导入(非 dedupe)完成 → 原文件归档进 eval/candidates/。"""
+
+    def test_success_import_archives_candidate(
+        self, tmp_path, db_scope, fake_embed, fake_tokens, monkeypatch
+    ):
+        from app.service import eval_capture as cap
+
+        cdir, logp = tmp_path / "cands", tmp_path / "log.csv"
+        monkeypatch.setattr(cap, "CANDIDATES_DIR", cdir)
+        monkeypatch.setattr(cap, "LOG_PATH", logp)
+        monkeypatch.setattr(cap, "get_settings", lambda: SimpleNamespace(eval_capture_enabled=True))
+        path = _write(tmp_path, "note.md", NOTE_MD)
+
+        async def case():
+            async with db_scope() as factory:
+                result = await run_import_async(path, **_kwargs(factory, fake_embed, fake_tokens))
+                assert result.note_id is not None and result.deduped is False
+
+        asyncio.run(case())
+
+        files = list(cdir.iterdir())
+        assert len(files) == 1 and files[0].read_bytes() == path.read_bytes()
+        rows = list(csv.DictReader(logp.open(encoding="utf-8")))
+        assert len(rows) == 1
+        assert rows[0]["parse_status"] == "ok" and rows[0]["note_id"] != ""
+
+    def test_dedupe_hit_does_not_log_again(
+        self, tmp_path, db_scope, fake_embed, fake_tokens, monkeypatch
+    ):
+        from app.service import eval_capture as cap
+
+        cdir, logp = tmp_path / "cands", tmp_path / "log.csv"
+        monkeypatch.setattr(cap, "CANDIDATES_DIR", cdir)
+        monkeypatch.setattr(cap, "LOG_PATH", logp)
+        monkeypatch.setattr(cap, "get_settings", lambda: SimpleNamespace(eval_capture_enabled=True))
+        path = _write(tmp_path, "note.md", NOTE_MD)
+
+        async def case():
+            async with db_scope() as factory:
+                kwargs = _kwargs(factory, fake_embed, fake_tokens)
+                await run_import_async(path, **kwargs)
+                await run_import_async(path, **kwargs)  # dedupe
+
+        asyncio.run(case())
+
+        assert len(list(cdir.iterdir())) == 1, "文件只归档一份"
+        rows = list(csv.DictReader(logp.open(encoding="utf-8")))
+        assert len(rows) == 1, "dedupe 命中不再登记(第一次导入已记过)"

@@ -676,7 +676,8 @@ async function send(): Promise<void> {
               search_query: usedSearchQuery,
             }
           }
-          // 流式结束才渲染图表:中途渲染会随增量重画抖动
+          // 流式结束才渲染图表(mermaid/SVG 同一纪律):中途渲染会随增量重画抖动
+          // (mermaid 当年实测的教训);两个渲染器都幂等,历史/多轮场景重复调用安全
           void nextTick(() => {
             if (msgListEl.value !== null) {
               void renderMermaidIn(msgListEl.value)

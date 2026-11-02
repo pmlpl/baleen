@@ -1,0 +1,424 @@
+{
+ "per_query": [
+  {
+   "qid": "q01",
+   "kind": "term",
+   "difficulty": "medium",
+   "hit_rank": 1,
+   "top1_score": 0.6943396329879761,
+   "top1_note": "缺陷反馈：VIP音乐播放能力缺失（最终版）",
+   "top1_path": "缺陷反馈：VIP音乐播放能力缺失（最终版） > 核心问题 > QQ音乐三层防护（均未突破）",
+   "ranked_notes": [
+    "缺陷反馈：VIP音乐播放能力缺失（最终版）",
+    "缺陷反馈：VIP音乐播放能力缺失（最终版）",
+    "手写实战练习 —— 面试手撕题全集",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "轻量化发票 OCR 识别与校验系统",
+    "手写实战练习 —— 面试手撕题全集",
+    "命令速查表",
+    "轻量化发票 OCR 识别与校验系统",
+    "Fetch / Axios 完全指南",
+    "轻量化发票 OCR 识别与校验系统"
+   ]
+  },
+  {
+   "qid": "q02",
+   "kind": "term",
+   "difficulty": "easy",
+   "hit_rank": 1,
+   "top1_score": 0.730221152305603,
+   "top1_note": "Fetch / Axios 完全指南",
+   "top1_path": "Fetch / Axios 完全指南 > 七、取消请求",
+   "ranked_notes": [
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南"
+   ]
+  },
+  {
+   "qid": "q03",
+   "kind": "term",
+   "difficulty": "medium",
+   "hit_rank": 1,
+   "top1_score": 0.6208117008209229,
+   "top1_note": "手写实战练习 —— 面试手撕题全集",
+   "top1_path": "手写实战练习 —— 面试手撕题全集 > 五、手写 Promise —— 完整版 > 完整代码实现",
+   "ranked_notes": [
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "itdesk 项目命令速查与开发规范"
+   ]
+  },
+  {
+   "qid": "q04",
+   "kind": "term",
+   "difficulty": "hard",
+   "hit_rank": 2,
+   "top1_score": 0.6522896885871887,
+   "top1_note": "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+   "top1_path": "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool） > 八、实施记录 > 实施概况（2026-09-20）",
+   "ranked_notes": [
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）"
+   ]
+  },
+  {
+   "qid": "q05",
+   "kind": "term",
+   "difficulty": "medium",
+   "hit_rank": 1,
+   "top1_score": 0.5921095609664917,
+   "top1_note": "Agent 应用开发学习指南",
+   "top1_path": "Agent 应用开发学习指南 > 第三阶段：记忆系统 > 3.3 短期记忆的实现",
+   "ranked_notes": [
+    "Agent 应用开发学习指南",
+    "Agent 应用开发学习指南",
+    "Agent 应用开发学习指南",
+    "Agent 应用开发学习指南",
+    "Agent 应用开发学习指南",
+    "Agent 应用开发学习指南",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "闭包 —— 面试必问，装逼必备"
+   ]
+  },
+  {
+   "qid": "q06",
+   "kind": "paraphrase",
+   "difficulty": "medium",
+   "hit_rank": 1,
+   "top1_score": 0.5154186487197876,
+   "top1_note": "闭包 —— 面试必问，装逼必备",
+   "top1_path": "闭包 —— 面试必问，装逼必备 > 一、闭包到底是个什么玩意儿？ > 官方定义",
+   "ranked_notes": [
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备",
+    "导入冒烟笔记",
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备",
+    "导入冒烟笔记",
+    "手写实战练习 —— 面试手撕题全集",
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备"
+   ]
+  },
+  {
+   "qid": "q07",
+   "kind": "paraphrase",
+   "difficulty": "medium",
+   "hit_rank": 2,
+   "top1_score": 0.6401484608650208,
+   "top1_note": "闭包 —— 面试必问，装逼必备",
+   "top1_path": "闭包 —— 面试必问，装逼必备 > 五、经典面试题：闭包在循环中的问题 > 5.2 三种修复方案",
+   "ranked_notes": [
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "闭包 —— 面试必问，装逼必备",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "手写实战练习 —— 面试手撕题全集"
+   ]
+  },
+  {
+   "qid": "q08",
+   "kind": "paraphrase",
+   "difficulty": "medium",
+   "hit_rank": 1,
+   "top1_score": 0.6251991987228394,
+   "top1_note": "Fetch / Axios 完全指南",
+   "top1_path": "Fetch / Axios 完全指南 > 四、Axios 拦截器（最他妈实用的功能） > 4.3 拦截器实战 — Token 自动刷新",
+   "ranked_notes": [
+    "Fetch / Axios 完全指南",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "Fetch / Axios 完全指南",
+    "Fetch / Axios 完全指南",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "Fetch / Axios 完全指南"
+   ]
+  },
+  {
+   "qid": "q09",
+   "kind": "paraphrase",
+   "difficulty": "hard",
+   "hit_rank": 2,
+   "top1_score": 0.6842683553695679,
+   "top1_note": "导入冒烟笔记",
+   "top1_path": "导入冒烟笔记 > 复现步骤",
+   "ranked_notes": [
+    "导入冒烟笔记",
+    "闭包 —— 面试必问，装逼必备",
+    "导入冒烟笔记",
+    "手写实战练习 —— 面试手撕题全集",
+    "闭包 —— 面试必问，装逼必备",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）"
+   ]
+  },
+  {
+   "qid": "q10",
+   "kind": "paraphrase",
+   "difficulty": "medium",
+   "hit_rank": 12,
+   "top1_score": 0.5790495872497559,
+   "top1_note": "项目实验实训报告（一）",
+   "top1_path": "项目实验实训报告（一） > 三、实训内容与步骤",
+   "ranked_notes": [
+    "项目实验实训报告（一）",
+    "项目实验实训报告（一）",
+    "itdesk 项目命令速查与开发规范",
+    "手写实战练习 —— 面试手撕题全集",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "itdesk 项目命令速查与开发规范",
+    "实验方案 · 轨道 B 泛化验证(exp-03)",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "项目实验实训报告（一）"
+   ]
+  },
+  {
+   "qid": "q11",
+   "kind": "cross-section",
+   "difficulty": "hard",
+   "hit_rank": 2,
+   "top1_score": 0.5610749125480652,
+   "top1_note": "手写实战练习 —— 面试手撕题全集",
+   "top1_path": "手写实战练习 —— 面试手撕题全集 > 五、手写 Promise —— 完整版 > 完整代码实现",
+   "ranked_notes": [
+    "手写实战练习 —— 面试手撕题全集",
+    "Fetch / Axios 完全指南",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "Fetch / Axios 完全指南",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集"
+   ]
+  },
+  {
+   "qid": "q12",
+   "kind": "cross-section",
+   "difficulty": "hard",
+   "hit_rank": 1,
+   "top1_score": 0.5062595009803772,
+   "top1_note": "闭包 —— 面试必问，装逼必备",
+   "top1_path": "闭包 —— 面试必问，装逼必备 > 二、闭包的三大用途 > 用途 2：函数工厂",
+   "ranked_notes": [
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集"
+   ]
+  },
+  {
+   "qid": "q13",
+   "kind": "cross-section",
+   "difficulty": "hard",
+   "hit_rank": 5,
+   "top1_score": 0.5699440240859985,
+   "top1_note": "Agent 应用开发学习指南",
+   "top1_path": "Agent 应用开发学习指南 > 第五阶段：部署与优化 > 5.4 性能优化 > 优化方向1：响应速度",
+   "ranked_notes": [
+    "Agent 应用开发学习指南",
+    "闭包 —— 面试必问，装逼必备",
+    "手写实战练习 —— 面试手撕题全集",
+    "什么是 ReAct？",
+    "手写实战练习 —— 面试手撕题全集",
+    "轻量化发票 OCR 识别与校验系统",
+    "手写实战练习 —— 面试手撕题全集",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "闭包 —— 面试必问，装逼必备",
+    "手写实战练习 —— 面试手撕题全集"
+   ]
+  },
+  {
+   "qid": "q14",
+   "kind": "long",
+   "difficulty": "hard",
+   "hit_rank": 5,
+   "top1_score": 0.6106303334236145,
+   "top1_note": "项目实验实训报告（一）",
+   "top1_path": "项目实验实训报告（一） > 五、问题与解决",
+   "ranked_notes": [
+    "项目实验实训报告（一）",
+    "项目实验实训报告（一）",
+    "项目实验实训报告（一）",
+    "命令速查表",
+    "项目实验实训报告（一）",
+    "项目实验实训报告（一）",
+    "项目实验实训报告（一）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "itdesk 项目命令速查与开发规范"
+   ]
+  },
+  {
+   "qid": "q15",
+   "kind": "long",
+   "difficulty": "hard",
+   "hit_rank": 5,
+   "top1_score": 0.5679124593734741,
+   "top1_note": "Agent 应用开发学习指南",
+   "top1_path": "Agent 应用开发学习指南 > 第一阶段：Agent 基础认知 > 1.5 实战练习",
+   "ranked_notes": [
+    "Agent 应用开发学习指南",
+    "Agent 应用开发学习指南",
+    "什么是 ReAct？",
+    "Agent 应用开发学习指南",
+    "Agent 应用开发学习指南",
+    "什么是 ReAct？",
+    "项目实验实训报告（一）",
+    "手写实战练习 —— 面试手撕题全集",
+    "Agent 应用开发学习指南",
+    "Agent 应用开发学习指南"
+   ]
+  },
+  {
+   "qid": "q16",
+   "kind": "long",
+   "difficulty": "medium",
+   "hit_rank": 3,
+   "top1_score": 0.6505071520805359,
+   "top1_note": "手写实战练习 —— 面试手撕题全集",
+   "top1_path": "手写实战练习 —— 面试手撕题全集 > 十、面试速记卡",
+   "ranked_notes": [
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "闭包 —— 面试必问，装逼必备",
+    "手写实战练习 —— 面试手撕题全集"
+   ]
+  },
+  {
+   "qid": "q17",
+   "kind": "short",
+   "difficulty": "medium",
+   "hit_rank": 3,
+   "top1_score": 0.4620857536792755,
+   "top1_note": "闭包 —— 面试必问，装逼必备",
+   "top1_path": "闭包 —— 面试必问，装逼必备 > 四、闭包与内存泄漏 > 4.3 面试题：闭包内存泄漏的经典场景",
+   "ranked_notes": [
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备",
+    "闭包 —— 面试必问，装逼必备",
+    "导入冒烟笔记",
+    "闭包 —— 面试必问，装逼必备",
+    "导入冒烟笔记",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）"
+   ]
+  },
+  {
+   "qid": "q18",
+   "kind": "short",
+   "difficulty": "easy",
+   "hit_rank": 2,
+   "top1_score": 0.5001199245452881,
+   "top1_note": "手写实战练习 —— 面试手撕题全集",
+   "top1_path": "手写实战练习 —— 面试手撕题全集 > 二、深拷贝 —— 别他妈再用 JSON.parse(JSON.stringify()) 了 > 测试",
+   "ranked_notes": [
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "缺陷反馈：VIP音乐播放能力缺失（最终版）",
+    "CrawAgent",
+    "缺陷反馈：VIP音乐播放能力缺失（最终版）",
+    "itdesk 项目命令速查与开发规范",
+    "导入冒烟笔记"
+   ]
+  },
+  {
+   "qid": "q19",
+   "kind": "negative",
+   "difficulty": "hard",
+   "hit_rank": null,
+   "top1_score": 0.4982850253582001,
+   "top1_note": "手写实战练习 —— 面试手撕题全集",
+   "top1_path": "手写实战练习 —— 面试手撕题全集 > 五、手写 Promise —— 完整版 > 完整代码实现",
+   "ranked_notes": [
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集",
+    "项目实验实训报告（一）",
+    "itdesk 项目命令速查与开发规范",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "Fetch / Axios 完全指南",
+    "手写实战练习 —— 面试手撕题全集",
+    "导入冒烟笔记",
+    "手写实战练习 —— 面试手撕题全集",
+    "手写实战练习 —— 面试手撕题全集"
+   ]
+  },
+  {
+   "qid": "q20",
+   "kind": "negative",
+   "difficulty": "easy",
+   "hit_rank": null,
+   "top1_score": 0.3113313317298889,
+   "top1_note": "itdesk 项目命令速查与开发规范",
+   "top1_path": "itdesk 项目命令速查与开发规范 > Git 操作与规范 > 分支模型与提交规范",
+   "ranked_notes": [
+    "itdesk 项目命令速查与开发规范",
+    "实验方案 · 轨道 B 泛化验证(exp-03)",
+    "实验方案 · 轨道 B 泛化验证(exp-03)",
+    "Agent 应用开发学习指南",
+    "itdesk 项目命令速查与开发规范",
+    "轻量化发票 OCR 识别与校验系统",
+    "变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）",
+    "手写实战练习 —— 面试手撕题全集",
+    "Agent 应用开发学习指南",
+    "手写实战练习 —— 面试手撕题全集"
+   ]
+  }
+ ]
+}

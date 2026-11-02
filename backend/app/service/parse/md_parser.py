@@ -216,7 +216,9 @@ def _tokens_to_blocks(tokens: list[Token]) -> tuple[list[blocks.Block], int]:
     return root["content"], chars
 
 
-_NESTED_CONTAINERS = ("blockquote", "listItem")
+# 递归容器:段落可能嵌在这些块里,拆分要一路递归进去。
+# bulletList/orderedList 不能漏——漏了的话列表项里的图升不了块级(v17 边界测试抓到)
+_NESTED_CONTAINERS = ("blockquote", "listItem", "bulletList", "orderedList")
 
 
 def split_image_markers(

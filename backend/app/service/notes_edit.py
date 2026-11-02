@@ -93,8 +93,14 @@ def _table_to_md(block: dict) -> str:
     return "\n".join(lines)
 
 
-def _list_to_md(block: dict, *, ordered: bool, indent: str = "") -> list[str]:
-    """列表序列化;嵌套列表缩进两格(与前端渲染器同款的一层口径)。"""
+def _list_to_md(
+    block: dict, *, ordered: bool, indent: str = "", image_counter: list[int] | None = None
+) -> list[str]:
+    """列表序列化;嵌套列表缩进两格(与前端渲染器同款的一层口径)。
+
+    ``image_counter`` 透传:列表项里的 image 块也要参与位置标记编号
+    (v16 边界测试抓到的真 bug——不传的话列表内的图会被静默丢弃)。
+    """
     lines: list[str] = []
     start = int((block.get("attrs") or {}).get("start", 1) or 1)
     for i, item in enumerate(block.get("content") or []):
@@ -105,11 +111,22 @@ def _list_to_md(block: dict, *, ordered: bool, indent: str = "") -> list[str]:
             if t == "paragraph":
                 pieces.append(_inlines_to_md(child.get("content")))
             elif t in ("bulletList", "orderedList"):
-                nested = _list_to_md(child, ordered=t == "orderedList", indent=indent + "  ")
+                nested = _list_to_md(
+                    child, ordered=t == "orderedList", indent=indent + "  ",
+                    image_counter=image_counter,
+                )
                 pieces.append("\n" + "\n".join(nested) if nested else "")
             elif t == "codeBlock":
                 code = "".join(n.get("text", "") for n in child.get("content") or [])
                 pieces.append("\n" + indent + "  " + code.replace("\n", "\n" + indent + "  "))
+            elif t == "image" and image_counter is not None:
+                # 图片块在列表项里:产出标记行,与块级图共用同一计数器。
+                # 标记行用「item 内容缩进」的延续行写法(不能带空行——空行会终结列表,
+                # 图就掉到顶层了;也不能顶格——顶格同样终结列表)
+                alt = (child.get("attrs") or {}).get("alt", "") or "图片"
+                index = image_counter[0]
+                image_counter[0] += 1
+                pieces.append(indent + "  " + f"![{alt}]({IMAGE_SCHEME}{index})")
         body = pieces[0] if pieces and pieces[0] != "" else ""
         rest = [p for p in pieces[1:] if p]
         lines.append(indent + prefix + body)
@@ -149,9 +166,9 @@ def _block_to_md(block: dict, image_counter: list[int]) -> str:
         joined = "\n\n".join(x for x in inner if x)
         return "\n".join("> " + ln if ln else ">" for ln in joined.splitlines())
     if t == "bulletList":
-        return "\n".join(_list_to_md(block, ordered=False))
+        return "\n".join(_list_to_md(block, ordered=False, image_counter=image_counter))
     if t == "orderedList":
-        return "\n".join(_list_to_md(block, ordered=True))
+        return "\n".join(_list_to_md(block, ordered=True, image_counter=image_counter))
     if t == "horizontalRule":
         return "---"
     if t == "image":

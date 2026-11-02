@@ -25,6 +25,8 @@ from starlette.testclient import TestClient
 # 必须在任何 get_settings() 调用之前:API 测试的 lifespan 不做嵌入模型预热
 # (否则每次测试会话都真加载 bge,又慢又占显存;预热行为由真实启动人工验证)
 os.environ["EMBED_WARMUP_ON_STARTUP"] = "false"
+# 「使用即积累」评测候选归档:测试一律不往 eval/candidates/ 写东西
+os.environ["EVAL_CAPTURE_ENABLED"] = "false"
 
 from app.api.deps import get_session
 from app.core.config import get_settings
