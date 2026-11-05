@@ -6,11 +6,13 @@ _load_hit_images 走真实文件读取;断言 LLM payload 的 user content 变�
 
 from __future__ import annotations
 
+import base64
 import json
 from typing import Any
 
 import pytest
 
+from app.api import qa as qa_module
 from tests.api.test_qa import _chat, _hit, _parse_sse, _sse_lines
 from tests.api.test_qa import qa_setup as qa_setup_fixture  # noqa: F401 —— 夹具注册靠这条导入
 
@@ -153,3 +155,110 @@ def test_stream_meta_reports_images_attached(env, qa_setup) -> None:  # noqa: AN
     # 流式请求体里同样带上视觉数组
     content = _last_payload_messages(qa_setup.transports[-1])[-1]["content"]
     assert isinstance(content, list)
+
+
+# ---- 对话图片附件(v17:用户临时上传给 AI 看的图,不入库,走视觉通道)----
+
+
+def _png_data_url() -> str:
+    return f"data:image/png;base64,{base64.b64encode(PNG_1X1).decode('ascii')}"
+
+
+def test_chat_user_image_attachment_reaches_llm(env, qa_setup) -> None:  # noqa: ANN001
+    """用户挂的图片附件(不入库)→ 附到最后一条 user 消息的 image_url,与命中图同格式。"""
+    data_url = _png_data_url()
+    qa_setup.hits = []  # 不靠命中,纯用户挂图
+    qa_setup.responses.append((200, _chat("图里画的是工作流。")))
+
+    resp = env.client.post(
+        "/api/qa/chat",
+        json={
+            "question": "这张图里画的是什么",
+            "images": [{"name": "wf.png", "mime": "image/png", "data_url": data_url}],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    messages = _last_payload_messages(qa_setup.transports[-1])
+    content = messages[-1]["content"]
+    assert isinstance(content, list), "用户挂图时 user content 应变视觉数组"
+    assert content[0]["type"] == "text" and "这张图里画的是什么" in content[0]["text"]
+    assert content[1]["type"] == "image_url"
+    assert content[1]["image_url"]["url"] == data_url
+
+
+def test_chat_user_image_no_hits_not_short_circuit(env, qa_setup) -> None:  # noqa: ANN001
+    """只挂图(无命中/无历史)不短路:用户给的图本身就是「在问什么」,得让 AI 看。"""
+    qa_setup.hits = []
+    qa_setup.responses.append((200, _chat("根据图回答。")))
+
+    resp = env.client.post(
+        "/api/qa/chat",
+        json={
+            "question": "看看这张图",
+            "images": [{"name": "x.png", "mime": "image/png", "data_url": _png_data_url()}],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["assistant_message"]["content"] != "笔记库里没有找到相关内容。"
+    # LLM 确实被调用(transport 有请求)
+    assert qa_setup.transports[-1].calls
+
+
+def test_stream_user_image_reported_in_meta(env, qa_setup) -> None:  # noqa: ANN001
+    """流式:用户挂的图计入 images_attached,请求体带视觉数组。"""
+    qa_setup.hits = []
+    qa_setup.stream_lines = _sse_lines(["答", "案"], cache_hit=0, cache_miss=100)
+
+    resp = env.client.post(
+        "/api/qa/chat/stream",
+        json={
+            "question": "问",
+            "images": [{"name": "y.png", "mime": "image/png", "data_url": _png_data_url()}],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    events = _parse_sse(resp.text)
+    assert events["meta"]["images_attached"] == 1
+    content = _last_payload_messages(qa_setup.transports[-1])[-1]["content"]
+    assert isinstance(content, list)
+    assert any(p.get("type") == "image_url" for p in content if isinstance(p, dict))
+
+
+def test_chat_user_image_skips_web_search_even_with_tavily(
+    env, qa_setup, monkeypatch
+) -> None:  # noqa: ANN001
+    """挂了图时即便库内无命中 + 配了 Tavily,也不走联网:
+    图本身是内容,搜「图片/内容」只会搜出 OCR 工具之类。让视觉模型直接看图答。
+    """
+    async def fake_tavily_key(*_a, **_kw):  # noqa: ANN001
+        return "tvly-test"
+
+    search_calls: list[str] = []
+
+    def fake_search(query, *, api_key, max_results=5):  # noqa: ANN001
+        search_calls.append(query)
+        return [{"title": "OCR 工具", "url": "https://x", "content": "图片转文字…"}]
+
+    monkeypatch.setattr(qa_module, "resolve_tavily_key", fake_tavily_key)
+    monkeypatch.setattr(qa_module, "search_web", fake_search)
+
+    qa_setup.hits = []  # 库内无命中
+    qa_setup.responses.append((200, _chat("这张图是 Workflow 工作流学习笔记,讲了六个版块…")))
+
+    resp = env.client.post(
+        "/api/qa/chat",
+        json={
+            "question": "这个图片内的笔记内容都讲了什么",
+            "images": [{"name": "wf.png", "mime": "image/png", "data_url": _png_data_url()}],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["used_web"] is False, "挂图时不应走联网"
+    assert search_calls == [], "挂图时不应发起 web 搜索"
+    # LLM 收到了图(视觉数组),靠看图回答
+    content = _last_payload_messages(qa_setup.transports[-1])[-1]["content"]
+    assert isinstance(content, list)
+    assert any(p.get("type") == "image_url" for p in content if isinstance(p, dict))

@@ -11,11 +11,12 @@ import json
 
 import pytest
 
-from app.service.llm import LLMAuthError, LLMClient
+from app.service.llm import LLMAuthError, LLMClient, LLMResponseError
 from app.service.qa.answerer import (
     ContextHit,
     answer,
     build_qa_messages,
+    build_web_answer_messages,
 )
 
 
@@ -126,6 +127,97 @@ class TestPromptAssembly:
         msgs, meta = build_qa_messages("继续", [], history=history)
         assert meta["history_kept"] == 20  # 远小于安全网上限 → 原样全量重放(缓存对齐的前提)
         assert "问题19" in msgs[-2]["content"]
+
+
+class TestAttachments:
+    """对话附件(<reference_files> 块):用户临时上传给 AI 看的参考文件,不入库。"""
+
+    def test_block_present_with_numbering_and_before_context(self) -> None:
+        """有附件 → <reference_files> 块出现,[附n] 编号,块在 <context> 之前。"""
+        atts = [
+            {"name": "config.py", "text": "DEBUG = True"},
+            {"name": "notes.md", "text": "# 要点"},
+        ]
+        msgs, meta = build_qa_messages("这段配置什么意思", [_hit()], attachments=atts)
+        user = msgs[-1]["content"]
+        assert "<reference_files>" in user and "</reference_files>" in user
+        assert "[附1]" in user and "config.py" in user and "DEBUG = True" in user
+        assert "[附2]" in user and "notes.md" in user
+        # 块顺序:reference_files 在 context 之前
+        assert user.index("<reference_files>") < user.index("<context>")
+        assert meta["attachments"] == 2
+
+    def test_empty_attachments_no_block(self) -> None:
+        """没附件 → 不出 <reference_files> 块(与空 ref_notes 同口径)。"""
+        msgs, meta = build_qa_messages("问题", [_hit()], attachments=[])
+        user = msgs[-1]["content"]
+        assert "<reference_files>" not in user
+        assert meta["attachments"] == 0
+
+    def test_none_attachments_no_block(self) -> None:
+        """attachments=None(默认)→ 不出块。"""
+        msgs, meta = build_qa_messages("问题", [_hit()])
+        assert "<reference_files>" not in msgs[-1]["content"]
+        assert meta["attachments"] == 0
+
+    def test_long_attachment_truncated(self) -> None:
+        """单文件超 ATTACHMENT_TOKEN_BUDGET → 截断,块内文本比原文短。"""
+        long_text = "x" * 50000  # 远超 6000 token 预算(无论字符/token 比例)
+        msgs, _meta = build_qa_messages(
+            "总结一下", [], attachments=[{"name": "big.log", "text": long_text}]
+        )
+        user = msgs[-1]["content"]
+        assert "<reference_files>" in user
+        body = user.split("<reference_files>\n", 1)[1].split("\n</reference_files>", 1)[0]
+        # 截断后正文比原文短得多(原文 5 万字符进不去)
+        assert len(body) < len(long_text)
+        assert "big.log" in body
+
+    def test_answer_with_attachments_no_hits_no_history_not_short_circuit(self) -> None:
+        """挂了附件但没命中没历史 → 不短路(AI 要看附件回答)。"""
+        client, transport = _client([(200, _chat("这段配置开了 DEBUG。"))])
+        result = answer(
+            "这段配置什么意思",
+            [],
+            attachments=[{"name": "config.py", "text": "DEBUG = True"}],
+            client=client,
+        )
+        assert len(transport.calls) == 1  # 调了 LLM,没短路
+        assert "DEBUG" in result.answer
+
+    def test_web_path_also_injects_attachments(self) -> None:
+        """联网兜底路径也注入附件块(库外答时仍结合用户上传的参考文件)。"""
+        results = [{"title": "搜索结果", "url": "https://x", "content": "片段"}]
+        msgs = build_web_answer_messages(
+            "问题", results, attachments=[{"name": "a.txt", "text": "参考内容"}]
+        )
+        user = msgs[-1]["content"]
+        assert "<reference_files>" in user and "参考内容" in user
+        # 块在 web_context 之前
+        assert user.index("<reference_files>") < user.index("<web_context>")
+
+    def test_answer_image_rejected_degrades_without_image(self) -> None:
+        """模型拒图(LLMResponseError)→ 去图重试,答案前置降级说明,不抛异常。"""
+        client, transport = _client([
+            LLMResponseError("请求被拒绝(HTTP 400)", status_code=400),
+            (200, _chat("按文本回答。")),
+        ])
+        result = answer(
+            "看图",
+            [],
+            attachments=[{"name": "a.txt", "text": "参考"}],  # 顺带给文本附件,确保去图后仍有上下文
+            images=[{"mime": "image/png", "data_url": "data:image/png;base64,xxx"}],
+            client=client,
+        )
+        assert len(transport.calls) == 2  # 带图失败 + 去图重试
+        assert "看不了图" in result.answer
+        assert "按文本回答" in result.answer
+
+    def test_answer_image_rejected_no_image_reraises(self) -> None:
+        """没挂图时 LLMResponseError 直接抛(不走降级,不吞错)。"""
+        client, _transport = _client([LLMResponseError("500", status_code=500)])
+        with pytest.raises(LLMResponseError):
+            answer("问", [_hit()], client=client)
 
 
 class TestAnswer:

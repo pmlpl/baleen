@@ -66,6 +66,29 @@ EXPORT_DIR = Path(__file__).resolve().parents[2] / "tmp" / "qa_exports"
 NOTES_OUT_DIR = Path(__file__).resolve().parents[2] / "notes_out"
 
 
+class AttachmentInput(BaseModel):
+    """对话附件:用户临时上传给 AI 看的参考文件文本(不入库,纯对话上下文)。
+
+    前端把文本类文件读成 text 透传;PDF/DOCX/PPTX/图片等二进制走导入笔记库路径。
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    text: str = Field(min_length=1, max_length=20000)
+
+
+class ImageInput(BaseModel):
+    """对话图片附件:用户临时上传给 AI 看的图片(不入库),走视觉通道。
+
+    前端把图片读成 data URL(``data:<mime>;base64,…``)透传;后端复用
+    ``attach_images``(OpenAI 视觉 content 数组)附到最后一条 user 消息。
+    与命中笔记图(hit_images)合并附图,但不受其 MAX_HIT_IMAGES 上限约束。
+    """
+
+    name: str = Field(min_length=1, max_length=200)
+    mime: str = Field(min_length=1, max_length=100)
+    data_url: str = Field(min_length=1, max_length=8_000_000)
+
+
 class ChatRequest(BaseModel):
     """POST /api/qa/chat 请求体:session_id 为空 = 新会话。"""
 
@@ -74,6 +97,10 @@ class ChatRequest(BaseModel):
     top_k: int = Field(default=DEFAULT_TOP_K, ge=1, le=MAX_TOP_K)
     # 用户引用的笔记(@ 某篇):告诉 AI「在问什么」;检索照跑找关联笔记
     note_ids: list[int] = Field(default_factory=list)
+    # 对话附件(参考文件文本):不入库,注入 prompt 的 <reference_files> 块;≤5 个
+    attachments: list[AttachmentInput] = Field(default_factory=list, max_length=5)
+    # 对话图片附件(参考图):不入库,走视觉通道 attach_images;≤4 张
+    images: list[ImageInput] = Field(default_factory=list, max_length=4)
 
     @field_validator("question")
     @classmethod
@@ -158,18 +185,23 @@ def _has_relevant_hit(hits: list[ContextHit], query: str) -> bool:
     「库内其实没有但检索返回了 5 条不相干的」时联网兜底不触发。
 
     分两类词:
-    - **专有词**(英文 ≥3 字符):必须至少一个整词命中才算相关
+    - **专有词**(英文连续 ≥3 字母):必须至少一个整词命中才算相关
       (避免 "ReAct" 拆成 re/ea/ac/ct 在代码里到处匹配)
     - **通用词**(中文 2 字滑窗):无专有词时用,任一命中即可
+
+    中英连写(如「给我讲讲关于workflow」)时,把英文段单独切出来,
+    否则整段会被当成一个英文词、要求整串匹配永远不中 → 误判不相关 → 误触联网。
     """
-    specific: set[str] = set()  # 英文整词
-    generic: set[str] = set()  # 中文 2 字
+    specific: set[str] = set()  # 英文整词(连续 ≥3 字母)
+    generic: set[str] = set()  # 中文 2 字滑窗
     for part in re.split(r"[\s,，。、？?!！]+", query):
         part = part.strip()
         if not part:
             continue
-        if re.search(r"[a-zA-Z]", part) and len(part) >= 3:
-            specific.add(part.lower())
+        # 抽连续字母(≥3)作英文专有词;中英连写时英文段单独切出来(见上注)
+        en_runs = re.findall(r"[A-Za-z][A-Za-z]{2,}", part)
+        if en_runs:
+            specific.update(r.lower() for r in en_runs)
         elif len(part) >= 2:
             generic.add(part)
             for i in range(len(part) - 1):
@@ -346,16 +378,20 @@ async def chat(
         for h in result.hits
     ]
     ref_notes = await _load_ref_notes(session, owner_id, payload.note_ids)
+    attachments = [{"name": a.name, "text": a.text} for a in payload.attachments]
+    user_images = [{"mime": i.mime, "data_url": i.data_url} for i in payload.images]
     messages, _build_meta = build_qa_messages(
-        payload.question, kb_hits, history=history, ref_notes=ref_notes
+        payload.question, kb_hits, history=history, ref_notes=ref_notes, attachments=attachments
     )
     llm_user_text = messages[-1]["content"]
 
-    # 4.5) 工具链兜底:库内没命中 OR 命中但不相关(正文不含查询关键词) → 联网搜索
+    # 4.5) 工具链兜底:库内没命中 OR 命中但不相关(正文不含查询关键词) → 联网搜索。
+    #   但用户挂了图时图本身就是内容(问的常是「这图讲什么」),搜「图片/内容」只会
+    #   搜出 OCR 工具之类——所以挂图不走联网,让视觉模型直接看图回答。
     web_results: list[dict[str, str]] = []
     tavily_key = await resolve_tavily_key(session, owner_id)
     kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
-    if kb_irrelevant and tavily_key:
+    if kb_irrelevant and tavily_key and not user_images:
         try:
             web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
         except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
@@ -378,6 +414,8 @@ async def chat(
             history=history,
             client=llm,
             ref_notes=ref_notes,
+            attachments=attachments,
+            images=user_images,
         )
     else:
         qa = await asyncio.to_thread(
@@ -387,14 +425,16 @@ async def chat(
             history=history,
             client=llm,
             ref_notes=ref_notes,
-            images=hit_images,
+            attachments=attachments,
+            images=user_images + hit_images,
         )
         # 二段兜底:LLM 用 [NO_KB] 标记「笔记答不了」→ 联网搜;没配 Tavily 就用它自己的
         # 知识正面回答(带标注)。相关性检查只认字面(「数据库」会命中发票笔记),
         # 语义层面的「答不了」由 LLM 自己判。
         if qa.answer.startswith("[NO_KB]"):
             body = qa.answer.removeprefix("[NO_KB]").strip()
-            if tavily_key:
+            # 挂了图时不走联网(图本身是内容);也没必要加「笔记库没有」前缀
+            if tavily_key and not user_images:
                 try:
                     web_results = await asyncio.to_thread(
                         search_web, search_query, api_key=tavily_key
@@ -409,8 +449,13 @@ async def chat(
                     history=history,
                     client=llm,
                     ref_notes=ref_notes,
+                    attachments=attachments,
+                    images=user_images,
                 )
                 used_web = True
+            elif user_images:
+                # 挂图 + [NO_KB]:视觉模型已据图给的回答,直接用,不加「笔记库没有」前缀
+                qa = qa.model_copy(update={"answer": body, "citations": []})
             else:
                 qa = qa.model_copy(
                     update={
@@ -502,16 +547,19 @@ async def chat_stream_endpoint(
         for h in result.hits
     ]
     ref_notes = await _load_ref_notes(session, owner_id, payload.note_ids)
+    attachments = [{"name": a.name, "text": a.text} for a in payload.attachments]
+    user_images = [{"mime": i.mime, "data_url": i.data_url} for i in payload.images]
     messages, _build_meta = build_qa_messages(
-        payload.question, kb_hits, history=history, ref_notes=ref_notes
+        payload.question, kb_hits, history=history, ref_notes=ref_notes, attachments=attachments
     )
     llm_user_text = messages[-1]["content"]
 
-    # 工具链兜底:库内没命中 OR 命中但不相关 → 联网搜索
+    # 工具链兜底:库内没命中 OR 命中但不相关 → 联网搜索。
+    #   挂了图时不走联网(图本身是内容,搜「图片/内容」只会搜出 OCR 工具),让视觉模型看图答。
     web_results: list[dict[str, str]] = []
     tavily_key = await resolve_tavily_key(session, owner_id)
     kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
-    if kb_irrelevant and tavily_key:
+    if kb_irrelevant and tavily_key and not user_images:
         try:
             web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
         except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
@@ -519,7 +567,7 @@ async def chat_stream_endpoint(
     used_web = bool(web_results)
     # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图);须在 gen() 闭包捕获 messages 前完成
     hit_images = [] if used_web else await _load_hit_images(session, owner_id, kb_hits)
-    attach_images(messages, hit_images)
+    attach_images(messages, user_images + hit_images)
 
     user_msg = await repo.add_message(
         qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
@@ -539,7 +587,7 @@ async def chat_stream_endpoint(
                     "session_title": qa_session.title,
                     "search_query": search_query,
                     "used_web": used_web,
-                    "images_attached": len(hit_images),  # 本次回答附带了几张原图(ADR 0006)
+                    "images_attached": len(hit_images) + len(user_images),  # 命中图+附件图
                     "model": llm.model,  # 本次回答用的模型,前端状态行显示
                     # 检索/改写花了多久(秒):前端据此区分「在检索」还是「在等模型」
                     "prepare_ms": int(round((time.perf_counter() - started) * 1000)),
@@ -555,6 +603,8 @@ async def chat_stream_endpoint(
                     history=history,
                     client=llm,
                     ref_notes=ref_notes,
+                    attachments=attachments,
+                    images=user_images,
                 )
                 accumulated.append(qa.answer)
                 yield _sse("delta", {"text": qa.answer})
@@ -607,10 +657,11 @@ async def chat_stream_endpoint(
                         close()
 
                 if marker:
-                    # 二段兜底:联网搜;没配 Tavily 就用 LLM 已给出的自身知识回答
+                    # 二段兜底:联网搜;没配 Tavily 就用 LLM 已给出的自身知识回答。
+                    #   挂了图时不走联网(图本身是内容),也直接用 body,不加「笔记库没有」前缀。
                     body = buffered.removeprefix("[NO_KB]").strip()
                     web_results2: list[dict[str, str]] = []
-                    if tavily_key:
+                    if tavily_key and not user_images:
                         try:
                             web_results2 = await asyncio.to_thread(
                                 search_web, search_query, api_key=tavily_key
@@ -626,6 +677,8 @@ async def chat_stream_endpoint(
                             history=history,
                             client=llm,
                             ref_notes=ref_notes,
+                            attachments=attachments,
+                            images=user_images,
                         )
                         answer_text = qa.answer
                         citations = build_web_citations(web_results2, answer_text)
@@ -635,7 +688,9 @@ async def chat_stream_endpoint(
                         yield _sse("delta", {"text": answer_text})
                     else:
                         answer_text = (
-                            "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n" + body
+                            body
+                            if user_images
+                            else "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n" + body
                         )
                         citations = []
                         cost_tokens = (usage_event or {}).get("total_tokens") or 0

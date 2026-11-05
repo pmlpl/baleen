@@ -697,3 +697,31 @@ def test_chat_no_kb_marker_without_tavily_answers_from_own_knowledge(
     assert "AI 自身的知识回答" in content
     assert "关系模型" in content
     assert "[NO_KB]" not in content
+
+
+class TestHasRelevantHit:
+    """相关性检查:决定库内命中算不算相关(不相关才联网兜底)。"""
+
+    def _hit(self, text: str) -> SimpleNamespace:
+        return SimpleNamespace(parent_text=text)
+
+    def test_mixed_chinese_english_no_space_matches(self) -> None:
+        """中英连写(无空格)的查询要切出英文段匹配——修「给我讲讲关于workflow」误判不相关。"""
+        hit = self._hit("一张「Workflow 工作流 · 学习笔记」长图,讲工作流的核心概念")
+        assert qa_module._has_relevant_hit([hit], "给我讲讲关于workflow") is True
+
+    def test_english_term_in_chinese_text_matches(self) -> None:
+        assert qa_module._has_relevant_hit([self._hit("Promise 有三种状态")], "讲讲promise") is True
+
+    def test_english_term_not_in_text_not_relevant(self) -> None:
+        """查询的英文词不在命中正文里 → 不相关(该联网)。"""
+        assert qa_module._has_relevant_hit([self._hit("工作流的核心概念")], "ReAct是什么") is False
+
+    def test_pure_chinese_2gram_matches(self) -> None:
+        assert qa_module._has_relevant_hit(
+            [self._hit("闭包是函数加捕获的外层变量")], "闭包是什么"
+        ) is True
+
+    def test_short_letter_run_not_specific(self) -> None:
+        """单个字母(如「关于a」)不算英文专有词,走中文滑窗;这里「关于」不在正文→不相关。"""
+        assert qa_module._has_relevant_hit([self._hit("工作流核心概念")], "关于a") is False

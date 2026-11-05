@@ -29,12 +29,29 @@ export interface QaMessage {
   cache_hit_rate: number | null
 }
 
+/** 对话附件:用户临时上传给 AI 看的参考文件文本(前端读文本类文件得到,不入库)。 */
+export interface ChatAttachment {
+  name: string
+  text: string
+}
+
+/** 对话图片附件:用户临时上传给 AI 看的图片(前端读成 data URL,不入库,走视觉通道)。 */
+export interface ChatImageAttachment {
+  name: string
+  mime: string
+  data_url: string
+}
+
 export interface ChatRequest {
   session_id?: number | null
   question: string
   top_k?: number
   /** 用户引用的笔记 id:告诉 AI「在问什么」;检索仍会跑找关联笔记 */
   note_ids?: number[]
+  /** 对话附件(参考文件文本):注入 prompt 的 <reference_files> 块,不入库 */
+  attachments?: ChatAttachment[]
+  /** 对话图片附件(参考图):走视觉通道 attach_images,不入库;≤4 张 */
+  images?: ChatImageAttachment[]
 }
 
 export interface ChatResponse {
@@ -127,9 +144,13 @@ export function sendQuestion(
   sessionId: number | null,
   question: string,
   topK = TOP_K_DEFAULT,
+  attachments: ChatAttachment[] = [],
+  images: ChatImageAttachment[] = [],
 ): Promise<ChatResponse> {
   const body: ChatRequest = { question, top_k: topK }
   if (sessionId !== null) body.session_id = sessionId
+  if (attachments.length > 0) body.attachments = attachments
+  if (images.length > 0) body.images = images
   return http.post<ChatResponse>('/qa/chat', body)
 }
 
@@ -163,9 +184,13 @@ export async function streamChat(
   topK = TOP_K_DEFAULT,
   signal?: AbortSignal,
   noteIds: number[] = [],
+  attachments: ChatAttachment[] = [],
+  images: ChatImageAttachment[] = [],
 ): Promise<void> {
   const body: ChatRequest = { question, top_k: topK, note_ids: noteIds }
   if (sessionId !== null) body.session_id = sessionId
+  if (attachments.length > 0) body.attachments = attachments
+  if (images.length > 0) body.images = images
   // 裸 fetch(不是 http 封装):SSE 需要读流,这里手动带上 token
   const token = getToken()
   const headers: Record<string, string> = {

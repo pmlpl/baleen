@@ -20,9 +20,9 @@ import {
   planSessionNote,
   saveSessionNote,
   streamChat,
+  type ChatAttachment,
+  type ChatImageAttachment,
 } from '../api/qa'
-import { createSource, getSource } from '../api/sources'
-import { MAX_UPLOAD_BYTES, type SourceDetail } from '../api/sources'
 
 import type {
   NotePlanResponse,
@@ -54,150 +54,163 @@ const executingNote = ref(false)
 const noteCustomMode = ref(false)
 const noteCustomText = ref('')
 
-// ---------------- 会话内导入(/导入 弹文件选择器) ----------------
+// ---------------- 对话附件(参考文件给 AI 看,不入库) ----------------
 
-const chatFileInput = ref<HTMLInputElement | null>(null)
-const importingFiles = ref(false)
+/** 文本类文件扩展名白名单:这些能前端直接读成文本喂给 AI。
+ * PDF/DOCX/PPTX 等二进制文档不在此列 —— 走「笔记库页导入→/检索 引用」路径。
+ * 图片单独走视觉通道(见 IMAGE_FILE_RE)。 */
+const TEXT_FILE_EXTS = new Set([
+  'txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'xml', 'yaml', 'yml',
+  'html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx',
+  'py', 'java', 'c', 'cpp', 'cc', 'h', 'hpp', 'rs', 'go', 'rb', 'php',
+  'sql', 'sh', 'bash', 'zsh', 'bat', 'ps1', 'ini', 'toml', 'cfg', 'conf',
+  'log', 'env', 'gitignore', 'dockerfile', 'makefile',
+])
+/** 图片扩展名:走视觉通道(读成 data URL,后端 attach_images);与文本附件分开存 */
+const IMAGE_FILE_RE = /\.(jpe?g|png|gif|webp|bmp)$/i
+/** 单张图片上限:base64 进 prompt 太大烧 token,5MB 够大多数截图 */
+const ATTACH_IMAGE_MAX_BYTES = 5 * 1024 * 1024
+/** 单次提问最多挂的图片数(与后端 ChatRequest.images max_length 对齐) */
+const ATTACH_IMAGE_MAX_COUNT = 4
+/** 单文件读取上限:超过不读(防内存炸);后端 text 字段上限 20000 字符会再截一次 */
+const ATTACH_MAX_BYTES = 2 * 1024 * 1024
+/** 后端 AttachmentInput.text 的 max_length;超过按字符截断 */
+const ATTACH_MAX_CHARS = 20000
 
-/** 往消息流里插一条本地反馈(负 id 不落库,与选项卡的反馈气泡同一套) */
-function pushSystemBubble(text: string): ChatMessage {
-  const bubble: ChatMessage = {
-    id: -Date.now() - Math.floor(Math.random() * 1000),
-    role: 'assistant',
-    content: text,
-    citations: [],
-    model: null,
-    cost_tokens: 0,
-    cache_hit_rate: null,
-  }
-  messages.value.push(bubble)
-  scrollBottom()
-  return bubble
+const attachFileInput = ref<HTMLInputElement | null>(null)
+/** 已挂的文本附件 chips;随下一次提问发给后端,发送后清空(与引用笔记同口径) */
+const attachments = ref<ChatAttachment[]>([])
+/** 已挂的图片附件 chips(走视觉通道);与文本附件同消耗口径 */
+const imageAttachments = ref<ChatImageAttachment[]>([])
+
+function fileExt(name: string): string {
+  const dot = name.lastIndexOf('.')
+  // 无扩展名的常见文本文件名(Dockerfile/Makefile)按整体名匹配
+  if (dot < 0) return name.toLowerCase()
+  return name.slice(dot + 1).toLowerCase()
 }
 
-const IMPORT_POLL_MS = 2000
-const IMPORT_MAX_POLLS = 150 // 2s × 150 = 5 分钟上限
-
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-
-/** 导入阶段文案(轮询时更新气泡,让用户看见推进) */
-function importStageText(detail: SourceDetail): string {
-  if (detail.job.status === 'queued') return '排队中'
-  if (detail.job.status === 'running') {
-    return detail.parse_status === 'ok' ? '切块/向量化中' : '解析中'
-  }
-  return '收尾中'
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+    reader.onerror = () => reject(reader.error ?? new Error('读取失败'))
+    reader.readAsText(file)
+  })
 }
 
-/** 等一个导入任务收尾;每轮把阶段写回气泡 */
-async function waitImportDone(
-  sourceId: number,
-  onPoll: (detail: SourceDetail) => void,
-) {
-  for (let i = 0; i < IMPORT_MAX_POLLS; i += 1) {
-    const detail = await getSource(sourceId)
-    if (detail.job.status === 'done' || detail.job.status === 'failed') return detail
-    onPoll(detail)
-    await sleep(IMPORT_POLL_MS)
-  }
-  return getSource(sourceId)
-}
-
-const IMAGE_FILE_RE = /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i
-
-async function importOneFile(file: File, attachments: File[] = []): Promise<void> {
-  if (file.size > MAX_UPLOAD_BYTES) {
-    pushSystemBubble(`❌ 《${file.name}》超过 50MB 上限,没有导入。`)
-    return
-  }
-  const pending = pushSystemBubble(
-    attachments.length > 0
-      ? `⏳ 正在导入:《${file.name}》(含 ${attachments.length} 张图片,排队中)…`
-      : `⏳ 正在导入:《${file.name}》(排队中)…`,
-  )
-  let upload
-  try {
-    try {
-      upload = await createSource(file, false, attachments)
-    } catch (error) {
-      // 没配 API Key(要跑 G2 会 400)→ 自动降级为「跳过 AI 判定」再试一次
-      const msg = describeApiError(error)
-      if (msg.includes('API Key')) {
-        upload = await createSource(file, true, attachments)
-        pushSystemBubble('ℹ️ 这个账号还没配 API Key,本次跳过了 AI 归属判断。')
-      } else {
-        throw error
+/** 把图片文件用 canvas 缩到长边 ≤1024px、导出 JPEG data URL。
+ * 网关对大 payload 返 413,视觉模型也不需要原分辨率;统一 JPEG 体积小、模型友好。 */
+function resizeImageToDataUrl(
+  file: File,
+  maxDim = 1024,
+  quality = 0.8,
+): Promise<{ dataUrl: string; mime: string }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    const url = URL.createObjectURL(file)
+    img.onload = () => {
+      URL.revokeObjectURL(url)
+      let { width, height } = img
+      if (width > maxDim || height > maxDim) {
+        if (width >= height) {
+          height = Math.round((height * maxDim) / width)
+          width = maxDim
+        } else {
+          width = Math.round((width * maxDim) / height)
+          height = maxDim
+        }
       }
+      const canvas = document.createElement('canvas')
+      canvas.width = width
+      canvas.height = height
+      const ctx = canvas.getContext('2d')
+      if (ctx === null) {
+        reject(new Error('canvas 2D 上下文不可用'))
+        return
+      }
+      ctx.drawImage(img, 0, 0, width, height)
+      resolve({ dataUrl: canvas.toDataURL('image/jpeg', quality), mime: 'image/jpeg' })
     }
-  } catch (error) {
-    pushSystemBubble(`❌ 《${file.name}》导入失败:${describeApiError(error)}`)
-    return
-  }
-  if (upload.deduped) {
-    pushSystemBubble(`↩️ 《${file.name}》之前导入过,直接复用已有记录,不重复入库。`)
-    return
-  }
-  try {
-    const detail = await waitImportDone(upload.source_id, (d) => {
-      pending.content = `⏳ 正在导入:《${file.name}》(${importStageText(d)})…`
-    })
-    if (detail.job.status === 'failed') {
-      const reason = detail.job.last_error ?? '处理失败'
-      pushSystemBubble(`❌ 《${file.name}》导入失败:${reason}`)
-      return
+    img.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('图片解码失败'))
     }
-    if (detail.note_id !== null) {
-      pushSystemBubble(`✅ 《${file.name}》已入库,生成笔记 #${detail.note_id},可在笔记库查看。`)
-    } else {
-      pushSystemBubble(`✅ 《${file.name}》处理完成(状态:${detail.parse_status},没有生成笔记)。`)
-    }
-  } catch {
-    pushSystemBubble(`⚠️ 《${file.name}》已提交入库,但等结果时连接断了;稍后可在导入页查看进度。`)
-  }
+    img.src = url
+  })
 }
 
-/**
- * 多文件导入(v16):一批里「文档」逐个导入,同批的图片作为附件跟着每一个文档上传。
- *
- * 依据是 md 里的相对引用:用户把 md 和它引用的图片一起选中/拖进来时,图片就该随文档走。
- * 图片不会被单独导入成笔记(那是另一条「AI 看图」路径,不该被这里的批量操作误触发)。
- */
-async function importChatFiles(files: FileList | File[]): Promise<void> {
-  if (importingFiles.value) return
+/** 把选中的文件分流:图片 → 视觉通道 data URL;文本类 → 文本附件;其余提示走导入。 */
+async function addAttachmentFiles(files: FileList | File[]): Promise<void> {
   const list = Array.from(files)
-  if (list.length === 0) return
-  importingFiles.value = true
-  errorText.value = ''
-  try {
-    const images = list.filter((f) => IMAGE_FILE_RE.test(f.name))
-    const docs = list.filter((f) => !IMAGE_FILE_RE.test(f.name))
-    if (docs.length === 0) {
-      // 只选了图片:按「导入图片笔记」处理,不算附件
-      for (const f of images) await importOneFile(f)
-      return
+  for (const file of list) {
+    const isImage = IMAGE_FILE_RE.test(file.name) || file.type.startsWith('image/')
+    if (isImage) {
+      if (file.size > ATTACH_IMAGE_MAX_BYTES) {
+        errorText.value = `《${file.name}》超过 5MB,不适合当对话图片附件;请去笔记库页「导入笔记」。`
+        continue
+      }
+      if (imageAttachments.value.length >= ATTACH_IMAGE_MAX_COUNT) {
+        errorText.value = `一次最多挂 ${ATTACH_IMAGE_MAX_COUNT} 张图片。`
+        continue
+      }
+      try {
+        const { dataUrl, mime: im } = await resizeImageToDataUrl(file)
+        if (imageAttachments.value.some((a) => a.name === file.name)) continue
+        imageAttachments.value.push({ name: file.name, mime: im, data_url: dataUrl })
+        errorText.value = ''
+      } catch {
+        errorText.value = `《${file.name}》读取失败`
+      }
+      continue
     }
-    for (const f of docs) {
-      await importOneFile(f, images)
+    const ext = fileExt(file.name)
+    if (!TEXT_FILE_EXTS.has(ext)) {
+      errorText.value =
+        `《${file.name}》不是文本类或图片文件;PDF/DOCX/PPTX 请去笔记库页「导入笔记」后用 /检索 引用。`
+      continue
     }
-  } finally {
-    importingFiles.value = false
+    if (file.size > ATTACH_MAX_BYTES) {
+      errorText.value = `《${file.name}》超过 2MB,不适合当对话附件;请去笔记库页「导入笔记」。`
+      continue
+    }
+    try {
+      let text = await readFileAsText(file)
+      if (text.length > ATTACH_MAX_CHARS) {
+        text = text.slice(0, ATTACH_MAX_CHARS) + `\n…(已截断,原文共 ${text.length} 字符)`
+      }
+      // 同名去重:已挂过就不重复加
+      if (attachments.value.some((a) => a.name === file.name)) continue
+      attachments.value.push({ name: file.name, text })
+      errorText.value = ''
+    } catch {
+      errorText.value = `《${file.name}》读取失败`
+    }
   }
 }
 
-function onChatFilesPicked(event: Event): void {
+function removeAttachment(idx: number): void {
+  attachments.value.splice(idx, 1)
+}
+
+function removeImageAttachment(idx: number): void {
+  imageAttachments.value.splice(idx, 1)
+}
+
+function onAttachPicked(event: Event): void {
   const inputEl = event.target as HTMLInputElement
   if (inputEl.files !== null && inputEl.files.length > 0) {
-    void importChatFiles(inputEl.files)
+    void addAttachmentFiles(inputEl.files)
   }
   inputEl.value = '' // 允许下次选同一个文件
 }
 
+/** 拖入文件 → 当附件(替代旧的「拖入即导入笔记库」)。 */
 function onChatDrop(event: DragEvent): void {
-  if (importingFiles.value) return
   const files = event.dataTransfer?.files
   if (files !== undefined && files.length > 0) {
     event.preventDefault()
-    void importChatFiles(files)
+    void addAttachmentFiles(files)
   }
 }
 
@@ -289,14 +302,6 @@ const CHAT_COMMANDS: ChatCommand[] = [
     keywords: ['导出', '下载', 'markdown', 'export'],
     run: () => {
       if (currentSessionId.value !== null) void exportSession(currentSessionId.value)
-    },
-  },
-  {
-    name: '/导入',
-    desc: '选择文档/图片导入知识库,AI 之后能检索到',
-    keywords: ['导入', '上传', '文件', '文档', '图片', 'import'],
-    run: () => {
-      chatFileInput.value?.click()
     },
   },
   {
@@ -533,6 +538,8 @@ function startNew(): void {
   messages.value = []
   errorText.value = ''
   referencedNotes.value = []
+  attachments.value = []
+  imageAttachments.value = []
   cancelNotePlan()
   syncSessionUrl(null)
 }
@@ -632,6 +639,12 @@ async function send(): Promise<void> {
   pendingModel.value = null
   try {
     const refNoteIds = referencedNotes.value.map((r) => r.id)
+    const attachmentsPayload = attachments.value.map((a) => ({ name: a.name, text: a.text }))
+    const imagesPayload = imageAttachments.value.map((i) => ({
+      name: i.name,
+      mime: i.mime,
+      data_url: i.data_url,
+    }))
     await streamChat(
       currentSessionId.value,
       text,
@@ -694,8 +707,12 @@ async function send(): Promise<void> {
       TOP_K,
       undefined,
       refNoteIds,
+      attachmentsPayload,
+      imagesPayload,
     )
     referencedNotes.value = [] // 引用随问题消耗掉
+    attachments.value = [] // 附件随问题消耗掉
+    imageAttachments.value = [] // 图片附件随问题消耗掉
   } catch (error) {
     // 流没建立起来(网络/后端未起):撤下乐观消息与空气泡,还原文输入
     const idx = messages.value.findIndex((m) => m.id === tempId)
@@ -933,14 +950,15 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
         <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
 
-        <!-- /导入 与拖放的文件选择器(隐藏,由命令/拖放触发) -->
+        <!-- 附件文件选择器(隐藏,由 📎 按钮/拖放触发;仅文本类) -->
         <input
-          ref="chatFileInput"
+          ref="attachFileInput"
           class="visually-hidden"
           type="file"
           multiple
-          aria-label="选择要导入的文件"
-          @change="onChatFilesPicked"
+          accept=".txt,.md,.markdown,.json,.csv,.tsv,.xml,.yaml,.yml,.html,.htm,.css,.js,.mjs,.cjs,.ts,.jsx,.tsx,.py,.java,.c,.cpp,.cc,.h,.hpp,.rs,.go,.rb,.php,.sql,.sh,.bash,.zsh,.bat,.ps1,.ini,.toml,.cfg,.conf,.log,.env,.jpg,.jpeg,.png,.gif,.webp,.bmp,text/plain,text/markdown,application/json,text/csv,text/yaml,text/x-yaml,image/png,image/jpeg,image/gif,image/webp,image/bmp"
+          aria-label="选择要附加的参考文件或图片"
+          @change="onAttachPicked"
         />
 
         <!-- 交互式存笔记:选项卡取代输入框(最后一个选项是自己输入) -->
@@ -1064,6 +1082,35 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
               </button>
             </span>
           </div>
+          <!-- 已挂的附件 chips(参考文件给 AI 看,不入库;随提问消耗) -->
+          <div v-if="attachments.length > 0" class="ref-chips">
+            <span
+              v-for="(a, idx) in attachments"
+              :key="a.name"
+              class="ref-chip ref-chip--attach"
+              :title="`取消附件《${a.name}》`"
+            >
+              附件:{{ a.name }}
+              <button class="ref-chip-x" type="button" aria-label="取消附件" @click="removeAttachment(idx)">
+                ×
+              </button>
+            </span>
+          </div>
+          <!-- 已挂的图片附件 chips(走视觉通道,不入库;随提问消耗) -->
+          <div v-if="imageAttachments.length > 0" class="ref-chips">
+            <span
+              v-for="(im, idx) in imageAttachments"
+              :key="im.name"
+              class="ref-chip ref-chip--attach ref-chip--image"
+              :title="`取消图片《${im.name}》`"
+            >
+              <img class="ref-chip-thumb" :src="im.data_url" alt="" />
+              {{ im.name }}
+              <button class="ref-chip-x" type="button" aria-label="取消图片" @click="removeImageAttachment(idx)">
+                ×
+              </button>
+            </span>
+          </div>
           <input
             v-model="input"
             class="input"
@@ -1074,6 +1121,16 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
             @input="updateSlash(); onPickerInput()"
             @keydown="onInputKeydown"
           />
+          <button
+            class="btn attach-btn"
+            type="button"
+            :disabled="sending"
+            title="附加参考文件/图片给 AI 看,不入库"
+            aria-label="附加参考文件或图片"
+            @click="attachFileInput?.click()"
+          >
+            📎
+          </button>
           <button class="btn btn--primary" type="submit" :disabled="sending">发送</button>
         </form>
 
@@ -1341,6 +1398,26 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   white-space: nowrap;
 }
 
+/* 📎 附件按钮:低调图标键,与发送键区分 */
+.attach-btn {
+  padding: 0 12px;
+  font-size: 17px;
+  line-height: 1;
+  color: var(--ink-3);
+  border-color: var(--line);
+  background: var(--panel);
+}
+
+.attach-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.attach-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .cache-status {
   margin: 8px 2px 0;
   font-size: 12.5px;
@@ -1555,6 +1632,27 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 附件 chip:用中性色调与「引用笔记」区分(它是临时参考,不是库内笔记) */
+.ref-chip--attach {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--ink-2);
+}
+
+/* 图片附件 chip:带缩略图 */
+.ref-chip--image {
+  gap: 5px;
+  padding: 2px 8px 2px 3px;
+}
+
+.ref-chip-thumb {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 4px;
 }
 
 .ref-chip-x {

@@ -326,12 +326,16 @@
 ### `POST /api/qa/chat`（非流式）
 
 ```json
-{ "session_id": 9, "question": "它有哪几种状态", "top_k": 5 }
+{ "session_id": 9, "question": "它有哪几种状态", "top_k": 5, "note_ids": [156], "attachments": [{ "name": "config.py", "text": "DEBUG = True" }], "images": [{ "name": "截图.png", "mime": "image/jpeg", "data_url": "data:image/jpeg;base64,…" }] }
 ```
 
 - `session_id` 缺省/null = 自动建会话（title = 首问前 30 字）
+- `top_k` 默认 5，上限 20
+- `note_ids`（可选）：用户 @ 某篇笔记 = 告诉 AI「在问什么」；注入 `<referenced_notes>` 块，检索照跑找关联笔记
+- **`attachments`（可选，v17）**：对话附件，用户临时上传给 AI 看的参考文件文本，**不入库**；前端把文本类文件（txt/md/json/csv/代码等）读成 `{name, text}` 透传，注入 prompt 的 `<reference_files>` 块（≤5 个，`text` ≤ 20000 字符，超长截断）。PDF/DOCX/PPTX 等二进制文档走「笔记库页导入 → `note_ids` 引用」路径
+- **`images`（可选，v17）**：对话图片附件，用户临时上传给 AI 看的图片，**不入库**，走视觉通道；前端把图片用 canvas 缩到长边 ≤1024px、转 JPEG data URL（`{name, mime, data_url}`）透传，后端复用 `attach_images`（OpenAI 视觉 content 数组）附到最后一条 user 消息（≤4 张）。与命中笔记图（`hit_images`）合并附图，但不受其 `MAX_HIT_IMAGES=2` 上限约束。**需视觉模型**（如 deepseek-flash）；配了纯文本模型（如 glm-5.2）时拒图会自动去图降级重试（答案前置说明），不 500
 - 追问先经 LLM 改写检索词；`search_query` 透出实际使用的检索词
-- 原子落库 user/assistant 两条消息；user 消息另存 `llm_content`（含检索上下文，多轮前缀对齐用）
+- 原子落库 user/assistant 两条消息；user 消息另存 `llm_content`（含检索/引用/附件上下文，多轮前缀对齐用；图片不进 `llm_content`，重放不依赖图）
 
 ```json
 {
@@ -361,7 +365,7 @@
 
 **`cache_hit_rate` 口径**：prompt 前缀缓存命中占比 = hit/(hit+miss)；上游未命中时不下发字段 → `null`（前端显示「—」）。字段双格式归一：DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`。
 
-**联网兜底**：库内未命中且设置页配了 Tavily key → 自动搜网，回答基于搜索结果、citations 带 `url`（`note_id=null`，前端渲染外链）、`used_web=true`；未配 key 或搜索失败 → 维持「没找到」口径。
+**联网兜底**：库内未命中且设置页配了 Tavily key → 自动搜网，回答基于搜索结果、citations 带 `url`（`note_id=null`，前端渲染外链）、`used_web=true`；未配 key 或搜索失败 → 维持「没找到」口径。**挂了图片附件（`images` 非空）时不走联网**——图本身是内容（问的常是「这图讲什么」），搜「图片/内容」只会搜出 OCR 工具之类；让视觉模型直接看图回答（`answer` 路径附图），`[NO_KB]` 兜底也跳过联网、不加「笔记库没有」前缀。
 
 ### `POST /api/qa/sessions/{id}/note-plan`（阶段4 增强）
 

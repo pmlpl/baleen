@@ -11,6 +11,8 @@ import { RouterLink } from 'vue-router'
 import { describeApiError } from '../api/http'
 import { deleteNote, listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
+import { createSource, getSource, MAX_UPLOAD_BYTES } from '../api/sources'
+import type { SourceDetail } from '../api/sources'
 
 /** 输入停下来 300ms 才查(任务书要求的防抖值) */
 const DEBOUNCE_MS = 300
@@ -148,6 +150,155 @@ async function removeNote(note: NoteListItem): Promise<void> {
     deletingId.value = null
   }
 }
+
+/** ---- 导入笔记(从对话框搬来:文件 → POST /api/sources → 轮询 → 入库) ---- */
+
+interface ImportItem {
+  name: string
+  /** 推进文案:排队中/解析中/切块向量化中/收尾中/✅ 已入库/↩️ 重复/❌ 失败 */
+  stage: string
+  status: 'pending' | 'done' | 'deduped' | 'failed'
+}
+
+const importFileInput = ref<HTMLInputElement | null>(null)
+const importing = ref(false)
+const imports = ref<ImportItem[]>([])
+
+const IMPORT_POLL_MS = 2000
+const IMPORT_MAX_POLLS = 150 // 2s × 150 = 5 分钟上限
+const IMAGE_FILE_RE = /\.(jpe?g|png|gif|webp|bmp|tiff?)$/i
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+
+function importStageText(detail: SourceDetail): string {
+  if (detail.job.status === 'queued') return '排队中'
+  if (detail.job.status === 'running') {
+    return detail.parse_status === 'ok' ? '切块/向量化中' : '解析中'
+  }
+  return '收尾中'
+}
+
+async function waitImportDone(
+  sourceId: number,
+  onPoll: (detail: SourceDetail) => void,
+): Promise<SourceDetail> {
+  for (let i = 0; i < IMPORT_MAX_POLLS; i += 1) {
+    const detail = await getSource(sourceId)
+    if (detail.job.status === 'done' || detail.job.status === 'failed') return detail
+    onPoll(detail)
+    await sleep(IMPORT_POLL_MS)
+  }
+  return getSource(sourceId)
+}
+
+/** 单文件导入:更新 imports 里对应条目的推进文案;完成/去重/失败如实标记。 */
+async function importOneFile(file: File, attachments: File[] = []): Promise<boolean> {
+  if (file.size > MAX_UPLOAD_BYTES) {
+    imports.value.push({ name: file.name, stage: '❌ 超过 50MB 上限', status: 'failed' })
+    return false
+  }
+  const item: ImportItem = {
+    name: file.name,
+    stage: attachments.length > 0 ? `排队中(含 ${attachments.length} 张图片)` : '排队中',
+    status: 'pending',
+  }
+  imports.value.push(item)
+  let upload
+  try {
+    try {
+      upload = await createSource(file, false, attachments)
+    } catch (error) {
+      // 没配 API Key(要跑 G2 会 400)→ 自动降级为「跳过 AI 判定」再试一次
+      const msg = describeApiError(error)
+      if (msg.includes('API Key')) {
+        upload = await createSource(file, true, attachments)
+        item.stage = '排队中(未配 Key,跳过 AI 归属判定)'
+      } else {
+        throw error
+      }
+    }
+  } catch (error) {
+    item.stage = `❌ 导入失败:${describeApiError(error)}`
+    item.status = 'failed'
+    return false
+  }
+  if (upload.deduped) {
+    item.stage = '↩️ 之前导入过,直接复用已有记录'
+    item.status = 'deduped'
+    return false
+  }
+  try {
+    const detail = await waitImportDone(upload.source_id, (d) => {
+      item.stage = importStageText(d)
+    })
+    if (detail.job.status === 'failed') {
+      item.stage = `❌ 导入失败:${detail.job.last_error ?? '处理失败'}`
+      item.status = 'failed'
+      return false
+    }
+    if (detail.note_id !== null) {
+      item.stage = `✅ 已入库,生成笔记 #${detail.note_id}`
+      item.status = 'done'
+      return true
+    }
+    item.stage = `✅ 处理完成(状态:${detail.parse_status},没有生成笔记)`
+    item.status = 'done'
+    return false
+  } catch {
+    item.stage = '⚠️ 已提交入库,等结果时连接断了;稍后刷新查看'
+    item.status = 'failed'
+    return false
+  }
+}
+
+/**
+ * 多文件导入:文档逐个导入,同批的图片作为附件跟随每一个文档(md 相对引用语义)。
+ * 图片不单独导入成笔记(那是「AI 看图」路径,不该被批量导入误触发)。
+ */
+async function importFiles(files: FileList | File[]): Promise<void> {
+  if (importing.value) return
+  const list = Array.from(files)
+  if (list.length === 0) return
+  importing.value = true
+  imports.value = [] // 新一批开始,清掉旧反馈
+  errorText.value = ''
+  let produced = false
+  try {
+    const images = list.filter((f) => IMAGE_FILE_RE.test(f.name))
+    const docs = list.filter((f) => !IMAGE_FILE_RE.test(f.name))
+    if (docs.length === 0) {
+      // 只选了图片:逐张按「导入图片笔记」处理
+      for (const f of images) {
+        if (await importOneFile(f)) produced = true
+      }
+    } else {
+      for (const f of docs) {
+        if (await importOneFile(f, images)) produced = true
+      }
+    }
+  } finally {
+    importing.value = false
+    // 有新笔记入库 → 刷新书架(解掉「导入后要 F5 才看得见」)
+    if (produced) await load()
+  }
+}
+
+function onImportPicked(event: Event): void {
+  const inputEl = event.target as HTMLInputElement
+  if (inputEl.files !== null && inputEl.files.length > 0) {
+    void importFiles(inputEl.files)
+  }
+  inputEl.value = '' // 允许下次选同一个文件
+}
+
+/** 拖文件到书架区 → 导入。 */
+function onShelfDrop(event: DragEvent): void {
+  const files = event.dataTransfer?.files
+  if (files !== undefined && files.length > 0) {
+    event.preventDefault()
+    void importFiles(files)
+  }
+}
 </script>
 
 <template>
@@ -170,12 +321,49 @@ async function removeNote(note: NoteListItem): Promise<void> {
       <span class="muted count">
         {{ loading ? '查询中…' : `${rangeStart}–${rangeEnd} / ${total}` }}
       </span>
+      <button
+        class="btn btn--primary import-btn"
+        type="button"
+        :disabled="importing"
+        @click="importFileInput?.click()"
+      >
+        {{ importing ? '导入中…' : '＋ 导入笔记' }}
+      </button>
+      <!-- 导入文件选择器(隐藏,由按钮/拖放触发;8 种格式 + 图片) -->
+      <input
+        ref="importFileInput"
+        class="visually-hidden"
+        type="file"
+        multiple
+        accept=".pdf,.docx,.md,.markdown,.txt,.pptx,.csv,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tif,.tiff"
+        aria-label="选择要导入的文件"
+        @change="onImportPicked"
+      />
     </div>
 
     <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
 
-    <!-- 书架:固定 5 列;不足一页时也保持格子尺寸,不拉伸 -->
-    <ul v-if="notes.length > 0" class="shelf" :class="{ 'shelf--dim': loading }">
+    <!-- 导入进度:一批里每个文件一条,推进/完成/失败如实显示;完成后书架自动刷新 -->
+    <div v-if="imports.length > 0" class="import-panel card">
+      <p class="import-title">
+        导入进度<span v-if="importing" class="muted"> · 处理中…</span>
+      </p>
+      <ul class="import-list">
+        <li v-for="(it, i) in imports" :key="i" class="import-row">
+          <span class="import-name" :title="it.name">{{ it.name }}</span>
+          <span class="import-stage" :class="`import-stage--${it.status}`">{{ it.stage }}</span>
+        </li>
+      </ul>
+    </div>
+
+    <!-- 书架:固定 5 列;不足一页时也保持格子尺寸,不拉伸。拖文件到此处可直接导入 -->
+    <ul
+      v-if="notes.length > 0"
+      class="shelf"
+      :class="{ 'shelf--dim': loading }"
+      @dragover.prevent
+      @drop.prevent="onShelfDrop"
+    >
       <li v-for="note in notes" :key="note.id" class="book">
         <RouterLink class="book-link" :to="`/notes/${note.id}`">
           <span class="book-cover" :style="{ '--spine': spineColor(note.id) }">
@@ -208,9 +396,14 @@ async function removeNote(note: NoteListItem): Promise<void> {
       </li>
     </ul>
 
-    <p v-else-if="!loading && errorText === ''" class="empty">
+    <p
+      v-else-if="!loading && errorText === ''"
+      class="empty empty--droppable"
+      @dragover.prevent
+      @drop.prevent="onShelfDrop"
+    >
       {{ appliedKeyword === ''
-        ? '书架上还没有书。先去「导入」页传一个文件,处理完就会出现在这里。'
+        ? '书架上还没有书。点上方「导入笔记」(或把文件拖到这里),处理完就会出现在这里。'
         : `没有标题匹配「${appliedKeyword}」的笔记。` }}
     </p>
 
@@ -258,6 +451,77 @@ async function removeNote(note: NoteListItem): Promise<void> {
 .count {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
+}
+
+/* 导入按钮:推到搜索栏最右 */
+.import-btn {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ---------- 导入进度面板 ---------- */
+
+.import-panel {
+  margin-bottom: 18px;
+  padding: 12px 14px;
+}
+
+.import-title {
+  margin: 0 0 8px;
+  font-size: 13.5px;
+  font-weight: 650;
+}
+
+.import-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.import-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 3px 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.import-name {
+  flex-shrink: 0;
+  max-width: 50%;
+  overflow: hidden;
+  color: var(--ink);
+  font-weight: 550;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-stage {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.import-stage--done {
+  color: var(--ok, #2f855a);
+}
+
+.import-stage--deduped {
+  color: var(--ink-3);
+}
+
+.import-stage--failed {
+  color: var(--danger, #b8474d);
+}
+
+/* 空书架可拖放:虚线框暗示放置区 */
+.empty--droppable {
+  border: 1.5px dashed var(--line);
+  border-radius: 10px;
+  padding: 28px 16px;
 }
 
 /* ---------- 书架 ---------- */
