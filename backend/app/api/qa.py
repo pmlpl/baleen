@@ -47,7 +47,8 @@ from app.service.qa.answerer import (
 from app.service.qa.rewriter import rewrite_question
 from app.service.qa.summarizer import (
     NoteTopic,
-    dialogue_for_range,
+    append_citation_appendix,
+    note_dialogue,
     organize_session_note,
     plan_note_split,
 )
@@ -964,7 +965,12 @@ async def save_session_as_note(
         raise HTTPException(status_code=400, detail="会话还没有可整理的问答内容")
 
     req = payload or SaveNoteRequest()
-    plain = [{"role": m.role, "content": m.content} for m in messages]
+    # citations 要跟着进整理流程:[W1]/[1] 只是各条回答的本地编号,合并成一篇会串号,
+    # 由 note_dialogue 统一重编后再交给模型,文末按编号补真实地址。
+    plain = [
+        {"role": m.role, "content": m.content, "citations": list(m.citations or [])}
+        for m in messages
+    ]
     instruction = req.instruction.strip()
 
     # 拆分/选主题 → 先拿计划(不信任前端传的区间,按 id 从本会话现算的计划里取)
@@ -984,21 +990,21 @@ async def save_session_as_note(
 
     items: list[SaveNoteItem] = []
     if not topics_for_notes:
-        dialogue = "\n\n".join(
-            f"{'用户' if m.role == 'user' else '助手'}:{m.content}" for m in messages
-        )
+        dialogue, citations = note_dialogue(plain)
         note_md = await organize_session_note(
             qa_session.title, dialogue, instruction=instruction, client=llm
         )
+        note_md = append_citation_appendix(note_md, citations)
         items.append(await _organize_and_enqueue(qa_session.title, note_md, owner_id))
     else:
         # 每主题一篇,串行(D3 口径);区间外的闲聊不带进单篇,保持笔记聚焦
         for topic in topics_for_notes:
-            dialogue = dialogue_for_range(plain, topic.msg_start, topic.msg_end)
+            dialogue, citations = note_dialogue(plain, topic.msg_start, topic.msg_end)
             note_title = topic.title if topic.title else qa_session.title
             note_md = await organize_session_note(
                 note_title, dialogue, instruction=instruction, client=llm
             )
+            note_md = append_citation_appendix(note_md, citations)
             items.append(await _organize_and_enqueue(note_title, note_md, owner_id))
 
     first = items[0]

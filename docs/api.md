@@ -388,6 +388,17 @@
 
 会话整理成结构化 Markdown：LLM 组织 → 落 `notes_out/` 文件 + **no_llm 入库**（跳过 G2，走 G0/G1/切块/向量化，可检索）。响应 `{note_file, organized_chars, import_enqueued, import_job_id}`。会话不足 2 条消息 → 400。
 
+**引用保留（v18）**：各条回答的 `citations` 会随对话一起进整理流程。由于每条回答的 `[1]`/`[W1]` 都是本地编号（各自从 1 开始），生成前按**首次出现顺序**重编为全文唯一编号（联网 `W` 前缀、库内不带前缀，同 URL 去重），并在正文末尾追加 `## 出处` 清单，只列正文真正引用到的编号：
+
+```
+## 出处
+
+- [W1] 工作流触发器 — <https://respond.io/zh/help/workflows/workflow-triggers>
+- [1] Agent 应用开发学习指南 · 方法 — /notes/161
+```
+
+**截断兜底（v18）**：`max_tokens=8000`；若上游返回 `finish_reason="length"`，自动续写（最多 2 轮，已生成部分作为 assistant 前缀回传）。续写仍超限时正文末尾追加 `> ⚠️ 本篇因模型输出长度上限被截断…`，不再静默产出半篇笔记。
+
 ---
 
 ## 6. 设置（**已实现 · 线 Q**）
@@ -485,7 +496,8 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
-| 2026-11-02 | v16 | **含图笔记可编辑 + md 带图片导入**：① `PUT /api/notes/{id}` 不再对含图笔记返回 400——图片以位置标记 `![alt](baleen-image:N)` 往返，保存时按 N 重关联原节点（删标记=删图）；② `POST /api/sources` 新增可选 `attachments`（md 引用的本地图片，按相对路径随主文件上传，≤40 个仅图片），md 解析把图按内容寻址存进 `storage/media/{sha256}`、doc 只留 `media` key；③ 新端点 **`GET /api/media/{key}`** 取原图（key 必须 64 位 hex，不接受路径输入）；④ `GET /api/notes/{id}` 新增 **`images`** 字段（文档顺序，供前端把 `[图片] alt` 原位换成真实插图）；⑤ 上传暂存改为「每次上传一个目录」，worker 清理兼容目录 |
+| 2026-11-05 | v18 | **整理笔记保留出处链接 + 截断兜底**：① `save-note` 的组织流程把各条回答的 `citations` 一起带进去——原先只传 role/content，导致笔记正文里的 `[W1]` 变成无指向的裸徽章。各条回答的 `[1]`/`[W1]` 是**本地编号**（都从 1 开始），直接拼成一篇会串号，故按首次出现顺序重编为全文唯一编号（`[W1..Wn]` 联网、`[1..n]` 库内，同一 URL 去重）。② 笔记末尾自动追加 **`## 出处`** 清单，只列正文真正引用到的编号：联网写 `<https://…>`（markdown autolink，被 chunker 拍平后 URL 仍保留），库内写站内路由 `/notes/{id}`。③ 前端笔记阅读页把 `[Wn]` 徽章升级为可点链接（外链 `target=_blank rel=noopener noreferrer`，库内跳笔记详情；无清单的老笔记降级为静态徽章）；补 `.sec` 容器的徽章样式（原先只挂 `.md`，笔记页的引用标记连徽章样式都没有）；`styles.css` 里误用的 scoped `:deep()`（全局样式表不生效）已改为普通选择器。④ 组织笔记的 `max_tokens` 从 3000 提到 **8000**，并在 `ChatResult` 新增 **`finish_reason`**：撞上 `length` 时按轮续写拼回（最多 2 轮），续写仍超限则在正文末尾追加显式截断警告——原先截断是静默的（一篇 5 表笔记停在第四张表第二行，末尾留一个孤立的 `|`）。**已在编辑笔记时手动补齐表格的情况不受影响** |
+| 2026-11-05 | v17 | **导入与对话附件职责分离 + 图片附件**：① §5 `POST /api/qa/chat`（及 `/chat/stream`）请求体新增可选 **`attachments`**：`[{name, text}]` 对话文本附件（≤5，`text` ≤ 20000 字符），注入 prompt 的 `<reference_files>` 块，**不入库**——前端把文本类文件（txt/md/json/csv/代码等）读成文本透传；PDF/DOCX/PPTX 等二进制文档走「笔记库页导入 → `note_ids` 引用」路径。② 新增可选 **`images`**：`[{name, mime, data_url}]` 对话图片附件（≤4），**不入库**，走视觉通道——前端 canvas 缩到长边 ≤1024px + JPEG 透传，后端复用 `attach_images`（OpenAI 视觉 content 数组）附到最后一条 user 消息，与命中笔记图合并但不受其 2 张上限约束；流式 meta `images_attached` 含附件图。**需视觉模型**（deepseek-flash）；配纯文本模型（glm-5.2）时拒图自动去图降级重试（答案前置说明，不 500）。后端 answerer 加 `_reference_files_block`（与 `<referenced_notes>` 平行、按 token 截断）、`answer_web` 加 `images`、短路条件含 attachments+images。③ 前端：对话框删 `/导入` 命令与拖放导入，改为 📎 附件（文本+图片 chips 随提问消耗、不落库）；笔记库页（LibraryView）新增「导入笔记」入口 + 进度面板，导入完成自动 `load()` 刷新书架（解掉「导入后要 F5 才看得见」） |
 | 2026-11-02 | v15 | **扫描件 PDF 视觉识别（ADR 0006 §6）**：无文本层 PDF 在有 LLM 配置时逐页栅格化(150dpi)走视觉转写，页间 `—— 第 N 页 ——` 普通段落分隔；单页失败跳过留痕、全失败降级 `no_text_expected`；页数上限 30 明说警告；有文本层的 PDF 不受影响（不烧视觉）。`meta.engine=pdf-vision(<模型>)` |
 | 2026-11-02 | v14 | **三小批**：§3 新增 **`DELETE /api/notes/{note_id}`**（真删除：chunks/embeddings DB 级联清，孤儿 source 连行带 blob 一起删，204/404）；导入格式加 **`.csv`**（整篇表格、首行表头、分隔符嗅探、GB18030 兼容——xlsx 提示里「另存为 CSV」从此是真的）；问答 FORMAT_GUIDE 与存为笔记 prompt 支持 **```svg 插图**（前端沙箱 iframe 渲染，`sandbox` 无 allow-* + CSP `default-src 'none'`，解析失败退化代码块）；§7 删掉已过时的「站内编辑笔记不做」行 |
 | 2026-11-01 | v13 | **图片视觉理解（ADR 0006）**：图片文件导入时由用户配置的视觉模型转写为 Markdown 正文（失败降级 `no_text_expected`，`warnings` 带「AI 视觉识别转写」提示）；问答命中图片来源的笔记时**回传原图**给模型（最多 2 张），流式 meta 增加 **`images_attached`**；非流式 chat 响应不变 |

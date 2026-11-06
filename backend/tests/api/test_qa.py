@@ -577,6 +577,59 @@ def test_save_note_instruction_reaches_prompt(
     assert len(enqueued) == 1
 
 
+def test_save_note_appends_citation_appendix_with_real_url(
+    env: SimpleNamespace,
+    qa_setup: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    """整理成笔记时 [Wn] 不能变成无指向的裸徽章:文末要落真实地址。
+
+    走真链路:联网回答产生 citations → save-note → 落盘的 md 应带「## 出处」
+    且含原始 URL,编号与正文一致。
+    """
+
+    async def fake_tavily_key(session, owner_id):  # noqa: ANN001
+        return "tvly-test"
+
+    def fake_search(query, *, api_key, max_results=5):  # noqa: ANN001
+        return [
+            {"title": "来源甲", "url": "https://a.example/one", "content": "甲内容"},
+            {"title": "来源乙", "url": "https://b.example/two", "content": "乙内容"},
+        ]
+
+    monkeypatch.setattr(qa_module, "resolve_tavily_key", fake_tavily_key)
+    monkeypatch.setattr(qa_module, "search_web", fake_search)
+    qa_setup.hits = []
+
+    # 第一问 → 联网,引用 [W1][W2]
+    qa_setup.responses.append((200, _chat("先讲触发器 [W1][W2]。", total=30)))
+    first = env.client.post("/api/qa/chat", json={"question": "触发器"}).json()
+    sid = first["session_id"]
+    assert [c["url"] for c in first["assistant_message"]["citations"]] == [
+        "https://a.example/one",
+        "https://b.example/two",
+    ]
+
+    enqueued = _make_enqueue_recorder(monkeypatch, tmp_path)
+
+    # 模型整理出的笔记正文照样保留 [W1][W2]
+    qa_setup.responses.append((200, _chat("# 触发器笔记\n\n触发器是启动事件 [W1][W2]。")))
+
+    resp = env.client.post(f"/api/qa/sessions/{sid}/save-note")
+    assert resp.status_code == 200, resp.text
+    assert len(enqueued) == 1
+
+    files = list((tmp_path / "notes_out").glob("*.md"))
+    md = files[0].read_text(encoding="utf-8")
+    assert "## 出处" in md
+    assert "<https://a.example/one>" in md
+    assert "<https://b.example/two>" in md
+    # 编号必须与正文一致
+    assert "[W1] 来源甲" in md
+    assert "[W2] 来源乙" in md
+
+
 def test_chat_with_referenced_note_puts_it_in_prompt(
     env: SimpleNamespace, qa_setup: SimpleNamespace
 ) -> None:

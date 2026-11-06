@@ -109,6 +109,9 @@ class ChatResult(BaseModel):
     # DeepSeek 系:前缀缓存命中/未命中的 prompt token 数(OpenAI 系无此字段 → None)
     prompt_cache_hit_tokens: int | None = None
     prompt_cache_miss_tokens: int | None = None
+    # 上游结束原因:stop=正常结束,length=撞上 max_tokens 被截断。
+    # 长文生成(如会话整理笔记)必须看这个字段,否则截断会被当成正常结果静默返回。
+    finish_reason: str | None = None
     latency_ms: float = 0.0
 
 
@@ -377,6 +380,12 @@ class LLMClient:
             raise LLMResponseError("响应 choices[0].message.content 不是字符串")
         usage = data.get("usage") or {}
         hit, miss = _cache_fields(usage)
+        # finish_reason 是 OpenAI 兼容协议的 choices[0].finish_reason;
+        # 上面只取了 message,这里单独从 choices[0] 读,缺字段按 None(上游不保证提供)。
+        try:
+            finish_reason = data["choices"][0].get("finish_reason")
+        except (KeyError, IndexError, TypeError):
+            finish_reason = None
         return ChatResult(
             content=content,
             model=str(data.get("model") or self.model),
@@ -385,6 +394,7 @@ class LLMClient:
             total_tokens=usage.get("total_tokens"),
             prompt_cache_hit_tokens=hit,
             prompt_cache_miss_tokens=miss,
+            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
         )
 
 

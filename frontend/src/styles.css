@@ -537,8 +537,11 @@ pre.svg-error {
 }
 
 /* 出处标记 [1] / [W2]:上标小徽章,和正文区分
-   (由 utils/markdown.ts 的 renderInline 生成) */
-.md .cite-ref {
+   (由 utils/markdown.ts 的 renderInline 与 utils/section.ts 的 renderRefs 生成)
+   ⚠️ 两个容器都要匹配:QaView 用 .md,笔记阅读页正文用 .sec —— 只写 .md 的话
+   笔记里的 [W1] 会退化成一段裸文字(曾经就是这样)。 */
+.md .cite-ref,
+.sec .cite-ref {
   display: inline-block;
   margin: 0 1px;
   padding: 0 4px;
@@ -556,9 +559,46 @@ pre.svg-error {
 }
 
 /* 联网来源 [W1]:暖色底,和库内出处一眼区分 */
-.md .cite-ref--web {
+.md .cite-ref--web,
+.sec .cite-ref--web {
   background: var(--warn-soft);
   color: var(--warn);
+}
+
+/* 有真实地址的引用徽章 → 可点链接(地址来自整理笔记时写的文末出处清单)。
+   默认不加下划线:徽章本来就小,下划线会糊成一团;hover 时才提示可点。 */
+a.cite-ref--link {
+  text-decoration: none;
+  cursor: pointer;
+}
+
+a.cite-ref--link:hover {
+  filter: brightness(0.92);
+  text-decoration: underline;
+}
+
+/* 正文里的裸地址(出处清单的 URL、站内 /notes/N) */
+.sec a.sec-link,
+a.sec-link {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  word-break: break-all;
+}
+
+/* 「## 出处」清单:整理笔记时追加在文末,编号 + 标题 + 可点地址 */
+.sec .cite-appendix {
+  margin: 10px 0 0;
+  padding: 12px 16px 12px 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #f9fbfd;
+  font-size: 13.5px;
+  line-height: 1.9;
+}
+
+.sec .cite-appendix li {
+  margin: 2px 0;
 }
 
 .md h1,

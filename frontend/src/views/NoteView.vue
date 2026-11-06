@@ -16,8 +16,9 @@ import { RouterLink, useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { deleteNote, getNote, updateNote } from '../api/notes'
-import type { NoteDetail, NoteImage, NoteParent } from '../api/notes'
+import type { NoteDetail, NoteParent } from '../api/notes'
 import { renderMermaidIn } from '../utils/mermaid'
+import { renderSectionText, collectCitationTargets } from '../utils/section'
 import { renderSvgsIn } from '../utils/svg'
 
 const props = defineProps<{ id: string }>()
@@ -85,180 +86,15 @@ const toc = computed<TocEntry[]>(() => {
 const htmlById = computed<Map<number, string>>(() => {
   const map = new Map<number, string>()
   if (note.value === null) return map
+  // 出处编号 → 地址 的表要从**整篇**扫:正文的 [W1] 和文末清单往往不在同一个父块里
+  const targets = collectCitationTargets(note.value.parents.map((p) => p.text))
   // 游标容器:父块按 ord 顺序渲染,图片清单也是文档顺序,顺序消费即可对上原位
   const cursor = { i: 0 }
   for (const parent of note.value.parents) {
-    map.set(parent.chunk_id, renderSectionText(parent.text, note.value.images, cursor))
+    map.set(parent.chunk_id, renderSectionText(parent.text, note.value.images, cursor, targets))
   }
   return map
 })
-
-/**
- * 父块原文 → 有排版的 HTML。
- *
- * 父块是「自然语言 + 裸代码」混排,没有 markdown 代码围栏,所以不能直接用
- * renderMarkdown。按启发式分块:代码特征行聚成代码块,其余聚成段落。
- * 全部先 HTML 转义,原文含 <script> 也只显示成文字。
- */
-function renderSectionText(
-  raw: string,
-  images: NoteImage[] = [],
-  cursor: { i: number } = { i: 0 },
-): string {
-  const escaped = (s: string): string =>
-    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
-
-  /**
-   * `[图片] alt` 标记 → 真实插图(chunker 给 image 块产的就是这行文本)。
-   * 按文档顺序取下一张图;取完了就保留原标记文字,不假装有图。
-   * media key 走 /api/media/,外链走 src 原值(可能加载不出来,给 alt 兜底)。
-   */
-  const renderImageMarker = (line: string): string | null => {
-    if (!/^\s*\[图片\]\s*/.test(line)) return null
-    const image = images[cursor.i]
-    if (image === undefined) return null
-    cursor.i += 1
-    const url = image.media !== null ? `/api/media/${image.media}` : (image.src ?? '')
-    const alt = escaped(image.alt === '' ? '笔记插图' : image.alt)
-    if (url === '') {
-      return `<p class="img-missing">[图片] ${alt}(原图未随笔记导入)</p>`
-    }
-    return (
-      `<figure class="note-img"><img src="${escaped(url)}" alt="${alt}" loading="lazy" />` +
-      `<figcaption>${alt}</figcaption></figure>`
-    )
-  }
-
-  const lines = raw.replace(/\r\n?/g, '\n').split('\n')
-
-  // SVG 插图块:<svg 开行收块,到 </svg> 或明显中文段落收(渲染交给 renderSvgsIn 沙箱)
-  const SVG_START = /^\s*<svg\b/i
-  const SVG_END = /^\s*<\/svg\s*>\s*$/i
-  const svgish = (line: string): boolean =>
-    line.includes('<') || line.includes('/>') || line.includes('=')
-
-  // mermaid 源码块:起始关键字行 + 连续的语法行(空行后仍是 mermaid 语法就继续收)
-  // 完整渲染交给 renderMermaidIn(懒加载,失败退化成代码块+角标)
-  const MERMAID_START =
-    /^\s*(graph|flowchart|mindmap|sequenceDiagram|classDiagram|stateDiagram|erDiagram|journey|gantt|pie|xychart-beta|quadrantChart|timeline|gitGraph)\b/i
-  const mermaidish = (line: string): boolean =>
-    MERMAID_START.test(line) ||
-    /^\s*(subgraph\b|end\b|style\b|classDef|click\b|linkStyle|%%|direction\b)/i.test(line) ||
-    /-->|---|-\.->|==>|--x|-o\)/.test(line) ||
-    /\w\[.*\]|\w\(.*\)|\w\{.*\}/.test(line)
-
-  const looksLikeCode = (line: string): boolean => {
-    if (line.trim() === '') return false
-    if (/^\s{4,}\S/.test(line)) return true
-    if (/^\s*(\/\/|\/\*|\*)/.test(line)) return true
-    if (/^\s*[})\]];?\s*$/.test(line)) return true
-    if (/[;{]\s*$/.test(line)) return true
-    if (/^\s*(function|const|let|var|return|if|for|while|class|import|export|def|async|await)\b/.test(line)) {
-      return true
-    }
-    if (/^\s*[\w.$]+\s*\(.*\)\s*;?\s*$/.test(line) && /[=:]/.test(line)) return true
-    return false
-  }
-
-  const out: string[] = []
-  let buffer: string[] = []
-  let bufferIsCode: boolean | null = null
-
-  const flush = (): void => {
-    if (buffer.length === 0) return
-    while (buffer.length > 0 && (buffer[0] as string).trim() === '') buffer.shift()
-    while (buffer.length > 0 && (buffer[buffer.length - 1] as string).trim() === '') buffer.pop()
-    if (buffer.length === 0) {
-      bufferIsCode = null
-      return
-    }
-    if (bufferIsCode === true) {
-      out.push(`<pre class="sec-code"><code>${escaped(buffer.join('\n'))}</code></pre>`)
-    } else {
-      // 段落内单换行保留为 <br>(父块的换行本身有语义:步骤、条件列举)
-      out.push(`<p>${buffer.map(escaped).join('<br>')}</p>`)
-    }
-    buffer = []
-    bufferIsCode = null
-  }
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = (lines[i] as string)!
-    // 图片标记优先:原位替换成真实插图
-    const imgHtml = renderImageMarker(line)
-    if (imgHtml !== null) {
-      flush()
-      out.push(imgHtml)
-      continue
-    }
-    // SVG 优先于普通代码启发式:<svg 开块,到 </svg> 收;没闭合就收到明显中文段落为止
-    if (SVG_START.test(line)) {
-      flush()
-      const block: string[] = [line]
-      let j = i + 1
-      while (
-        j < lines.length &&
-        !SVG_END.test(lines[j] as string) &&
-        (svgish(lines[j] as string) || (lines[j] as string).trim() === '')
-      ) {
-        block.push(lines[j] as string)
-        j++
-      }
-      if (j < lines.length && SVG_END.test(lines[j] as string)) {
-        block.push(lines[j] as string)
-        i = j
-      } else {
-        i = j - 1 // 没找到闭合:收到哪里算哪里,后续行走普通启发式
-      }
-      out.push(`<pre><code>${escaped(block.join('\n'))}</code></pre>`)
-      continue
-    }
-    // mermaid 优先于普通代码启发式:起始关键字开块,空行后语法行仍连续则继续收
-    if (MERMAID_START.test(line)) {
-      flush()
-      const block: string[] = [line]
-      let j = i + 1
-      while (j < lines.length) {
-        const cur = lines[j] as string
-        if (cur.trim() === '') {
-          // 空行:向后看第一个非空行,还是 mermaid 语法就吞掉空行继续,否则收块
-          let k = j + 1
-          while (k < lines.length && (lines[k] as string)!.trim() === '') k++
-          if (k < lines.length && mermaidish((lines[k] as string)!)) {
-            block.push(cur)
-            j++
-            continue
-          }
-          break
-        }
-        if (!mermaidish(cur) && /[\u4e00-\u9fa5]/.test(cur) && cur.trim().length > 30 && !/[[{(]/.test(cur)) {
-          break // 明显是普通中文段落,收块
-        }
-        block.push(cur)
-        j++
-      }
-      i = j - 1
-      out.push(`<pre><code>${escaped(block.join('\n'))}</code></pre>`)
-      continue
-    }
-    const isCode = looksLikeCode(line)
-    if (bufferIsCode === null) {
-      bufferIsCode = isCode
-      buffer.push(line)
-      continue
-    }
-    const breaksBlock =
-      (bufferIsCode && !isCode && /[\u4e00-\u9fa5]/.test(line) && line.trim().length > 12) ||
-      (!bufferIsCode && isCode)
-    if (breaksBlock) {
-      flush()
-      bufferIsCode = isCode
-    }
-    buffer.push(line)
-  }
-  flush()
-  return out.join('\n')
-}
 
 /** 平滑滚动期间锁住高亮(否则中途经过的节会闪一下又跳回来) */
 let lockUntil = 0

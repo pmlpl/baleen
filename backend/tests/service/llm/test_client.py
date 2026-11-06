@@ -90,6 +90,28 @@ class TestChatSuccess:
         assert sent["messages"] == [{"role": "user", "content": "hi"}]
         assert "response_format" not in sent
 
+    def test_finish_reason_length_is_surfaced(self):
+        """截断必须能从 ChatResult 看出来,否则长文生成会被静默当成正常结束。"""
+        body = json.dumps(
+            {
+                "model": "fake-model",
+                "choices": [
+                    {"message": {"role": "assistant", "content": "半截"}, "finish_reason": "length"}
+                ],
+                "usage": {"total_tokens": 18},
+            }
+        ).encode()
+        client, _ = _client([(200, body)])
+        result = client.chat([{"role": "user", "content": "hi"}])
+        assert result.finish_reason == "length"
+        assert result.content == "半截"
+
+    def test_finish_reason_missing_is_none(self):
+        """上游不给 finish_reason 时按 None,不能崩。"""
+        client, _ = _client([(200, _chat_body("hello"))])
+        result = client.chat([{"role": "user", "content": "hi"}])
+        assert result.finish_reason is None
+
     def test_response_format_passthrough(self):
         client, transport = _client([(200, _chat_body("{}"))])
         client.chat([{"role": "user", "content": "x"}], response_format={"type": "json_object"})
