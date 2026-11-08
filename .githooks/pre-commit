@@ -1,0 +1,39 @@
+#!/bin/sh
+# 提交前文档一致性闸（版本化，不是 .git/hooks 里的一次性文件）。
+#
+# 装一次：
+#   git config core.hooksPath .githooks
+#
+# 行为：doc_lint 有 ERROR 就拒绝提交；WARN 只打印不拦。
+# 确实要跳过：git commit --no-verify
+#
+# 存在理由：AI 完成工作后「记得更新文档」是软约束，漏一次没人知道；
+# 把一致性做成 0/1，漏了就提交失败，而不是三周后才发现基线还是 334。
+
+if command -v python >/dev/null 2>&1; then
+    PY=python
+elif command -v python3 >/dev/null 2>&1; then
+    PY=python3
+else
+    echo "[doc_lint] 找不到 python，跳过文档检查"
+    exit 0
+fi
+
+if [ ! -f scripts/doc_lint.py ]; then
+    echo "[doc_lint] scripts/doc_lint.py 不存在，跳过"
+    exit 0
+fi
+
+"$PY" scripts/doc_lint.py --quiet
+status=$?
+
+if [ "$status" -ne 0 ]; then
+    echo ""
+    echo "────────────────────────────────────────────────"
+    echo "提交被拦：文档与代码不一致（上面有 ERROR）。"
+    echo "修完再提交；确认无害可绕过：git commit --no-verify"
+    echo "────────────────────────────────────────────────"
+    exit 1
+fi
+
+exit 0

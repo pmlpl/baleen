@@ -10,12 +10,14 @@
 | 文件 | 谁写 | 谁读 |
 |---|---|---|
 | `HANDOFF.md`（本文件） | **只有人类 / 协调方** | **所有 agent 都读** |
-| `backend/DELIVERY.md` | 只由**后端线**（ZCode）写 | 人类读 |
-| `eval/DELIVERY.md` | 只由**评测线**（Trae）写 | 人类读 |
+| `STATUS.md`（顶部速览） | **只有协调方** | 人类读 |
+| `backend/delivery/*.md`（交付块） | 只由**后端线**追加 | 人类读 |
+| `frontend/DELIVERY.md` | 只由**前端线**追加 | 人类读 |
+| `eval/DELIVERY.md` | 只由**评测线**追加 | 人类读 |
 | `docs/adr/*.md` | 对应任务的 agent | 所有人 |
-| `AGENTS.md` | **只有人类** | 所有 agent 读 |
+| `AGENTS.md` | **任何人**（改动必须留痕：§11 记录 + 回复明示，见其 §3.11） | 所有 agent 读 |
 
-**铁律**：agent **不许编辑 `HANDOFF.md`**。要回报就把内容追加到 `backend/DELIVERY.md` 或 `eval/DELIVERY.md`。
+**铁律**：agent **不许编辑 `HANDOFF.md`**。要回报就写进自己目录的交付文件。
 
 ---
 
@@ -62,7 +64,8 @@
    ____
 
 4. 我知道不能碰的：
-   eval/samples/ · eval/labels.csv · AGENTS.md · HANDOFF.md · 其他角色的目录
+   eval/samples/ · eval/labels.csv · HANDOFF.md · 其他角色的目录
+   （`AGENTS.md` 可改，但改动必须留痕：§11 记录 + 回复明示）
 
 5. 我拿不准的（逐条列，没有就写"无"）：
    ____
@@ -77,7 +80,7 @@
 
 | 顺序 | 文件 | 读什么 | 解决什么 |
 |---|---|---|---|
-| **1** | `backend/DELIVERY.md`（或对应目录的） | 顶部「当前状态速览」+ **全部交付块** | 已经有什么、踩过哪些坑、什么还没做 |
+| **1** | `STATUS.md`（速览）+ `backend/delivery/`（交付块，或对应目录的 `DELIVERY.md`） | 顶部「系统状态速览」+ 全部交付块 | 已经有什么、踩过哪些坑、什么还没做 |
 | **2** | `HANDOFF.md` | §0 / §0.1 / **§2 你的那节** / §3 / §3.1 / §4 | 现在轮到谁干什么、什么必须问 |
 | **3** | `AGENTS.md` | §3 硬约束、§4 技术栈、§5 决策、§9 规范 | 规矩（不许做什么） |
 | **4** | `docs/adr/` | 只读与本次任务相关的 | 为什么这么设计（**防止推翻已定决策**） |
@@ -108,7 +111,7 @@
 | **线 J** | `app/service/gate/g2.py` · `app/service/llm/client.py` · `scripts/g2_smoke.py` · `tests/service/gate/test_g2.py` · `tests/service/llm/test_client.py` | G2 prompt + 429 重试 + 节流 |
 | **线 I-批2** | `app/worker/` · `app/api/` · `app/main.py` · `backend/pyproject.toml` | arq worker + 上传 API |
 | **线 L** | `frontend/` 全目录（含 `frontend/DELIVERY.md`） | 三页界面（导入 / 笔记库 / 检索） |
-| **线 M** | `app/api/library.py`（新）· `app/repo/library.py`（新）· `app/main.py`（只加 2 行）· `tests/api/`（新）· `backend/DELIVERY.md` | 4 个查询 API（`docs/api.md` §3 §4） |
+| **线 M** | `app/api/library.py`（新）· `app/repo/library.py`（新）· `app/main.py`（只加 2 行）· `tests/api/`（新）· `STATUS.md` | 4 个查询 API（`docs/api.md` §3 §4） |
 | **线 N** | `eval/queries/`（新）· `eval/scripts/ablation.py`（新）· `eval/ablation.md`（新）· `eval/scripts/make_split.py` · `eval/metrics.py` · `eval/split_meta.json` · **`eval/labels.csv` 的 `split` 列（主人 2026-10-29 专门批准，仅此一列）** · `eval/DELIVERY.md` | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) |
 | **协调方** | `HANDOFF.md` · `charter.md` · `docs/adr/` · **`docs/api.md`** · `eval/rubric.md` · `eval/labels.csv`（除 `split` 列） · `AGENTS.md` · git 提交 | 只由协调方改 |
 | **已冻结** | `app/service/parse/` · `chunk/` · `embed/` · `imports/pipeline.py` · `app/repo/`（已有文件）· `alembic/` · `eval/samples/` | 已验收，要改先提 ADR |
@@ -125,7 +128,7 @@ git status --short      # 谁在动，按上表认领
 
 ### 交付记录也分人
 
-两线并行时，`backend/DELIVERY.md` 每个块**标题必须写明执行者与线号**：
+两线并行时，`backend/delivery/` 每个块**标题必须写明执行者与线号**：
 
 ```
 ## 2026-10-28 · 线 J · G2 政策修正 · 执行者：Trae-后端
@@ -143,56 +146,41 @@ git status --short      # 谁在动，按上表认领
 ---
 ## 1. 当前状态
 
-| 线 | 执行者 | 状态 | 最近交付 |
-|---|---|---|---|
-| **A 环境骨架** | ZCode | ✅ 已验收 | `docker-compose.yml`、`backend/` 骨架、`frontend/` 骨架 |
-| **B 解析 ADR + G0 模块** | ZCode | ✅ 已验收（含补遗：pytest 15 passed、smoke 35 文件状态分布与标注吻合） | `docs/adr/0002`、`backend/app/service/parse/` 8 文件、`tests/` + fixtures、`scripts/parse_smoke.py` |
-| **C 评测脚手架** | Trae | ✅ 已验收（`stratified-v2`） | `eval/DELIVERY.md`、`make_split.py`、`_common.py`、`report.md` |
-| **D 数据模型** | ZCode | ✅ 已验收（人家独立复跑确认） | `app/models/` 8 文件、`0002_data_model.py`、`repo/base.py`、`config.py` 补字段；**pytest 15 passed**、DB 实建 6 表、`halfvec(1024)`、pgvector 0.8.7 |
-| **E 切块 + 向量化** | ZCode-后端 | ✅ 已验收（含 E-2 修复，人家用真实笔记复跑） | `app/service/chunk/`(601 行)、`app/service/embed/`、`scripts/chunk_smoke.py`；**29 passed**；真实笔记 in_range 11.6%→**64.4%**、缺陷反馈 0%→**100%**、over_limit/truncated 仍为 **0**；torch 2.14.1+cu126 @cuda 52 items/s |
-| **F `.env` 加载** | ZCode-后端 | ✅ 已验收 | `config.py` 改绝对路径读根 `.env`；从任意 cwd 都能读到；**31 passed**（新增 `tests/test_config.py`）|
-| **G G1 价值闸** | ZCode-后端 | ✅ 已验收 | `app/service/gate/g1.py`(190 行)、`scripts/g1_smoke.py`；**误拒率 0/15 = 0.0%**（关键指标）；拦掉 3 个纯垃圾，漏给 G2 的 3 个恰好都是需语义判断的；37 passed |
-| **H-批1 LLM adapter** | Trae-后端 | ✅ 已验收 | `app/service/llm/{client,tokens}.py`；**Transport 可注入设计**（测试用 Fake，完全不联网，换 httpx 只实现一个类）；5 类错误分类、429 不重试、**api_key 不进日志/异常**（有断言）；**62 passed**）
-| **H-批2 G2 归属闸** | Trae-后端 | ✅ 已验收 | `gate/g2.py`(354 行)、`scripts/g2_smoke.py`；**77 passed**；防注入有直接注入测试；3000 token 预算（21 文件 max 2934）；JSON 坏→重试→降级；**live 未跑（缺 key）** |
-| **I-批1 导入状态机** | Trae-后端 | ✅ 已验收 | `repo/` 7 文件 + `imports/pipeline.py`(433 行) + `import_smoke.py`；**87 passed**；端到端跑通，**父块无向量**（DB 核对 = 0），幂等去重命中；charter 改为读 `baleen/charter.md`（1372 字符/1010 token）|
-| **J G2 政策修正** | Trae-后端 | ✅ 已验收 | `g2.py` prompt 重写（前置问限定范围 + 明确该收清单 + 拿不准就收）；`llm/client.py` 429 尊重 Retry-After（≤90s/最多2次）；`g2_smoke` 加 `--delay/--limit/--resume`；**90 passed** |
-| **I-批2 worker+API** | ZCode-后端 | ✅ 已验收 | `worker/worker.py`、`api/upload.py`(244 行)、`deps.py`、`main.py`+2 行；**109 passed**；TestClient 实测 healthz 200 / sources 404 / 空POST 422；arq 0.28 + redis 降级 5.3.1 已验证 |
-| **K 混合检索** | ZCode-后端 | ✅ 已验收 | `repo/search.py` + `service/retrieve/retriever.py` + `retrieve_smoke.py`；**118 passed**；真实 query 双路命中，RRF=2/(60+1)=0.0328 与公式吻合；small-to-big 生效 |
-| **M 查询 API** | DSH-后端 | ✅ 已验收（协调方独立复跑：139 passed / 32.89s、ruff 干净） | `app/api/library.py`(268) + `app/repo/library.py`(128) + `tests/api/`(532)；**139 passed**；`total` 真 `count(*)`、`chunk_count`/`note_id` 批量查无 N+1、ILIKE 通配符已转义；检索复用线 K 的 retriever，API 层只做契约映射 |
-| **L 前端三页** | DSH-前端 | ✅ 已验收（协调方复核：type-check exit 0、build 772ms、Playwright 13 张、pageerror 0） | `frontend/src/{api,stores,views}` + `styles.css` + `App.vue` + `DELIVERY.md`；**修掉 vite proxy rewrite 真 bug**（原配置让除 `/healthz` 外全部 404）；真联调：笔记库 11 条、检索 5 命中 183ms、点命中真跳详情 |
-| **N query 集 + 消融 + 槽位细化** | DSH-评测 | ✅ 已验收（协调方独立复跑 `make_split --dry-run`：**(槽位,判定) 18/18 覆盖、待改 0 条**） | `eval/queries/`(20 条) + `ablation.py` + `ablation.md` + `make_split.py`(v3) + `metrics.py` + `labels.csv`(仅 split 列 4 行)；三档消融 **R@5 88.9 / 94.4 / 88.9%**，结论「**没有证据支持改 300**」（差异仅 1 条 query）；槽位细化后 **误拒率 0% → 10%，旧的 0% 果然是虚的** |
-| **Q 问答+聊天+设置** | ZCode | ✅ 已验收（主人逐批） | 批1-8：单轮问答 → 聊天多轮（0003/0004 落库 + llm_content 重放缓存对齐，T2 命中率 48.4%）→ SSE 流式（126 delta 实测）→ 设置页热生效 → 问题改写（追问脱靶根因修复）→ 会话导出；全量 **171 passed** |
+**所有已派的线都已验收，当前没有进行中的线。**（2026-11-07 核实）
 
-**文档现状**：`docs/adr/` 有 0001 / 0002 / 0003 / 0004，编号连续；另有 **`docs/api.md` v2**（前后端唯一契约，枚举值以数据库 CHECK 为准）。
+### 已验收的线（A–Q）
 
-### 线 M / 线 L 暴露出来的真问题（2026-10-29）
+线 A 环境骨架 · B 解析 + G0 · D 数据模型 · E / E-2 切块与向量化 · F `.env` 加载 ·
+G G1 价值闸 · H-批1 LLM adapter · H-批2 G2 归属闸 · I-批1 导入状态机 · I-批2 worker + 上传 API ·
+J G2 政策修正 · K 混合检索 · M 查询 API · L 前端三页 · N query 集与消融 · Q 问答批1-8。
 
-1. **`notes.markdown` 实测全是 `null`** —— ADR 0001 决策 2 说「真源是 block JSON，markdown 只是渲染」，
-   但导入侧只落了父块、**没生成 markdown**。详情页正文真源实际是 `parents[]`。要不要补 markdown 生成，等人拍板。
-2. **新上传的 source 在 worker 处理前 `parse_status` 就是 `error`**（`parse_meta={}`、`message=null`），
-   语义不对但库里没有「待处理」这个取值。当前靠前端看 `job.status` 绕过；要根治得加枚举 + migration。
-3. **检索没有相关性阈值** —— 乱输一个库里肯定没有的词，照样返回 `top_k` 条近邻，「空 hits」在真实链路几乎不触发。
-   RRF 分数无绝对量纲，v1 的选择是不设绝对阈值、把两路名次一起返回（`docs/api.md` §4 已写明取舍）。
-4. **`vite.config.ts` 的 proxy rewrite 从线 A 起就是错的** —— 一直没人发现，因为只有 `/healthz` 能通。
-   教训：**契约/配置写完要真的打一次请求**，纸面通不等于链路通。
-5. **有 2 个子块超过 bge 的 512 token 上限，会被静默截断** —— `chunk 1364`（700 token，《轻量化发票 OCR > 项目结构》）
-   与 `chunk 1117`（517 token，《手写实战 > 完整代码实现》）。根因是 ADR §4.3「代码不受 `MAX_CHARS` 约束」，
-   而 `_chunk_code` 只在超限时往 `warnings` 里追加一句、**`import_smoke.py` 不打印 warnings**，所以线上完全看不见。
-   要修：要么让导入结果暴露 `warnings`，要么对超限代码块按行切并保留函数边界。
-6. **ADR 0004 §5 的 heading 前缀只落地了代码块** —— 按 `block_type` 核 324 个子块：
-   `code` 167 个有 `# {标题} > {面包屑} ({lang})` 前缀；**`text` 103 个、`table` 23 个都没有**（占 39%）。
-   正文块恰恰是最需要主题消歧的。**但 ADR 那句「能显著提升判别力」本身没有实验支撑**，
-   正确顺序是先做「有前缀 vs 无前缀」同口径 A/B 再改生产，不要照着一句话就动冻结区。
-7. **20 条 query 的相关性全是执行者自判、没有人工标注** —— n=18 正例，1 条 query = 5.56pt，
-   所以三档消融的差异**统计上都不显著**。这批数字要进论文，得先人工复核（重点 cross-section 3 条 + long 3 条）。
-   **2026-10-29 已复核并重算**（对 15 / 勉强 2 / 不对 1；q04 修订后 300 档 R@5 = 100%），见 `eval/ablation.md` §11。
+> **明细不在这里。** 每条线的「产物 / 自测 / 已知限制」在 `backend/delivery/` 归档里；「现在有哪些模块、基线多少」在 `STATUS.md` 顶部速览里。
+> 本表只回答「轮到谁干活」，不记「第几个测试通过」——那种数字只有一个真源。
 
-### 遗留待处理（不阻塞主干，但要记着）
+### 2026-11 起的交付（未按线编号）
 
-1. **槽 7 分层要细到 (槽位, 判定) 粒度** —— 现在 test 里槽 7 只有发票，2 张手写笔记全在 dev，误拒率 0% 是假象
-2. **切块参数要实验校准** —— 250–400 字是从 512 token 上限推导的，没做过实验；前置依赖是 20 个 query 集
-3. **所有单测都用合成 fixture，没有一份真实样本进测试** —— 线 E 的碎片化就是这么漏掉的（27 passed 但真实数据 in_range 只有 11.6%）
-4. **前端只有空白首页** —— 主干通了才动
+视觉解析、多用户认证、charter 问卷、标题整理、笔记编辑/删除、CSV 导入、扫描件 PDF、
+md 带图导入、SVG 插图、对话附件（文本+图片）、笔记渲染 v18 —— 均已完成，
+名字只出现在 STATUS 速览的模块表里，明细看 `git log` 与 `../日志/2026-11-*.md`。
+
+### 历史真问题：现在的状态
+
+| 当初的问题 | 现在 |
+|---|---|
+| `notes.markdown` 全 null（真源与渲染脱节） | ✅ 死列已删（迁移 `0010`），正文由 `doc` 现场序列化 |
+| 新 source 在 worker 处理前 `parse_status=error` | ✅ 加 `pending` 枚举（迁移 `0009`） |
+| 2 个子块超 bge 512 token 被静默截断 | ✅ 代码块超限按行切（`code_part` 编号） |
+| `vite.config.ts` proxy rewrite 从一开始就是错的 | ✅ 已修 |
+| ADR 0004 §5「heading 前缀提升判别力」缺实验 | ✅ 已做 A/B：**给 text/table 裸加前缀 R@5 反掉 2 条**，不改生产（`eval/prefix_ablation.md`） |
+| 20 条 query 相关性是执行者自判 | ✅ 主人已逐条复核（15 对 / 2 勉强 / 1 改问法） |
+| 槽 7 分层没细到 (槽位, 判定) | ✅ test 18/18 覆盖，误拒率 0% 不再是假象 |
+| 切块参数 250–400 是推导值、没做过实验 | ✅ 三档消融校准，维持 300（`eval/ablation.md` §12） |
+| **检索没有相关性阈值** | ⚠️ **仍未解决**（RRF 无绝对量纲，v1 取舍见 `docs/api.md` §4） |
+
+### 两条还在生效的教训
+
+1. **契约/配置写完要真打一次请求** —— proxy rewrite 错了 17 天没人发现，因为只有 `/healthz` 通。
+2. **合成 fixture 全绿 ≠ 真实数据可用** —— 27 个切块测试通过，真实笔记 in_range 只有 11.6%。
 
 ---
 
@@ -218,8 +206,8 @@ git status --short      # 谁在动，按上表认领
 | 1 | **线 M** | 后端 4 个查询 API（`docs/api.md` §3 §4） | ✅ 已验收并提交 `745f47c` |
 | 2 | **线 L** | 前端三页（导入 / 笔记库 / 检索） | ✅ 已验收并提交 `f80df35` |
 | 3 | **线 N** | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) | ✅ 已验收并提交（见 `git log` 线 N 一条） |
-| 4 | — | **G2 live 复测** | ✅ **已完成（2026-10-31，真链路全量）**：`g2_eval.py` parse→G1→G2 跑全 35 样本（deepseek-flash，6.6 万 token），**误拒率 0/15 = 0%（ok 口径，基线 53.3%）**、非法组合 0、唯一判定错是 1 条误收；十节正式报告 `eval/report.md`（test split）/`report_g2_ok.md`（ok 口径），见 backend/DELIVERY 线 R-G2 节 |
-| 5 | 线 Q | **问答生成** → 已实现并升级为聊天式多轮 + SSE 流式 + 设置页热生效 | ✅ 线 Q 批1-8（见 backend/DELIVERY 线 Q） |
+| 4 | — | **G2 live 复测** | ✅ **已完成（2026-10-31，真链路全量）**：`g2_eval.py` parse→G1→G2 跑全 35 样本（deepseek-flash，6.6 万 token），**误拒率 0/15 = 0%（ok 口径，基线 53.3%）**、非法组合 0、唯一判定错是 1 条误收；十节正式报告 `eval/report.md`（test split）/`report_g2_ok.md`（ok 口径），见 backend/delivery/ 线 R-G2 节 |
+| 5 | 线 Q | **问答生成** → 已实现并升级为聊天式多轮 + SSE 流式 + 设置页热生效 | ✅ 线 Q 批1-8（见 backend/delivery/ 线 Q） |
 | 6 | — | **人工复核 20 条 query 的期望** —— 工具已经备好：**`eval/queries/复核单.md`**（每条 query 下面直接抄出「我认为答案在的那一节」的真实正文，只需判断答案在不在那儿；⭐ 标记的 6 条是重点） | ✅ **已完成（2026-10-29，主人逐条判定）**：15 对 / 2 勉强（q07、q09）/ 1 不对（q04）/ 负例维持 2；q04 经主人批准改问法（monkeypatch 前提与原文不符），指标已按复核后标签重算——**300 档 R@5 = 100%**（宽松 n=18 / 严格 n=16 一致），见 `eval/ablation.md` §11 |
 | 7 | — | 补 `notes.markdown` 生成 / 代码块超限 / heading 前缀 A/B（见 §1「真问题」1/5/6） | 未派，等人拍板 |
 | 8 | — | **工具链 + 阶段3/4**（联网搜索 / 写笔记 / 导入后主动总结 / 会话产出笔记） | 📋 **ADR 0005 提案已出（f051998），3 个决策点待主人拍板后动工** |
@@ -230,7 +218,7 @@ git status --short      # 谁在动，按上表认领
 （手写笔记，G1 判定 accept）。也就是说「误拒率在 test 上是虚的」这个担忧**已经不成立**，
 无需再挪样本、无需再动 `eval/samples/`。
 
-**派活前先确认**：`backend/DELIVERY.md` 顶部速览里的模块表还准不准（现在**后端 + 前端全绿**，只差问答生成）。
+**派活前先确认**：`STATUS.md` 顶部速览里的模块表还准不准（现在**后端 + 前端全绿**，只差问答生成）。
 
 ---
 ## 3. 卡住时找谁
@@ -328,7 +316,7 @@ agent 在 DELIVERY.md 里已经精确列了文件路径。**照清单 add，不�
 git status --short                    # ① 先看有什么
 git add backend/app/service/xxx/ `    # ② 按产物清单逐个加（PowerShell 续行用反引号）
         backend/tests/service/xxx/ `
-        backend/DELIVERY.md
+        STATUS.md
 git diff --cached --stat              # ③ 提交前再确认一遍清单
 git commit -F msg.txt                 # ④ 消息用文件传（长消息会被 shell 拆坏）
 ```
@@ -375,7 +363,28 @@ git commit -F msg.txt                 # ④ 消息用文件传（长消息会被
 ---
 ## 4. 交付写在哪
 
-做完后，**追加**到你目录下的 `DELIVERY.md`（没有就建），格式：
+做完后，**追加**到对应目录的交付文件（2026-11-07 起后端已拆分）：
+
+| 角色 | 写哪 |
+|---|---|
+| 后端 | `backend/delivery/<阶段>.md`（foundation / gates-retrieval / qa-and-eval），新建阶段文件前先问协调方 |
+| 前端 | `frontend/DELIVERY.md` |
+| 评测 | `eval/DELIVERY.md` |
+
+> **`STATUS.md` 顶部速览只由协调方维护**，agent 不改进速览，只往 `backend/delivery/` 里追加块。
+
+### 交付前必跑（2026-11-07 起）
+
+```powershell
+python scripts/doc_lint.py
+```
+
+- **ERROR 必须清零** —— `pre-commit` 已挂这个闸（`git config core.hooksPath .githooks`），不清零提交不了。
+- **WARN 只有两类处理**：修掉，或在交付块里写一句「已知欠账」认账。**不许沉默略过。**
+- 它查的是可机械判定的那部分一致性：契约版本号、跨文档基线数字、端点总数、速览是否比最新交付块还旧、活文档里的路径是否还存在、有提交的日期有没有日志。
+- **它查不了「为什么」** —— 交付块的正文仍要人写。脚本只保证数字和引用不骗人。
+
+格式如下：
 
 ~~~markdown
 ## 2026-10-28 14:30 · 线 B · G0 解析模块

@@ -1,320 +1,7 @@
-# backend/DELIVERY — 后端线
+# 后端交付归档 · 闸与检索：G0/G1/G2 · LLM adapter · 导入状态机 · worker/API · 混合检索 · 查询 API
 
-> 按 HANDOFF §4 格式追加。每块一个交付，**最新的在上**。
-> 执行者可以是任何 agent（ZCode / Trae / 接替会话），每节开头注明执行者。
-
----
-
-## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
-
-**最后更新**：2026-11-03 · 评测候选自动归档(C)+bootstrap 置信区间(D)+边界测试批;基线 334
-
-### 已完成模块
-
-| 模块 | 路径 | 状态 |
-|---|---|---|
-| **G0 解析** | `app/service/parse/` | ✅ 8 格式(.csv v14 起) + txt 直通；35 样本 smoke 通过 |
-| **数据模型** | `app/models/`、`alembic/versions/0002_*` | ✅ 6 表 + `halfvec(1024)` + HNSW + trgm GIN |
-| **切块** | `app/service/chunk/` | ✅ 同节内合并；真实笔记 in_range 64%–100% |
-| **向量化** | `app/service/embed/` | ✅ torch 2.14.1+cu126，cuda 52 items/s |
-| **G1 价值闸** | `app/service/gate/g1.py` | ✅ 真实样本**误拒率 0/15 = 0.0%** |
-| **G2 归属闸** | `app/service/gate/g2.py` | ✅ H-批2 + 线 J 政策修正；**live 未跑（缺额度）** |
-| **导入状态机** | `app/service/imports/pipeline.py` | ✅ I-批1；端到端实测，父块无向量已核对 |
-| **arq worker + 上传 API** | `app/worker/`、`app/api/upload.py` | ✅ I-批2；新建 201 / dedupe 200 / 轮询可用 |
-| **混合检索 + RRF** | `app/repo/search.py`、`app/service/retrieve/` | ✅ 线 K；真实 query 双路命中，RRF 与公式吻合 |
-| **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
-| **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
-| **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效 |
-| **API 端点总览** | `app/main.py` | ✅ 17 个：`/healthz` · 上传 2 · 列表/详情/编辑/删除/检索 6 · 问答/会话/导出 6 · 设置 2 |
-| **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页 + 登录注册 + 书架 + 笔记两栏阅读 |
-| **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
-| **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷 → LLM 生成章程 → 存 DB → G2 热生效；每用户一份 |
-| **标题结构整理** | `app/service/rewrite/` | ✅ 导入时 LLM 出语义标题、代码算编号；超长文档分段；**需非推理模型** |
-| **存量回填（线 R）** | `app/service/rewrite/backfill.py`、`scripts/backfill_outline.py` | ✅ 历史 15 篇全部收口（11 rewritten + 4 该跳），与导入同构、幂等闭环 |
-| **会话优先前端** | `frontend/` | ✅ 导入/检索并入对话（/导入 文件选择器+拖放、/检索 引用选择器）；删 /import /search 路由页；导航只剩 笔记库/问答/设置 |
-| **引用笔记** | `app/api/qa.py note_ids`、`<referenced_notes>` | ✅ 引用=告诉 AI「在问什么」，检索照跑找关联；[引n]/[n] 双标注 |
-| **[NO_KB] 兜底** | `answerer.py` + `qa.py` | ✅ KB 答不了不再拒答：联网二次回答或 AI 自身知识（带标注）；防瞎编纪律保留 |
-| **切块·代码超限修复** | `app/service/chunk/chunker.py` | ✅ 超硬上限(480 tok)的函数体按行切分(`code_part` 编号),不再被 bge 静默截断;15 篇语料超限 0,20 query 期望路径失配 0 |
-| **parse_status=pending** | `0009` 迁移 + 上传/流水线创建点 | ✅ 上传到 G0 之间的窗口不再伪装 `error`;CHECK 加枚举,dev 库已应用,往返验证 |
-| **mermaid 截断根因 #2** | `frontend/src/utils/mermaid.ts` | ✅ v12 给顶点标签钳 max-width≈120px + fastdom 异步竞态;`wrappingWidth:500` 修复,主人真实会话 10 标签零裁切(d9ba566) |
-| **笔记自编辑** | `app/service/notes_edit.py` + `PUT /api/notes/{id}` + NoteView 编辑模式 | ✅ 标题/markdown 编辑;内容编辑重建切块+向量(同事务);不跑 LLM、回填不覆写;图片块禁改正文;GET 详情 markdown 改 doc 现场序列化 |
-| **markdown 死列删除(0010)** | `alembic/versions/0010_*` | ✅ 从未生成过、全表 null,主人拍板删;dev 库已应用+往返验证;API 字段(doc 现场序列化)不受影响 |
-| **启动预热嵌入模型** | `app/main.py` + `EMBED_WARMUP_ON_STARTUP` | ✅ 后台线程启动即加载 bge,消除重启后第一问 3~8s 冷启动;真机实证自动加载;测试用例显式关掉 |
-| **图片视觉理解(ADR 0006)** | `app/service/parse/vision.py` + `parse_file(client=)` + qa.py `_load_hit_images` | ✅ 导入时视觉模型转写 Markdown 进流水线(降级 no_text_expected);问答命中图片来源笔记回传原图(≤2 张),流式 meta 加 `images_attached`;e2e 全通:识别→G1/G2 accept→检索→看着答 |
-| **NoteView mermaid** | `frontend/src/views/NoteView.vue` | ✅ 阅读页 mermaid 代码块渲染成图(mermaid 感知启发式 + renderMermaidIn,失败退化代码块);截图实证 |
-| ~~worker LLM 配置统一~~ | — | ✅ 核实早已实现(import_file/summarize 都走 resolve_llm_config),悬账销账 |
-| **笔记删除** | `DELETE /api/notes/{id}` + `NotesRepo.delete_active` + 书架/详情删除入口 | ✅ 真删除:chunks/embeddings DB 级联清;孤儿 source 连行带 blob 删(1:N 防护);确认弹窗;7 测试 |
-| **CSV 导入** | `app/service/parse/csv_parser.py` + PARSERS | ✅ 整篇表格、首行表头、分隔符嗅探(逗号/分号/制表符/竖线)、GB18030 兼容、>200 行分表;9 测试;xlsx 提示话术成真 |
-| **评测候选自动归档(C 路线)** | `app/service/eval_capture.py` + pipeline 接线 | ✅ 真实导入(非 dedupe)完成→原文件副本进 `eval/candidates/`(gitignore)+登记 `eval/candidates_log.csv`;best-effort 不影响导入;`EVAL_CAPTURE_ENABLED` 开关;主人复核后挪 samples 转正 |
-| **bootstrap 置信区间(D 路线)** | `eval/scripts/bootstrap.py` + `ci_g12_*.md`/`ci_retrieval.md` | ✅ B=2000/seed=42/百分位法;误拒率 10% CI [0%,33.3%](test)、R@5 94.4% CI [83.3%,100%]——n 小的诚实表述;test/dev 交叉视角;⚠️ q10 语料漂移(rank 12,回填改标题所致,待主人复核) |
-| **边界测试批** | `tests/service/parse/test_edge_cases.py` 等 | ✅ 混合 PDF 阈值行为/容器内嵌套图往返(**抓到并修复 2 个真 bug**)/CSV RFC4180/media 孤儿语义钉住/dedupe×附件语义钉住 |
-| **含图笔记可编辑** | `notes_edit` 位置标记往返 + `PUT /api/notes/{id}` 解除 400 | ✅ 图片经 `![alt](baleen-image:N)` 往返,保存按 N 重关联原节点;删标记=删图;旧 400 分支移除 |
-| **md 带图片导入** | `parse/md_parser.py` + `service/media.py` + `POST /api/sources attachments` + `GET /api/media/{key}` | ✅ 图片按相对路径随主文件上传→内容寻址存 `storage/media/`;doc 只留 `media` key;缺文件退 alt 并警告;外链不抓;暂存改每上传一目录(worker 清理兼容) |
-| **扫描件 PDF 视觉识别** | `vision.parse_scanned_pdf` + `parse_pdf(client=)` | ✅ 无文本层 PDF 逐页 150dpi 栅格化→视觉转写;单页失败跳过留痕、全失败降级;30 页上限明说;有文本层 PDF 不烧视觉;e2e 中文两页全通(G1/G2 accept,标题正确)| 
-| **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
-
-### 测试基线
-
-```
-cd backend && uv run pytest -q     →  334 passed
-```
-
-基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
-→ 183（阶段3/4+工具链）→ 199（多用户）→ 228（标题整理 + 认证/隔离）
-→ 247（引用笔记 + [NO_KB] 兜底 + 线 R 回填测试）→ 250（代码超限切分 + parse_status=pending）
-→ 263（笔记自编辑:序列化往返 7 + 端点 6）
-→ **274**（视觉解析 7 + 问答回传原图 4;2026-11-01）
-→ **290**（笔记删除 7 + CSV 解析 9;2026-11-02）
-→ **301**（扫描件 PDF 视觉 11;2026-11-02）
-→ **320**（md 图片导入 8 + media 端点 2 + 含图编辑改写 2 + 附件上传 3;2026-11-02）
-→ **334**（候选归档 7 + 边界测试批 7;2026-11-03）
-
-**任何新任务都不许把这个数降下来。**
-
-### 累计的已知限制（跨交付汇总，别重复踩）
-
-1. ~~切块参数 300/250/400/480 是推导值~~ → 2026-10-31 已消融校准（维持 300，见 eval/ablation.md §12）；**代码块超 480 tok 静默截断也已修复**（按行切分）
-2. **G1 的 quality 恒为 core，无区分度** —— 质量分级须由 G2 决定
-3. **embeddings.vec 是 HALFVEC(1024)** —— 换不同维度的模型必须**新建表**，不能改配置
-4. `.doc` / `.xlsx` / `.xls` **不支持**（显式拒绝+转换提示；`.csv` 已支持）；纯图片与**扫描件 PDF** v13/v15 起走视觉转写（需配置支持视觉的模型，**推理型网关模型不行**）
-4a. **评测集语料漂移**：线 R 回填改了标题结构 → q10 的 expected_heading_path 失配(rank 12)——query 期望要不要跟随更新待主人复核;数字引用以 `eval/ci_*.md`(带 CI)为准
-4b. **docx/pptx 内嵌图片只有占位节点、没有像素**（G0 从未提取字节）——阅读页显示为 `[图片] alt` 文字；
-   **md 导入的图片才有真实字节**（v16 内容寻址存 `storage/media/`）。要补齐 docx/pptx 需另做「提取内嵌媒体」增量
-5. **所有单测都用合成 fixture**，真实样本只在 `scripts/*_smoke.py` 里验 —— 真实数据曾抓出「27 测试全绿但 in_range 只剩 11.6%」
-6. **问答严格只用库内内容**（防瞎编，刻意选择）；追问检索脱靶已由问题改写缓解（线 Q 批6）；库外问题需联网搜索工具链（主人会话实测提出，设计待排）
-7. **API Key 不继承 .env**（多用户决策）：每个账号必须自己配，没配时上传会 400
-8. **标题整理需要非推理模型** —— 推理模型（sensenva 等）会把 max_tokens 全用于 reasoning，
-   `content` 返回空；实测 deepseek-flash 正常。这是模型特性，不是代码问题
-9. **历史笔记不会被批量重整理** —— 标题整理只作用于新导入；存量需要单独回填脚本
-
-### 累计的未决问题
-
-| 状态 | 事项 |
-|---|---|
-| ✅ 已定 | GPU torch（cu126） |
-| ✅ 已定 | `.env` 放根目录 + `config.py` 用绝对路径读 |
-| ✅ 已定 | `pending_ocr` 归 `sources.parse_status`，不进 `review_runs.action` |
-| ⏸ 待定 | **G2 真跑评测需要主人提供 LLM key**（`LLM_API_KEY`） |
-| ⏸ 待定 | 槽 7 分层要细到 (槽位, 判定) 粒度（评测侧，不阻塞后端） |
-
-### 环境要点
-
-- **Docker 必须跑**：`docker compose ps`（db + redis）
-- **模型路径**：`C:\Users\MOM\Desktop\学习项目\智能笔记库\models\bge-large-zh-v1.5`（1.21 GB，工作区根，**不在仓库内**）
-- **配置**：`baleen/.env`（从 `.env.example` 复制；**已 gitignore，永不提交**）
-- **临时服务器清理**：见 `HANDOFF.md` §3.1（必须 `taskkill /T`，曾留下 17 小时的孤儿 uvicorn）
-- **LLM 上游额度（2026-10-28 深夜实测，重要）**：
-  `LLM_BASE_URL=http://100.83.19.7:8085/v1` 走本机 Tailscale → `mtt-frontend` → `mtt-backend`
-  → 上游账号池（6 个，key 10–16 / provider 7，上游为 `token.sensenova.cn`）。
-  ⚠️ 当时**6 个账号全部 `insufficient_quota`**，网关把 `all_upstreams_failed` 汇总成
-  **HTTP 502（不是 429）**。→ **重试无用**，只能等额度恢复或加账号，**别误判成代码 bug**。
-  ⚠️ 网关每 10 分钟跑 `sweep_degraded_keys`（探测 6 个账号），**本身也在消耗额度**。
-  ⚠️ `glm-5.2` 是**推理模型**：`max_tokens=8` 时 `content` 为空、`finish_reason=length`，
-  思考进 `reasoning_content`。`probe()` 用的正是 `max_tokens=8`，**可能把推理模型误判成
-  chat 不可用**（待额度恢复后验证）。正常调用 `max_tokens=800` 实测 **3.4 秒/次**，JSON 正常。
-- **2026-10-30 更新**：`LLM_MODEL=glm-5.2`（主人切换，现走设置页可热改）；**arq worker 必须单独启动**
-  （`uv run arq app.worker.WorkerSettings`，`start.bat` 已带）——没起 worker 导入永远「排队中」；
-  问答/改写走 SSE 流式（`POST /api/qa/chat/stream`），契约见 `docs/api.md` §5。
-
----
-
-## 2026-10-30 02:14 · 线 Q-批6 · 阶段2.5 问题改写（追问检索脱靶根因修复）· 执行者：ZCode（主人批准）
-
-### 产物
-
-| 动作 | 路径 | 说明 |
-|---|---|---|
-| 新增 | `app/service/qa/rewriter.py` | `rewrite_question`（condense question）：LLM + 对话历史把追问改写成独立检索问题（「它有哪几种状态」→「Promise 有哪几种状态」）；**best-effort**——LLM 异常向上抛由 handler 兜底回退原问题（与 answer 的「向上抛不降级」口径不同，改写是锦上添花）；防注入同款；无历史不调 LLM |
-| 改 | `app/api/qa.py` | chat 接入：历史两版（llm_content 重放版给 answer / content 可读版给改写器）→ 有历史先改写（失败回退）→ `retrieve(search_query)` → answer 仍用原问题+llm 重放历史；ChatResponse 加 `search_query`（实际检索词透出） |
-| 测试 | `tests/service/qa/test_rewriter.py`、`tests/api/test_qa.py` | rewriter 6 例；API 重构为响应队列夹具，新增改写命中/失败回退/首轮不改写 3 例 |
-
-### 自测
-- `pytest tests/service/qa tests/api -q` → **58 passed**；ruff 全清；`pnpm build` 682ms
-- **真实 e2e（glm-5.2，复现主人当时失败的场景）**：T1「什么是 Promise，怎么手写」→ T2「它有哪几种状态」→ 改写检索词 =「Promise 有哪几种状态」→ 正确答出三状态带引用（当时是「没找到」）；**T2 缓存命中率 46.3%**（llm_content 重放生效）；测试会话已删
-
-### 已知限制
-- 每轮追问多 1 次 LLM 调用（glm-5.2 约 2-6s；改写 prompt 的历史前缀逐轮相同 → 缓存摊薄成本）
-- `search_query` 不落库：重开历史会话不回放检索词（要落库需加列，价值低）
-- 改写质量依赖模型；极端改写错误由「回退原问题」兜底
-
-### 需要确认的问题
-- （无）
-
----
-
-## 2026-10-30 02:50 · 线 Q-批8 · 模型配置 API（设置页后端，热生效）· 执行者：ZCode（主人批准）
-
-### 产物
-
-| 动作 | 路径 | 说明 |
-|---|---|---|
-| 新增 | `app/models/setting.py` | AppSettings 单行表（id=1；字段 NULL = 回退 .env 对应项） |
-| 新增 | `alembic/versions/0005_app_settings.py` | 已 upgrade head 实跑 |
-| 新增 | `app/repo/settings.py` | SettingsRepo.save（None=保持/空串=清空回退；api_key 仅非空时更新） |
-| 新增 | `app/service/llm/resolve.py` | `resolve_llm_config(session)`：DB 优先 → 回退 .env，返回 (base_url, api_key, model) |
-| 新增 | `app/api/settings.py` | GET（生效值 + api_key 只回「已设置+末4位」，**永不回显全文**）/ PUT（热生效） |
-| 改 | `app/api/qa.py` | `get_llm_client` 改为读 DB 设置（每次请求现读 → 热生效）；测试 override 兼容 |
-| 改 | `app/main.py` | 注册 settings router |
-
-### 自测
-
-- `pytest tests/api/test_settings.py -q` → **4 passed**（回退/往返/空 key 保持/key 不回显）；全量 63 passed；ruff 全清；alembic 0004→0005 实跑
-
-### 已知边界
-
-- **worker（导入 G2）暂仍走 .env**——设置页当前只影响问答/改写链路；worker 侧统一排下一步
-
----
-
-## 2026-10-30 02:30 · 线 Q-批7 · SSE 流式问答（打字机效果）· 执行者：ZCode（主人批准）
-
-### 产物
-
-- `app/service/llm/client.py`：Transport 加 `request_stream`（Urllib 流式实现）；`LLMClient.chat_stream` 同步生成器——SSE 逐行解析，reasoning/content/usage 三类事件分流，缓存双格式归一复用 `_cache_fields`；流式不重试（中途无法续传），打开失败即抛
-- `app/api/qa.py`：`POST /api/qa/chat/stream`——改写与检索在流开始前完成；轮次开始即 commit 用户消息，流结束 commit 助手消息（含出处/缓存）；事件流 meta → delta* → done，LLMError 以 error 事件透出
-- 无状态 POST /api/qa/chat 保留（非流式兜底）
-
-### 自测
-
-- `pytest tests/service/qa tests/api/test_qa.py -q` → **28 passed**（新增 SSE 端点用例：meta/delta/done 帧序、OpenAI 风格 cached_tokens 归一 0.6、流后落库断言）；ruff 全清
-- **真实流式 e2e（glm-5.2）**：**126 个 delta 帧**、拼接 2096 字、done 缓存命中率 **82.9%** + 2 条出处、落库 [user, assistant]；测试会话已删
-
-### 已知限制
-
-- reasoning（思考过程）增量暂不转发——思考期间前端显示「思考中…」，正文开始后打字机
-- 客户端中途断开：用户消息已落库、无助手消息（语义可接受）
-
----
-
-## 2026-10-30 01:49 · 线 Q-批5 · 缓存命中率真落地（llm_content 重放 + 切 glm-5.2）· 执行者：ZCode（主人指令）
-
-主人指令「解决缓存不显示」。三步走全通：
-
-| 动作 | 路径 | 说明 |
-|---|---|---|
-| 改 | `.env`（**主人明确指令代改，破例记录在案**） | `LLM_MODEL` agnes-3.0-flash → **glm-5.2**（只动这一行，key 未触碰未打印） |
-| 新增 | `alembic/versions/0004_qa_message_llm_content.py` | qa_messages 加 `llm_content`（已 upgrade head 实跑） |
-| 改 | `app/models/qa.py`、`app/repo/qa.py` | user 消息双份存储：`content`（原始问题，给人看）+ `llm_content`（含 `<context>` 的原文，给 LLM 重放） |
-| 改 | `app/api/qa.py` | 先组装消息取 `<context>` 原文存 llm_content；历史按 **llm_content 原样重放**（前缀逐轮对齐） |
-| 改 | `app/service/qa/answerer.py` | 历史重放预算改安全网（200 条/24000 tok）——**裁剪会破坏前缀对齐**，轻易别调小 |
-
-### 自测
-- pytest 21 passed（qa 相关）；ruff 全清；alembic 0003→0004 实跑
-- **真实两轮 e2e（glm-5.2）**：T1「什么是 Promise，怎么手写」缓存命中率 **0.0**（冷启动）→ T2「手写的时候要注意什么」**48.4%**（前缀对齐命中，计费约一折）；答案质量正常带引用；测试会话已删
-- 探针：glm-5.2 双发同前缀 4821 tok → call1 cached_tokens=0 → call2/3 **4608（95.6%）**
-
-### 原理（为什么之前一直是 —）
-前缀缓存按「请求开头完全相同的部分」命中。旧实现用户消息存原始问题、LLM 却看 context 包装版 → 下轮前缀在 system 之后立刻分叉，稳定前缀只剩 ~450 tok（低于上游门槛）。现在按 llm_content 原样重放，会话内第 N 轮的前缀 = 第 N-1 轮完整 prompt → 命中率随轮数上升。
-
-### 已知限制
-- 命中率取决于上游账号池路由（跨账号不共享缓存）；未命中轮 0.0/—。
-- 提醒主人：**dev server 要重启**（.env 与代码都变了）；worker 仍挂本会话下。
-
----
-
-## 2026-10-30 00:55 · 线 Q-批4 · 会话导出 + 两个运行诊断 · 执行者：ZCode
-
-### 产物
-
-| 动作 | 路径 | 说明 |
-|---|---|---|
-| 改 | `app/api/qa.py` | 新增 `GET /api/qa/sessions/{id}/export`：生成 Markdown（元信息 + 逐条消息含 model/token/缓存命中率 + 出处）→ **写一份到 `tmp/qa_exports/session-{id}.md`**（gitignored，agent 可直接读）→ 同时以附件返回浏览器下载 |
-
-### 两个诊断（重要，主人问的）
-
-1. **缓存命中率显示「—」的根因（已订正）**：初判「网关剥字段」**是错的**——主人（MyTokenTransfer 作者）指正：网关透明转发 usage，只出现 3 字段是因为**那次请求未命中缓存**（上游未命中时本就不带该字段）；call_logs 证实 262/357 次 deepseek-flash 拿到非零 cached_tokens。已修：**client 解析兼容两种格式**（DeepSeek `prompt_cache_hit_tokens` + OpenAI 官方 `prompt_tokens_details.cached_tokens`，miss = prompt−hit）。⚠️ 实测仍待观察：真实两轮（4000+ tok prompt）仍未上报字段——命中与否取决于上游账号池路由/缓存门槛，不再是解析问题，命中即显示。
-2. **「排队中」= arq worker 进程没启动**：Redis 里积压 3 个 `arq:job:import:*` + `arq:queue`，进程列表无 arq。启动命令：`cd backend → uv run arq app.worker.WorkerSettings`（max_jobs=1 串行；每个文件 = G0+G1+G2 一次 LLM 调用+bge 向量化）。⚠️ 网关限流冷却期 G2 会失败，任务可能 failed，等冷却过重试。**已实跑验证**：worker 启动后积压 3 任务全部消费（含等了 31 分钟的 source 333「03-命令速查.md」，12s 处理完 → ok），新上传即到即处理，笔记 11→13 篇。
-3. **新发现的真实体验问题（记入路线图，未修）**：追问型 query（「它有哪几种状态」）指代重、检索脱靶，模型按规则拒答——需要「**问题改写**」（用历史把指代展开后再检索，RAG 标准做法），排阶段 2.5。
-
-### 自测
-- `pytest tests/api/test_qa.py -q` → 6 passed（新增导出用例：附件 + tmp 落盘 + 404）；ruff 全清
-
----
-
-## 2026-10-30 00:36 · 线 Q-批3 · 主人实测反馈修复（出处过滤）· 执行者：ZCode
-
-主人浏览器实测批2 后反馈 5 点（非流式/单轮/聊天框 UI 属于既有路线图，本块只记代码修复）：
-
-- **「发你好也挂 5 条出处」→ 根因修复**：`answerer.answer()` 现在**只保留答案里真正引用的 [n]**（`re.findall(r"\[(\d{1,2})\]")`），问候/闲聊没有 [n] → citations 为空；幻觉编号（超命中数）剔除。已知取舍：代码块里的 `arr[1]` 会被当成引用（最坏多显示一条检索命中，可接受）。
-- 测试 +3：只引用部分/无标记/越界编号。
-
-### 自测
-- `pytest tests/service/qa tests/api -q` → **50 passed**；ruff 全清。
-- ⚠️ 测试断言改为「前后差值」：主人浏览器测试在 dev 库留下了真实会话（qa_sessions id=9「你好」），**测试不再假设空库**——后续任何人写 API 测试都注意这点。
-
----
-
-## 2026-10-30 00:09 · 线 Q-批2 · 聊天式多轮问答（会话落库 + 缓存命中率）· 执行者：ZCode（主人批准）
-
-### 产物
-
-| 动作 | 路径 | 说明 |
-|---|---|---|
-| 新增 | `app/models/qa.py` | QaSession / QaMessage（TEXT+具名 CHECK 家法；citations JSONB 存检索出处；**cache_hit/miss_tokens** 记前缀缓存原始计数） |
-| 新增 | `alembic/versions/0003_qa_chat.py` | 0002→0003；autogenerate 后按家法整理；**已 `upgrade head` 实跑**，information_schema 确认两表建出 |
-| 改 | `app/models/__init__.py`、`app/repo/repos.py` | 注册新模型 + QaRepo |
-| 新增 | `app/repo/qa.py` | create/list/get/delete_session + list_messages + add_message；**只 flush**，调用方 commit（upload.py 同模式） |
-| 改 | `app/service/llm/client.py` | ChatResult 加 `prompt_cache_hit_tokens / prompt_cache_miss_tokens`（从 usage 解析；provider 无此字段 → None，向后兼容） |
-| 改 | `app/service/qa/answerer.py` | `answer()` 加 **history**（system → 最近 8 条/2000 tok 封顶裁最旧 → 当前 user 带 `<context>`）；短路条件改为「命中与历史**都**空」（追问靠历史不短路）；系统提示适配多轮（指代消解 + [n] 只对当前 context 有效） |
-| 改 | `app/api/qa.py` | **替换**无状态 `POST /api/qa`：`POST /api/qa/chat`（session_id 空自动建会话，title=首问前 30 字；一条提问原子落库两条消息）+ `GET /api/qa/sessions` + `GET /api/qa/sessions/{id}` + `DELETE /api/qa/sessions/{id}`（FK CASCADE） |
-
-### 自测
-
-- `uv run pytest tests/service/qa tests/api -q` → **47 passed**（answerer 12 例含历史裁剪/缓存解析新例；API 6 例走 env 事务隔离夹具，真实落库后回滚不污染库）
-- **真实两轮 e2e（TestClient + 网关，测试会话已删）**：T1「闭包是什么」10.2s 带引用；T2「那它的三个形成条件是什么」**用上历史**正确答三条件带 [1]，17.8s；重开会话 4 条消息；侧栏 total=1；DELETE 204
-- 临时资源自查（§3.1）：全程 TestClient，未起 uvicorn
-
-### 已知限制
-
-- **cache_hit_rate 当前显示 None**：`agnes-3.0-flash`（主人已把 .env 从 DeepSeek 切回内网网关）的 usage 不带 cache 字段；显示管线端到端已接好，**切回 deepseek-flash 即有真实数字**。
-- 多轮历史只带最近 8 条 / 2000 token（超了从最旧丢）——远期上下文不进 LLM。
-- 非流式（「思考中…」→ 整条消息）；会话列表无分页（上限 50）。
-
-### 需要确认的问题
-
-- （无）
-
----
-
-## 2026-10-29 23:07 · 线 Q-批1 · 问答 API（检索 → LLM 答 + 出处）· 执行者：ZCode（主人批准）
-
-### 产物
-
-| 动作 | 路径 | 说明 |
-|---|---|---|
-| 新增 | `app/service/qa/__init__.py`、`app/service/qa/answerer.py` | `build_qa_messages`（命中片段编号塞 `<context>`、按 token 预算截断、防注入声明）+ `answer`（**命中为空短路不调 LLM**；同步，调用方 `asyncio.to_thread`） |
-| 新增 | `app/api/qa.py` | `POST /api/qa`：`RetrieveDep`（复用线 M 的延迟导入模式，启动不拉 torch）→ `asyncio.to_thread(answer)` → `{question, answer, citations[n/note_id/note_title/heading_path/snippet], took_ms, cost_tokens, model}` |
-| 改 | `app/main.py` | 注册 qa router（+2 行） |
-| 新增 | `tests/service/qa/test_answerer.py`、`tests/api/test_qa.py` | FakeTransport **不联网**；answerer 6 例 + API 3 例 |
-
-**没碰的**：冻结区（`chunk/`/`embed/`/`parse/`/`imports/`/`repo/`）、`g2.py`（阶段0 验活结论：DeepSeek 下无需改动）。
-
-### 自测
-
-- `uv run pytest tests/service/qa tests/api/test_qa.py -q` → **9 passed**
-- `uv run pytest tests/api -q` → **34 passed**（qa router 加入后无回归）
-- `uv run ruff check`（新文件 + main.py）→ 全清
-- **真实端到端（TestClient，不起服务器）**：问「闭包是什么」→ 200，答案带 `[2]`/`[3]` 内联引用 + 代码块 + 三条形成条件，5 条出处全指向笔记 #156 的具体小节，took 4.6s / 2169 tokens / deepseek-flash
-- 临时资源自查（HANDOFF §3.1）：全程 TestClient，未起 uvicorn，端口/进程清零
-
-### 顺带：阶段0 —— G2 在 DeepSeek 上验活
-
-主人把 `.env` 换成 DeepSeek 云（`https://api.deepseek.com/v1` / `deepseek-flash`）后：
-`scripts/g2_smoke.py --samples ../eval/samples/_inbox --live --limit 1` →
-**verdict=accept / quality=normal / action=index / score=4，cost 3793 tok，3.4s，降级 0**；`probe()` 报 `json_mode=True`。
-**结论：reasoning 模型下 G2 无需改动**（`max_tokens=800` 够出 JSON）。
-⚠️ `deepseek-flash` 是推理模型，reasoning 先吃 completion token；G2 的 800 够用，**问答侧已把 `max_tokens` 提到 3000**。
-
-### 已知限制
-
-- **非流式**：整个答案一次返回（前后端都无 SSE 基建，流式是后续优化）。
-- **无状态**：不记问答历史（多轮会话是路线图阶段2，需新表 + Alembic migration）。
-- LLM 异常**向上抛**（与 G2 同口径）：endpoint 挂了 → HTTP 500，前端 `describeApiError` 翻译成可读文案。
-- 答案里的 `[n]` 是 LLM 写的，citations 是检索命中全量（不做 `[n]`↔citation 严格对齐校验）。
-
-### 需要确认的问题
-
-- （无）
+> 从 `backend/DELIVERY.md` 拆出（2026-11-07），**只搬运、未改写**。
+> 本文件 8 个交付块，按原文件顺序排列。
 
 ---
 
@@ -493,6 +180,9 @@ HTTP 探测 http://127.0.0.1:8000/api/notes?limit=1 → 无响应(疑似僵死/�
 - 若加了 20 query 集，可回头校准 `took_ms` 之外的 trgm 阈值（线 K 遗留）。
 
 ---
+
+---
+
 ## 2026-10-29 · 线 K · 混合检索 + RRF rerank · 执行者：ZCode-后端
 
 > 开工前已按 §0.2 交接手确认单,协调方批复「按倾向做」(6 个设计点全部按倾向落地:
@@ -588,6 +278,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
   `GET/POST /api/search` 时,`retrieve()` 已把 embed_func / owner_id / top_k 都参数化,直接调用即可;
 - **20 query 集**:建好后可校准 trgm 阈值 / 向量距离上限 / RRF k;
 - **线 L G2 live 复测**:与本批无关,等额度(见速览的 LLM 上游额度备注)。
+
+---
 
 ---
 
@@ -714,6 +406,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 
 ---
 
+---
+
 ## 2026-10-28 · 线 J · G2 判定政策修正 + 限流适配
 
 > 执行者：**Trae-后端**（同执行者续做）。只改 `backend/`；未动 `eval/`、`charter.md`、chunk/embed/parse/pipeline。
@@ -815,6 +509,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 
 ---
 
+---
+
 ## 2026-10-28 · 线 I-批1 · repo 层 + 导入状态机 + CLI 冒烟
 
 > 执行者：**Trae-后端**。已按 §0.2 在回复里给出接手确认单（同执行者续做，未重读已完成模块的实现）。
@@ -864,7 +560,7 @@ uv run ruff check . →  All checks passed!
 `import_smoke.py --file <临时 fixture md> --no-llm`（首次，真实 bge + 真实开发库）：
 
 ```
-文件: C:\Users\MOM\AppData\Local\Temp\baleen_import_smoke.md
+文件: <临时 fixture md>
 模式: 落库 / 跳过 G2
 各阶段耗时(ms): sha256=0.3  dedupe=123.6  G0=23.8  G1=10.8  note=12.7  chunk=1536.9  embed=331.2
 parse_status=ok  g1=accept  g2=None  quality=core  action=index
@@ -875,7 +571,7 @@ chunks: total=8 (父块 4 / 子块 4)  embeddings=4
 同一文件再跑（去重命中）：
 
 ```
-文件: C:\Users\MOM\AppData\Local\Temp\baleen_import_smoke.md
+文件: <临时 fixture md>
 模式: 落库 / 跳过 G2
 去重: 命中已有 sha256 —— 未重复处理、未重复调用 G2
 各阶段耗时(ms): sha256=0.3  dedupe=100.3
@@ -935,6 +631,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 
 ---
 
+---
+
 ## 2026-10-28 · 线 H-批2 · G2 归属闸（LLM + 可降级）
 
 > 执行者：**Trae-后端**（同一执行者续做批 2，未重读/未重构批 1 的 `llm/`，只调用它）。
@@ -989,7 +687,7 @@ ok   BGE_M3.pdf                                 est=2934  chars=60874 →kept=67
 ok   CodeR.pdf                                  est=2934  chars=84955 →kept=6737  truncated=yes
 ok   doc-ocr-system__README.md                  est=2934  chars=5719  →kept=3765  truncated=yes
 ok   hello.txt                                  est=980   chars=13    →kept=13    truncated=no
-ok   MyTokenTransfer__README.md                 est=2934  chars=16912 →kept=3473  truncated=yes
+ok   <自研项目>__README.md                       est=2934  chars=16912 →kept=3473  truncated=yes
 ok   test.txt                                   est=984   chars=8     →kept=8     truncated=no
 ok   情景6 Spring Boot消息服务.pptx                   est=2934  chars=18787 →kept=2284  truncated=yes
 ok   新建 文本文档.txt                                est=981   chars=0     →kept=0     truncated=no
@@ -1045,6 +743,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 
 批 2 到此为止。下一步是**导入状态机**（不在本批范围）：G0→G1→G2 串联、arq 长任务、`sources.parse_status`
 与 `review_runs` 写入；`judge` 是同步函数，worker 里用 `asyncio.to_thread` 包装。
+
+---
 
 ---
 
@@ -1120,6 +820,8 @@ Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
 
 ---
 
+---
+
 ## 2026-10-28 21:38 · 线 G · G1 价值闸（纯启发式）
 
 ### 产物
@@ -1162,7 +864,7 @@ c) G1 误拒率(human accept/partial 中被 G1 reject): 0/15 = 0.0%
 
 ### 已知限制
 
-- 初版误拒率曾到 20%：样板词正则里的 `placeholder`/`占位` 在长技术文里出现一次就触发直接 junk（闭包.md / CodeR.pdf / MyTokenTransfer README 三篇 human-accept 被误拒）。修法：从正则去掉通用词 `占位|placeholder|sample text`，并加「样板词只在短文（<200 字）里才算直接 junk，长文里出现仅 -0.2 减分」的护栏。**这是阈值校准的典型坑，labels.csv 35 条标注下来大概率还要再调。**
+- 初版误拒率曾到 20%：样板词正则里的 `placeholder`/`占位` 在长技术文里出现一次就触发直接 junk（闭包.md / CodeR.pdf / 某自研项目 README 三篇 human-accept 被误拒）。修法：从正则去掉通用词 `占位|placeholder|sample text`，并加「样板词只在短文（<200 字）里才算直接 junk，长文里出现仅 -0.2 减分」的护栏。**这是阈值校准的典型坑，labels.csv 35 条标注下来大概率还要再调。**
 - 信号阈值（熵 2.5 / TTR 0.3 / 重复 0.7 / REJECT_SCORE 0.5）都是推导值；TTR 为避免英文误伤只在 CJK 字符上算（英文无 CJK → 1.0 不罚）。未做消融（任务书要求不做，前置依赖 20 query 集）。
 - G1 不区分 partial（二值 accept/reject）；partial 由 G2 定。rubric §2.1 的 partial 判据需要理解「可复用内容占比」，超出启发式能力。
 - 14 个非 ok 文件（扫描件/图片/.doc/.xlsx）不走 G1：扫描件/图片走 OCR 队列，unsupported/error 另处理。混淆矩阵只覆盖 21 个 ok 文件。
@@ -1172,413 +874,3 @@ c) G1 误拒率(human accept/partial 中被 G1 reject): 0/15 = 0.0%
 - （无）
 
 ---
-
-
-## 2026-10-28 19:07 · 线 F · 修 `.env` 加载路径
-
-### 产物
-
-- `app/core/config.py`：加 `BASE_DIR = Path(__file__).resolve().parents[2]`（→ `backend/`）与 `ROOT_DIR = BASE_DIR.parent`（→ `baleen/`）两个绝对路径常量；`model_config.env_file` 从 `".env"`（按 CWD 解析）改成 `(ROOT_DIR / ".env", BASE_DIR / ".env")` 元组——**根 .env 先读、`backend/.env` 覆盖它**（便于本地临时调试）。从任何 CWD 启动都能找到仓库根的 .env。
-- `tests/test_config.py`（新增，2 例，**不碰真的 `baleen/.env`**，AGENTS §3 硬约束 3）：
-  1. `test_root_dir_absolute_and_has_env_example`：断言 `ROOT_DIR` 是绝对路径、且 `ROOT_DIR / ".env.example"` 存在（即 `ROOT_DIR` 确实指向 `baleen/`）。
-  2. `test_reads_env_file_from_root_dir`：`tmp_path` 造临时 `.env` 写 `EMBEDDING_MODEL_PATH=/fake/...`，`monkeypatch` 把 `ROOT_DIR` 与 `Settings.model_config.env_file` 都指过去（`env_file` 在类定义时绑定原 `ROOT_DIR`，必须同时 patch），`delenv` 清掉环境变量避免它优先于文件，`get_settings.cache_clear()` 后断言读到 `/fake/...`。
-
-### 自测（原始输出）
-
-`uv run python -c "from app.core.config import get_settings as g; print(repr(g().embedding_model_path))"`（在 `backend/` 下执行）：
-```
-'C:\\Users\\MOM\\Desktop\\学习项目\\智能笔记库\\models\\bge-large-zh-v1.5'
-```
-修前是 `''`（空），修后读到主人填在 `baleen/.env` 里的模型绝对路径。
-
-`uv run pytest -q`：
-```
-31 passed in 14.43s   # 原 29 + config 2
-```
-ruff check + format 全绿。
-
-### 已知限制
-
-- pydantic-settings 的默认优先级是 **环境变量 > .env 文件 > 代码默认值**：`baleen/.env` 里写的值会被已存在的同名环境变量覆盖。这是 pydantic 的既定行为、符合预期（docker compose 的 `POSTGRES_*` 也是靠环境变量注入容器，不走 .env 文件）。embed 测试的 conftest 正是靠 `os.environ` 注入 `EMBEDDING_MODEL_PATH` 覆盖 .env，所以模型路径改动不影响 31 个测试。
-- `backend/.env` 若存在会覆盖根 `.env`——只用于本地临时调试，正式环境不应放。
-
-### 需要确认的问题
-
-- （无）
-
----
-
-
-## 2026-10-28 18:32 · 线 E-2 · 修切块碎片化（ADR 0004 §4.7 / §6）
-
-### 产物
-
-- `app/service/chunk/chunker.py` 改 4 处：
-  1. **加同节内合并后处理**（ADR §4.7）：`chunk()` 主流程末尾、`_metrics()` 之前调 `_merge_within_sections` → `_merge_adjacent`。规则：上一块 `< MIN_CHARS` 且合并后 `≤ MAX_CHARS` 且 `token_count ≤ HARD_TOKEN_LIMIT` 才向右并；`skipped_embed`（目录/图片）不参与；**绝不跨 section**；合并后重算 `token_count` 与全部硬指标。
-  2. **修 in_range 口径**（ADR §6）：`_metrics` 分母只统计「所在 section 字符数 ≥ `MIN_CHARS`」的非 skipped 子块；小节型笔记（每节一句话）本身的块永远达不到 250 字，排除它们避免永久拉低指标、掩盖真问题。
-  3. **修硬编码**：`_metrics` 里 `token_count > 480` → `> HARD_TOKEN_LIMIT`（同时把 `HARD_TOKEN_LIMIT` 补进 constants 导入——原来没导才落了硬编码）。
-  4. 顺带：`_norm_chars` 提成模块级辅助，合并/指标共用。
-- `tests/service/chunk/test_chunk.py`：新增 `TestMergeAntiFragmentation`（2 例）——「代码块密集+小标题密集」fixture 模拟闭包.md，断言合并后代码块 ≤4、in_range ≥0.6、硬指标不破；以及「合并绝不跨 section」（heading_path 一致）。旧的 `test_long_code` 断言从「3 函数=3 块」改成「≤3 块且三函数内容不丢」（微型函数该被合并是 §4.7 的预期）。
-- `scripts/chunk_smoke.py --samples <路径>`：照 parse_smoke 的样子，缺目录 skip，不硬编码 eval/；对每个文件 parse→chunk（真 bge token 计数）报 children/median_tok/in_range/over/trunc/warns。脚本自己从 `baleen/.env.example` 注入 `EMBEDDING_MODEL_PATH`（不经 conftest）。
-
-### 自测（原始输出）
-
-`uv run pytest -q`：
-```
-29 passed in 21.66s   # parse 15 + chunk 9（含 2 个新合并测试）+ embed 5
-```
-`uv run python scripts/chunk_smoke.py --samples ../eval/samples/_inbox`（3 个目标文件）：
-```
-ok   02-04-闭包.md                         children=50  median_tok=188  in_range=0.644  over=0 trunc=0 warns=[]
-ok   缺陷反馈_VIP音乐播放能力缺失.md         children=11  median_tok=64   in_range=1.0    over=0 trunc=0 warns=[]
-ok   项目实验实训报告（一）.md               children=12  median_tok=243  in_range=0.8    over=0 trunc=0 warns=[]
-```
-ruff check + format 全绿。
-
-### 验收对照
-
-| 要求 | 结果 |
-|---|---|
-| `over_limit = 0` 且 `truncated = 0`（合并不能破） | ✅ 三份样本全 0 |
-| 闭包.md：`in_range ≥ 0.6` 且子块数 ≤ 60 | ✅ 0.644 / 50 块（修前 0.116 / 96 块） |
-| 项目实验实训报告：`in_range` 不降 | ✅ 0.8（修前 0.667，反而升了——合并把碎片并进区间） |
-| 缺陷反馈.md：允许偏低但要说明 | ⚠️ 见下「已知限制」 |
-
-### 已知限制
-
-- **缺陷反馈.md 的 `in_range=1.0` 不是真的满分，是「节太小」**：这份笔记每个小节（`### QQ音乐三层防护` 之类）本身就只有 60–100 字，全部 section 字符数 < `MIN_CHARS`(250)，按 ADR §6 新口径被**排除出 in_range 分母**，分母为 0 时 ratio 取 1.0（vacuous）。`median_tok=64` 印证了节本身就小。这是「节太小」而非「切得碎」，符合预期——这类笔记的块就是该按节原样保留，不该硬凑到 300 字。
-- 合并只做相邻拼接、不重新切分；若一个 section 内有一串「大-小-大-小」交错的块，中间的小块会被并进前面的大块，但不会把两个大块合并（大块 ≥ MIN 不触发合并条件）。这是 ADR §4.7 的设计，不是 bug。
-- 真实样本的 token 数是用 bge tokenizer 实算的（`count_tokens`），不是字数估算；`chunks_truncated=0` 可信。
-
-### 需要确认的问题
-
-- （无）
-
----
-
-
-## 2026-10-28 16:53 · 线 E · 切块 + 向量化（ADR 0004 / AGENTS §5 决策4）
-
-### 产物
-
-- `app/service/chunk/`（切块器，纯函数，不碰数据库与模型）
-  - `constants.py`：`TARGET_CHARS=300 / MIN_CHARS=250 / MAX_CHARS=400 / HARD_TOKEN_LIMIT=480 / OVERLAP=0`，文件顶部注释「推导值，待 ADR 0004 §8 消融实验校准」
-  - `chunker.py`：block JSON → `sections[] + chunks[]`（父块/子块）。三层结构（note→section 父块不 embed→chunk 子块 embed）；五类难处理单元全实现：表格按行+重复表头、代码按函数/类边界、无标题长文按句子累积、目录页 `meta.skipped_embed=true`、图片块文本极少不 embed；句子绝不劈开（超 400 整句保留+warning）；四硬指标 `chunks_over_limit / chunks_truncated / chunks_in_range_ratio` 由 `token_counter` 实算（生产注入 `embed.count_tokens`，测试注入假计数器）
-  - `__init__.py`：导出 `chunk`、`Chunk`、`Section`、`ChunkResult` + 常量
-- `app/service/embed/`（向量化器）
-  - `embedder.py`：`embed_passage(texts)` / `embed_query(text)` 两个函数（非对称：query 加前缀「为这个句子生成表示以用于检索相关文章：」，passage 不加）；`device = "cuda" if torch.cuda.is_available() else "cpu"`，启动打一行日志；模型路径读 `config.embedding_model_path`，空时报错提示配 `.env`；模型自带 Normalize → `normalize_embeddings=False` 不重复归一化；`batch_size` 可配（GPU 默认 32 / CPU 默认 8）；`count_tokens(text)` 用 bge tokenizer 实算（供切块器算 `chunks_truncated`）
-  - `__init__.py`：导出 `embed_passage / embed_query / count_tokens / get_device / load_seconds`
-- `app/models/base.py`：删自定义 `HalfVec(UserDefinedType)`；`embedding.py` 改用 `pgvector.sqlalchemy.HALFVEC(1024)`；`alembic/versions/0002_data_model.py` 同步改 `from pgvector.sqlalchemy import HALFVEC`
-- `tests/service/chunk/test_chunk.py`（7 例，假 token_counter）：短笔记单块 / 长文多块 / 大表格按行带表头 / 长代码按函数边界 / 目录页 skipped_embed / 图片块 skipped_embed / 父子结构+heading_path；全部断言 `chunks_over_limit==0` 且 `chunks_truncated==0`
-- `tests/service/embed/`：`conftest.py`（从 `baleen/.env.example` 读 `EMBEDDING_MODEL_PATH` 注入 `os.environ`，不创建 `.env`；`get_settings.cache_clear()` 让新值生效；路径不存在则 skip）、`test_embed.py`（query/passage 维度 1024 + 单位向量、非对称前缀改变向量、count_tokens 用真 tokenizer）、`test_e2e.py`（block JSON → 切块(真 count_tokens) → 向量化 → 长度/维度/单位向量断言）
-- `pyproject.toml` / `uv.lock`：`uv add pgvector torch sentence-transformers`（pgvector 0.5.1、torch 2.14.1、sentence-transformers 6.2.0）
-
-### 自测（原始输出）
-
-`uv run pytest tests/service/chunk tests/service/embed -q`：
-```
-7 passed, 5 skipped in 0.14s   # skip 是因为首次没读到 .env.example(已在 conftest 修正路径)
-```
-`uv run pytest -q`（全量回归）：
-```
-27 passed in 13.54s   # parse 15 + chunk 7 + embed 5
-```
-device / 加载耗时 / 吞吐（100 条假文本）：
-```
-device: cpu
-load_seconds: 1.3
-throughput: 52.2 items/s (100 items in 1.91s)   # GPU:RTX 3060 Laptop;CPU 版曾为 15 items/s
-shape: (100, 1024) sample_norm: 1.0000
-device: cuda   # torch 2.14.1+cu126,torch.cuda.is_available()=True
-```
-切块硬指标（e2e 用真 bge tokenizer）：
-```
-chunks_over_limit == 0
-chunks_truncated == 0
-```
-HALFVEC 迁移可复现（`alembic downgrade -1` → `alembic upgrade head`）：
-```
-INFO  [alembic.runtime.migration] Running downgrade 0002 -> 0001
-INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002
-\d+ embeddings: vec halfvec(1024) not null; "embeddings_vec_hnsw" hnsw (vec halfvec_cosine_ops) WITH (m='16', ef_construction='64')
-```
-ruff check + format 全绿。
-
-### 已知限制
-
-- **torch 已切到 GPU 版（2.14.1+cu126）**：主人开代理后批准换源，从 `download.pytorch.org/whl/cu126` 装（cu124 索引只到 torch 2.6，cu126 才有 2.14.x）。`pyproject.toml` 加了 `explicit=true` 的 pytorch 命名索引 + `[tool.uv.sources] torch = { index = "pytorch-cu126" }`，其余依赖仍走清华。device 自动降级代码保留——答辩机若无 GPU 会自动回退 cpu。
-- 切块器对「section 内混了目录段+表格」不会把目录段单独标 skipped——目录检测是 section 级的（ADR §4.5「目录页」本就是独立小节）。测试 fixture 里目录是独立 section，行为正确。
-- 父块的 `ord` 排在其子块之后（父块文本要等 section 结束才知道，emit 在子块之后）；`parent_id` 链接不依赖 ord，仅阅读顺序上略别扭，不影响检索。
-- embed 测试需要本地 bge-large-zh-v1.5 模型（路径在 `baleen/.env.example`）；无模型的机器跑会 skip，不报红。
-- 切块参数仍是 ADR §3 的推导值（300/250/400/480），未做 §8 消融实验（前置依赖 20 query 集，评测线尚未交付）。
-
-### 需要确认的问题
-
-1. ~~要不要换成 GPU 版 torch？~~ **已解决**：主人开代理后批准，已装 `torch 2.14.1+cu126`（cu124 索引只到 2.6，cu126 才有 2.14.x），`device=cuda`、吞吐 52.2 items/s（CPU 的 3.5×）。`pyproject` 的 pytorch 命名索引 + source 映射见上「已知限制」。
-2. （其余无）
-
----
-
-
-## 2026-10-28 13:40 · 线 B · 数据模型落地（ADR 0003）
-
-### 产物
-
-- `app/models/`（8 文件）：`base.py`（`Base` + `HalfVec` 自定义类型）、`source.py` / `review_run.py` / `note.py` / `chunk.py` / `embedding.py` / `job.py`（6 表，字段与类型严格照 ADR 0003 §2，未自行增删列）、`__init__.py`（聚合入口，导出 `Base.metadata` 供 Alembic）
-- `alembic/versions/0002_data_model.py`：挂在 `0001_baseline` 之后；`CREATE EXTENSION vector` / `pg_trgm`；6 张表；ADR §5 全部索引（含 `chunks_text_trgm_idx` GIN、`embeddings_vec_hnsw` HNSW `halfvec_cosine_ops` m=16 ef_construction=64）；枚举一律 TEXT + CHECK（不用 PG 原生 ENUM）；`chunks` 加 `CHECK ((parent_id IS NULL) = is_parent)`
-- `app/repo/base.py`：`Repo(owner_id)` 薄封装骨架（构造绑定 `owner_id=1` + 注入 `AsyncSession`；`select_active_notes()` 示范 owner 作用域 + 软删过滤；不放具体业务查询）
-- `app/core/config.py`：补 `embedding_model_path: str = ""`（读 `EMBEDDING_MODEL_PATH`，不硬编码绝对路径）
-- `alembic/env.py`：`target_metadata = Base.metadata`（之前是 `None`）
-- `pyproject.toml` / `uv.lock`：**未新增依赖**（SQLAlchemy/Alembic/asyncpg 骨架已在；pgvector Python 包见下"需要确认"）
-
-### 自测（原始输出）
-
-`uv run alembic upgrade head`：
-```
-INFO  [alembic.runtime.migration] Running upgrade 0001 -> 0002, data model: 6 张表 + pgvector/pg_trgm 扩展 + 索引(ADR 0003)
-```
-`uv run alembic current`：
-```
-0002 (head)
-```
-
-`docker compose exec db psql -U baleen -d baleen -c "SELECT extversion FROM pg_extension WHERE extname='vector';"`：
-```
- extversion
-------------
- 0.8.7
-(1 row)
-```
-
-`docker compose exec db psql -U baleen -d baleen -c "\d+ chunks"`：
-```
- Table "public.chunks"
-   Column    |           Type           | Nullable |              Default
--------------+--------------------------+----------+------------------------------------
- id          | bigint                   | not null | nextval('chunks_id_seq'::regclass)
- note_id     | bigint                   | not null |
- parent_id   | bigint                   |          |
- ord         | integer                  | not null |
- heading_path| text                     |          |
- text        | text                     | not null |
- token_count | integer                  | not null |
- is_parent   | boolean                  | not null | false
- meta        | jsonb                    | not null | '{}'::jsonb
- created_at  | timestamp with time zone | not null | now()
-Indexes:
-    "chunks_pkey" PRIMARY KEY, btree (id)
-    "chunks_is_parent_idx" btree (is_parent)
-    "chunks_note_ord_idx" btree (note_id, ord)
-    "chunks_parent_idx" btree (parent_id) WHERE parent_id IS NOT NULL
-    "chunks_text_trgm_idx" gin (text gin_trgm_ops)
-Check constraints:
-    "chunks_parent_is_parent_chk" CHECK ((parent_id IS NULL) = is_parent)
-Foreign-key constraints:
-    "chunks_note_id_fkey" FOREIGN KEY (note_id) REFERENCES notes(id) ON DELETE CASCADE
-    "chunks_parent_id_fkey" FOREIGN KEY (parent_id) REFERENCES chunks(id) ON DELETE CASCADE
-Referenced by:
-    TABLE "embeddings" CONSTRAINT "embeddings_chunk_id_fkey" FOREIGN KEY (chunk_id) REFERENCES chunks(id) ON DELETE CASCADE
-```
-
-补充证据（embeddings 的 halfvec + HNSW）：
-```
- embeddings.vec = halfvec(1024)  not null
- "embeddings_pkey" PRIMARY KEY, btree (chunk_id, model)
- "embeddings_vec_hnsw" hnsw (vec halfvec_cosine_ops) WITH (m='16', ef_construction='64')
-```
-6 张表均已建：`sources / review_runs / notes / chunks / embeddings / jobs`。
-
-回归（确认未碰坏 G0 与启动）：`uv run pytest -q` → `15 passed`；`from app.main import app` 导入正常。
-
-### 已知限制
-
-- **`embeddings.vec` 用自定义 `HalfVec(UserDefinedType)` 而非 pgvector Python 包**：DDL 仍是 `halfvec(1024)`、HNSW 索引正常，零新依赖。但本类型目前没有 bind/result processor——**建表与迁移够用，真正写入向量值时**需要补处理器，或改用 pgvector 包（见下）。
-- `Repo` 是骨架，只有 `select_active_notes()` 一个示范查询；具体业务查询留给后续导入/检索任务。
-- 迁移的 `downgrade()` 只倒表、不 `DROP EXTENSION`（扩展可能被别处依赖，标准做法）。
-- 未写模型层单测（任务书只要求迁移 + 自测三样；写测试算新增范围，留给后续）。
-
-### 需要确认的问题
-
-1. **embeddings 写向量时是否引入 pgvector Python 包？** 现在的 `HalfVec` 自定义类型建表/索引没问题，但插入向量值时建议换 pgvector 包（它能正确处理 `list[float]` ↔ halfvec 绑定）。这是新增依赖，按 HANDOFF §3 要主人拍板。若同意，我在切块/向量化任务里 `uv add pgvector` 并替换本类型；若不同意，我给 `HalfVec` 补 bind/result processor。当前不阻塞。
-
----
-
-## 2026-10-28（补遗）· 线 B · G0 解析模块的功能验证
-
-> HANDOFF §1 遗留 #3：「线 B 的 pytest 与 smoke 脚本没人跑过——结构验收≠功能验收」。上次未写 DELIVERY，这里补上实测结果，堵掉这个遗留。
-
-### 自测
-
-- `uv run pytest tests/service/parse -q` → **15 passed**
-- `uv run python scripts/parse_smoke.py --samples ../eval/samples/_inbox` → 35 个文件，状态分布：**ok=21 / no_text_expected=9 / unsupported_format=5 / error=0**（情景6 课件 231 张图全部有 image 占位；BGE_M3/CodeR 的 arXiv 页眉水印被过滤 406/441 行）
-- 门禁：临时起 uvicorn，`GET /healthz` → `200 {"status":"ok","db":"ok","redis":"ok"}`
-- ruff check + format 全绿
-
-### 已知限制（沿用 ADR 0002 §6）
-
-- 加密 PDF 返回 `error`（message="PDF 已加密，请先解密后再导入"）
-- pptx 演讲者备注未抽取（演示者材料，不属于笔记正文）
-- `.doc` / `.xlsx` / 纯图片按 ADR §2.1 处理（.doc→unsupported 提示转 .docx；图片→no_text_expected）
-
-### 需要确认的问题
-
-- （无）
-
----
-
-## 2026-10-30 03:10 · 线 Q-批9 · 阶段3 导入后主动总结 · 执行者：ZCode（主人批准，D1=A）
-
-### 产物
-- `app/service/qa/summarizer.py`：`summarize_import(note_id, filename)`——读笔记父块 → LLM 摘要（要点+3 建议问题）→ 自动建「新导入:xxx」会话（摘要=首条 assistant 消息）；含 `organize_session_note`（阶段4 整理器）
-- `app/worker/worker.py`：import_file 成功后挂摘要步骤（`note_id 存在 且 非 dedupe 且 非 no_llm` 才触发；**失败仅 warning，不影响导入**——ADR 0005 §2 验收标准）
-
-### 自测
-- 单测 2 例（monkeypatch LibraryRepo 读取 + env 事务工厂；note 缺失返回 None）
-- **真实 e2e（glm-5.2）**：对笔记 #297（03-命令速查.md）触发 → 会话 #179「新导入:03-命令速查.md」自动创建，摘要准确覆盖 uv run 规范/测试流程/Git 规范（测试会话已删）
-
-### 已知限制
-- dedupe 命中的旧笔记不补摘要（原导入早于本功能）
-- no_llm 导入不生成摘要（口径一致：无 LLM 全程无 LLM）
-
----
-
-## 2026-10-30 03:25 · 线 Q-批10 · 阶段4 会话产出笔记 + 工具链 Tavily 兜底 · 执行者：ZCode（主人批准，D2=B / D4=Tavily）
-
-### 产物
-- `app/api/qa.py`：`POST /api/qa/sessions/{id}/save-note`——LLM 把会话整理成结构化 Markdown → 落 `notes_out/` → **no_llm 入队**（G0/G1/切块/向量化照常，跳过 G2——D2=B 直接入库）；CitationOut 加 url/note_id 可空（联网出处）
-- `app/service/qa/websearch.py`：Tavily 搜索（免费档 1000 次/月）
-- `app/api/qa.py` chat/chat-stream：**库内未命中 + 配了 Tavily → 自动搜网**，回答带 [W n] 来源标注（citations.url 外链）；未配 key 或搜索失败 → 维持「没找到」口径
-- `app/api/settings.py`：tavily_api_key 只写不读（tavily_set/tavily_tail）
-- 前端：存为笔记按钮（chat 工具栏）、citations 渲染内链/外链双形态、设置页 Tavily 字段
-
-### 自测
-- `pytest tests/service/qa tests/api -q` → **68 passed**（新增 web 兜底/save-note/导出等 7 例）；ruff 全清；build 808ms
-- **真实 e2e（glm-5.2）**：阶段4 对会话 #179 save-note → `notes_out/2026-10-30-新导入-03-命令速查.md.md`（1114 字，结构化准确）+ no_llm 入队成功
-
-### 已知限制
-- 联网兜底仅库内零命中触发；命中但内容不相关时不搜（需相关性判断，后续可做）
-- 代码块 `arr[1]` 会被出处过滤误认为引用（可接受）
-- save-note 的入库走队列异步完成,前端不跟踪其进度
-
----
-
-## 2026-10-30 02:50 · 线 Q-批8 · 模型配置 API（设置页后端，热生效）· 执行者：ZCode（主人批准）
-
----
-
-## 2026-10-30 03:10 · 线 Q-批9 · 阶段3 导入后主动总结 · 执行者：ZCode（主人批准，D1=A）
-
-### 产物
-- `app/service/qa/summarizer.py`：`summarize_import(note_id, filename)`——读笔记父块 → LLM 摘要（要点+3 建议问题）→ 自动建「新导入:xxx」会话（摘要=首条 assistant 消息）；含 `organize_session_note`（阶段4 整理器）
-- `app/worker/worker.py`：import_file 成功后挂摘要步骤（`note_id 存在 且 非 dedupe 且 非 no_llm` 才触发；**失败仅 warning，不影响导入**——ADR 0005 §2 验收标准）
-
-### 自测
-- 单测 2 例（monkeypatch LibraryRepo 读取 + env 事务工厂；note 缺失返回 None）
-- **真实 e2e（glm-5.2）**：对笔记 #297（03-命令速查.md）触发 → 会话「新导入:03-命令速查.md」自动创建，摘要准确覆盖 uv run 规范/测试流程/Git 规范（测试会话已删）
-
-### 已知限制
-- dedupe 命中的旧笔记不补摘要（原导入早于本功能）
-- no_llm 导入不生成摘要（口径一致：无 LLM 全程无 LLM）
-
----
-
-## 2026-10-30 03:25 · 线 Q-批10 · 阶段4 会话产出笔记 + 工具链 Tavily 兜底 · 执行者：ZCode（主人批准，D2=B / D4=Tavily）
-
-### 产物
-- `app/api/qa.py`：`POST /api/qa/sessions/{id}/save-note`——LLM 把会话整理成结构化 Markdown → 落 `notes_out/` → **no_llm 入队**（G0/G1/切块/向量化照常，跳过 G2——D2=B 直接入库）；CitationOut 加 url/note_id 可空（联网出处）
-- `app/service/qa/websearch.py`：Tavily 搜索（免费档 1000 次/月）
-- `app/api/qa.py` chat/chat-stream：**库内未命中 + 配了 Tavily → 自动搜网**，回答带 [W n] 来源标注（citations.url 外链）；未配 key 或搜索失败 → 维持「没找到」口径
-- `app/api/settings.py`：tavily_api_key 只写不读（tavily_set/tavily_tail）
-- 前端：存为笔记按钮（chat 工具栏）、citations 渲染内链/外链双形态、设置页 Tavily 字段
-
-### 自测
-- `pytest tests/service/qa tests/api -q` → **68 passed**（新增 web 兜底/save-note/导出等 7 例）；ruff 全清；build 808ms
-- **真实 e2e（glm-5.2）**：阶段4 对会话 #179 save-note → `notes_out/2026-10-30-新导入-03-命令速查.md.md`（1114 字，结构化准确）+ no_llm 入队成功
-
-### 已知限制
-- 联网兜底仅库内零命中触发；命中但内容不相关时不搜（需相关性判断，后续可做）
-- 代码块 `arr[1]` 会被出处过滤误认为引用（可接受）
-- save-note 的入库走队列异步完成,前端不跟踪其进度
-
----
-
-## 2026-10-30 02:50 · 线 Q-批8 · 模型配置 API（设置页后端，热生效）· 执行者：ZCode（主人批准）
-
----
-
-## 2026-10-31 · 存量笔记标题回填（线 R）· 执行者：ZCode（主人批准；模型 glm-5.2 试 → deepseek-flash 收尾）
-
-### 为什么做
-标题整理（§9 / commit e913726）只挂在导入管线里，存量 15 篇没赶上。落地当时明确排除的「需单独回填脚本」即本节。
-
-### 产物
-- `app/service/rewrite/backfill.py`：`backfill_notes` / `list_candidates` —— 对存量 `notes.doc` 跑与导入**同款** rewrite（plan_outline → number_headings → apply_outline），单篇一事务：换 doc + 删光 chunks 重建 + 重嵌。幂等主闸 `sources.parse_meta.headings_rewritten`、省钱副闸 `needs_rewrite`；LLM 空计划不打标记（可重试 no-op）；单篇失败回滚不中断整批；`note.title` 与 `sources.doc` 均不动（保持「sources=原始解析」不变量）
-- `app/repo/chunks.py`：补 `delete_by_note`（全仓第一个删 chunks 的方法；embeddings/子块靠 FK CASCADE 顺带清）
-- `EMBEDDING_MODEL` 常量挪到 `app/service/embed/__init__.py`（pipeline / retriever / 检索测试改引用；顺带解除 retriever→pipeline 的重依赖）
-- `scripts/backfill_outline.py`：薄壳（g2_smoke 骨架）—— 默认 dry-run 零 LLM 零写库；`--live` 每篇一事务；`--note-id/--limit/--resume/--delay`；`--llm-base-url/--llm-api-key/--llm-model` 临时覆盖（换模型不碰 DB/.env）；结果追加 `backend/tmp/backfill_outline_results.jsonl`（resume 只认 rewritten）
-- 测试 7 例（`tests/service/rewrite/test_backfill.py` + conftest）：真 PG 外层事务回滚 + FakeTransport + 假 embed；覆盖整理重建/两类跳过/空计划/LLM 失败回滚/候选清单/级联删除
-
-### 自测 / 验收
-- pytest 全量 **239 passed + 1 failed** —— 挂的是 `test_qa` 存笔记拆分（上一会话未提交 WIP 自带，与本次无关）；ruff 全清
-- **真实回填 15 篇收口**：11 篇 rewritten（433/487/156/157 用 glm-5.2 成在**小文档**；158/159/160/161/164/296/297 换 deepseek-flash，含 107 块大文档 +39 标题），4 篇该跳（10/27/70 <400 字；162 编号率 86% 结构已好）
-- 幂等闭环：重跑 dry-run「待整理 0」；11/15 打标记；15 篇 chunks/向量行数齐全；检索冒烟 2 query top 命中均带新编号路径（「四、手写防抖和节流 > 带 leading/trailing 的防抖」）
-
-### 已知限制 / 坑
-- **glm-5.2（网关→sensenova 推理模型）小文档（~20 块内）能出，大文档 502/429/空 content**；回填期间网关还整波 502。标题整理/回填一律 deepseek-flash 稳
-- LLM 按 prompt 规则 2 对既有标题在**原位**插编号版 → chunker 把空 section 丢掉、路径留原语义标题（管线同款既有语义，非回填引入）；编号进检索路径靠**新增**章节标题（158 实证「二、深拷贝」等前缀已进路径）
-- 一次偶发 `MissingGreenlet`（run1 长等待后连接态；run2 全量未复现，数据无损，未深究——若复现再查 pool_pre_ping 在非 greenlet 上下文的 checkout）
-
----
-
-## 2026-10-31 · G2 真跑评测（十节报告落地）· 执行者：ZCode（主人批准：完整报告路线）
-
-### 为什么做
-G2 自线 J 政策修正后从未全量真跑（唯一基线：修正前 live 误拒率 **53.3% (8/15)**）；TASK.md 定义的正式交付是
-metrics.py 十节 report.md，此前一直是 fake predictor 占位。本节把「评测」变成真的。
-
-### 产物
-- `scripts/g2_eval.py`（新）：**产品真链路预测器** —— 对每个样本 `parse_file`（真 G0）→ 非 ok 确定性 reject/drop
-  （产品本就不进闸）→ 真 G1（启发式）→ 过 → 真 G2（LLM）。preds.csv 10 列与 runner.py COLUMNS 逐列一致
-  （rel_path 相对 samples 根），`raw_json` 记判定阶段/reasons/降级；G1 拒收不给 1-5 分（0-1 概率不同量纲，留空）。
-  单文件失败写 error 列继续；`--resume`/`--limit`/`--delay` 齐全；LLM 三件套走环境变量覆盖（零文件改动）。
-- `eval/preds_live.csv`（35 行）+ `eval/report.md`（**test split 主报告，从此是真数据**）+
-  `eval/report_all.md`（全量口径）+ `eval/report_g2_ok.md`（**ok 子集口径**，分母 15，与 G1 的 0/15 同分母）。
-- LLM：deepseek-flash 官方（probe json_mode=True）；总花费 **65,567 token**（G2 均值 ~3.6k/条，1.8–7.1s）。
-
-### 自测（原始数字）
-- 阶段分布：**G0 拦 14 + G1 拦 3 + G2 判 18**（16 accept/index、1 reject/topic_dialog、1 reject/drop），零 error 零降级。
-- **误拒率（ok 口径，分母 15）= 0/15 = 0.0%** —— 达标线「≤1/15 且较 53.3% 实质下降」以最优值通过；非法组合 **0**。
-- test split 2/10、all 3/18 的「误拒」**全部是 G0 解析不了**的 human-accept 文件（霸道总裁.doc + 两张手写 jpg）——
-  产品限制非 G2 判错，报告全错清单可查。
-- 唯一判定错误：1 条**误收**（项目实施记录（一）.md：human reject/topic_dialog → pred accept/index）——
-  「误拒代价≫误收」哲学下可接受，进 mining list。
-- 跑前自检：g2_smoke dry-run 确认 charter 1148 token（<1200 警戒线）、21 ok 文件全部按设计压进 4000 预算。
-
-### 已知限制
-- 误丢率 all 口径 1/2（human topic_dialog 全库仅 2 条，小样本无统计力）。
-- ok 口径报告依赖 tmp/labels_ok.csv（由 preds_live.csv 的 stage 字段过滤生成，复现命令见 eval/DELIVERY）。
-- 达标线为本次自定义（文档原无数字门槛），推导已写入本节；G2 prompt 未做任何改动。
-
----
-
-## 2026-10-31 · 切块档位重跑（ADR §8 校准，15 篇语料）· 执行者：ZCode（主人批准）
-
-### 为什么做
-§8 要求对 TARGET_CHARS 消融校准，上次跑在 10-29 的 **11 篇语料 + q04 复核前标签**上；且线 R 回填改了
-11 篇旧笔记的标题结构、语料新增 4 篇干扰项——旧结论必须在新语料上重验。
-
-### 产物与结果
-- `ablation.py` **一行未改**；`check_expected_paths()` 失配 **0**（回填编号标题被 chunker 丢空 section、
-  期望路径全存活——queries.csv 一字未改，回填与导入同构的实证）。
-- 三档 × 双口径（宽松 n=18 / 严格 n=16，bge 确定性、零随机、纯内存只读库）：
-  R@5 = 94.4% / **94.4%** / 88.9%（宽松），93.8% / **93.8%** / 87.5%（严格）；
-  300 档 **R@10 唯一 100%、MRR 双口径最高**（0.631/0.648）。
-- 判决：**维持 300 档（= 生产现状）**——三项指标无一劣于两翼；300 vs 400 差 1 条 query（q13 掉出 top-5）；
-  「400 是上限」复现（400 档 p90=444 字符、in_range 跌到 44.4%）。
-- 报告：`eval/ablation.md` §12 + §1 更新行（论文引用以 §12 的 15 篇口径为准，§11 的 100% 是 11 篇历史值）。
-
-### 已知限制 / 执行偏离
-- §8 字面的 600 档未跑：bge 512 窗口下必静默截断，harness 刻意封顶 400（偏离已在 §12.4 存档）。
-- 2 个原子代码块 >512 token（517/700）embedding 侧被截——既有取舍非回归（§1 结论 2 复现）。
-- 300 档大节内 in_range 61.5%（<70% 目标、>60% 警戒线；4 篇小节型新笔记拉低）。
-- 绝对数字与 §11 的 100% 不可直比（语料 11→15 + 回填改结构）；组内可比成立。

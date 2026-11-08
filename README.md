@@ -1,18 +1,19 @@
 # baleen
 
-中文优先的个人智能笔记库：**导入 → 判定 → 入知识库 → 可被追问并给出出处。**
+个人智能笔记库：**导入 → 判定 → 入知识库 → 可被追问并给出出处。**
 
 > 名字取自鲸须（baleen）——鲸鱼靠它过滤海水、留下食物。
 > 这个项目做的就是同一件事：过滤掉没有价值的内容，留下知识。
 
 ## 现在是什么状态
 
-| 阶段 | 状态 |
-|---|---|
-| 架构设计 | ✅ 已定（ADR 0001–0006，见 `docs/adr/`） |
-| 后端 | ✅ 已完成（FastAPI + arq worker，基线 334 passed） |
-| 前端 | ✅ 已完成（Vue 3 + TS，6 页面全通） |
-| 评测 | ✅ 已完成（G1/G2/检索指标 + bootstrap 95% CI） |
+**状态只在两处维护，本 README 不重复数字：**
+
+- 工程状态（模块表 / 测试基线 / 已知限制）→ `STATUS.md` 顶部「系统状态速览」
+- 时间线（哪天做了什么、为什么）→ `../日志/YYYY-MM-DD.md`
+
+最近一次收口：2026-11-06，对话附件/图片 + 笔记渲染 v18，基线 **371 passed**。
+架构决策见 `docs/adr/0001`–`0006`，接口契约见 `docs/api.md`（v18）。
 
 **这是本科毕业设计**，目标是本地多用户可用的完整闭环，不是多用户 SaaS。
 
@@ -64,7 +65,7 @@ accept / partial / reject  ── reject 可申诉，partial 只抽有价值部�
 |---|---|
 | `backend/` | Python / FastAPI（API + arq worker） |
 | `frontend/` | Vue 3 + TypeScript |
-| `docs/` | `api.md`（前后端契约 v16）+ `adr/`（0001–0006 技术决策记录） |
+| `docs/` | `api.md`（前后端契约 v18）+ `adr/`（0001–0006 技术决策记录） |
 | `eval/` | 评测脚本 + 标注 + 报告（含 bootstrap CI） |
 
 ## 快速开始
@@ -104,12 +105,10 @@ pnpm dev                          # http://localhost:5173
 
 ## 文档索引
 
-- `AGENTS.md` —— **项目约定，任何 AI 编码代理开工前必读**
-- `docs/api.md` —— 前后端 API 契约（v16，含变更记录）
-- `docs/adr/` —— 技术决策记录（答辩素材）
-  - `0001` 架构基线 · `0002` 解析栈 · `0003` 数据模型 · `0004` 文本切分 · `0005` 导入摘要 · `0006` 图片视觉
-- `eval/` —— 评测脚手架（`TASK.md` 任务书、`report.md` 正式报告、`ci_*.md` 置信区间）
-- `backend/DELIVERY.md` —— 后端交付记录（模块表 + 已知限制）
+完整文档导航见 [NAVIGATION.md](NAVIGATION.md)（点击跳转）。本处只列开工必读：
+
+- [AGENTS.md](AGENTS.md) —— 项目约定，任何 AI 编码代理开工前必读
+- [STATUS.md](STATUS.md) —— 系统状态速览（模块表 / 基线 / 已知限制）
 
 ## 测试
 
@@ -117,5 +116,17 @@ pnpm dev                          # http://localhost:5173
 cd backend
 # 需 Docker 容器运行（docker compose up -d）
 uv run pytest
-# 基线 334 passed
+# 基线 371 passed
 ```
+
+## 文档一致性
+
+文档只写「现在是什么」，历史交付块按阶段归档在 `backend/delivery/`。
+**一致性不靠人记，靠一条命令**：
+
+```powershell
+python scripts/doc_lint.py         # ERROR 必须为 0
+python scripts/doc_backfill.py --since 2026-11-01   # 漏写的交付块，生成骨架补
+```
+
+`pre-commit` 已挂这个闸（`git config core.hooksPath .githooks`，换机器需重装一次）：有 ERROR 提交不进去。
