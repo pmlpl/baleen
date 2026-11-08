@@ -26,7 +26,7 @@
 | 157 | Fetch / Axios 完全指南 | 23 |
 | 158 | 手写实战练习 —— 面试手撕题全集 | 34 |
 | 159 | 变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool） | 19 |
-| 160 | 缺陷反馈：VIP音乐播放能力缺失（最终版） | 11 |
+| 160 | 缺陷反馈：某音乐平台逆向研究（最终版） | 11 |
 | 161 | Agent 应用开发学习指南 | 48 |
 | 162 | 项目实验实训报告（一） | 7 |
 | 164 | 轻量化发票 OCR 识别与校验系统 | 15 |
@@ -78,7 +78,7 @@
 
 | qid | 原样出现的术语 | 落在哪个父块 |
 |---|---|---|
-| q01 | `__sign_hash_20200305` | 缺陷反馈#160 > 核心问题 > QQ音乐三层防护（均未突破） |
+| q01 | `某签名函数` | 缺陷反馈#160 > 核心问题 > 某音乐平台防护机制（分析记录） |
 | q02 | `AbortController` | Fetch/Axios#157 > 七、取消请求 |
 | q03 | `MyPromise` / `PENDING` / `FULFILLED` / `REJECTED` | 手写实战#158 > 五、手写 Promise > 完整代码实现 |
 | q04 | `_TOOL_META` / `discover_tools` / `monkeypatch` | 变更 016#159 > 三、方案设计 > 3.2 > registry.py |

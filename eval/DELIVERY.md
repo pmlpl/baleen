@@ -145,7 +145,7 @@
 | 157 | Fetch / Axios 完全指南 | 23 |
 | 158 | 手写实战练习 —— 面试手撕题全集 | 34 |
 | 159 | 变更 016：5 个核心工具补单测（…） | 19 |
-| 160 | 缺陷反馈：VIP音乐播放能力缺失（最终版） | 11 |
+| 160 | 缺陷反馈：某音乐平台逆向研究（最终版） | 11 |
 | 161 | Agent 应用开发学习指南 | 48 |
 | 162 | 项目实验实训报告（一） | 7 |
 | 164 | 轻量化发票 OCR 识别与校验系统 | 15 |
@@ -156,7 +156,7 @@
 
 | kind | 条数 | qid | 考点 |
 |---|---|---|---|
-| `term` 术语精确匹配 | 5 | q01–q05 | 词法路：query 原样含 `__sign_hash_20200305` / `AbortController` / `MyPromise` / `_TOOL_META`+`discover_tools` / `max_history` |
+| `term` 术语精确匹配 | 5 | q01–q05 | 词法路：query 原样含 `某签名函数` / `AbortController` / `MyPromise` / `_TOOL_META`+`discover_tools` / `max_history` |
 | `paraphrase` 同义改写 | 5 | q06–q10 | 向量路：刻意避开原文专有名词（问闭包成因时不写"闭包"，问 token 刷新时不写"拦截器""401"） |
 | `cross-section` 跨节综合 | 3 | q11–q13 | `expected_heading_path` 写两条（并发+取消 / 函数工厂+柯里化 / 防抖+节流） |
 | `long` 长查询 | 3 | q14–q16 | ≥30 字，带背景与约束 |
@@ -388,7 +388,7 @@ v3 把粒度改成 **`(slot, human_verdict)` 二元组，要求每个存在的�
 - `python eval/scripts/make_split.py --labels eval/labels.csv`
   → 只改 split 列；与阶段 2 备份逐字段比对，差异只有 `split` 与你手改过的 `char_count`，
     `human_*`（13 列）与 `slot` 全部无差异
-  → 配对 `错误堆栈.txt` ↔ `缺陷反馈_VIP音乐播放能力缺失.md` 同在 test；
+  → 配对 `错误堆栈.txt` ↔ `缺陷反馈_某音乐平台逆向研究.md` 同在 test；
     `20260919_...pdf` ↔ canonical `20260906_...pdf` 同在 test
 - `python eval/scripts/metrics.py --labels eval/labels.csv --preds eval/preds.csv --split test --out eval/report.md`
   → 14 条参与计算；误拒率 0/7 = 0.0%；误丢率 0/1 = 0.0%；非法组合 2；判定错误 2；去重后唯一错误 4
