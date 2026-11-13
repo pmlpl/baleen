@@ -67,11 +67,11 @@ def _get_whisper_model():
     return _whisper_model
 
 
-def download_video(url: str, *, sessdata: str = "", cookies_file: str = "", output_dir: Path | None = None) -> Path:
+def download_video(url: str, *, sessdata: str = "", cookies_str: str = "", output_dir: Path | None = None) -> Path:
     """用 yt-dlp 下载视频（含音频），返回视频文件路径。
 
     B 站 CDN 不稳定，视频文件大，下载可能失败/超时。调用方应捕获异常并降级。
-    cookies_file 用于抖音等需要完整 cookie 文件的平台（B站用 sessdata）。
+    cookies_str 用于抖音等需要 cookie 字符串的平台（B站用 sessdata）。
     """
     import sys
 
@@ -89,7 +89,7 @@ def download_video(url: str, *, sessdata: str = "", cookies_file: str = "", outp
         "--socket-timeout", "30",
         "-o", output_template,
     ]
-    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_file=cookies_file, output_dir=out_dir)
+    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_str=cookies_str, output_dir=out_dir)
     if cookie:
         cmd.extend(["--cookies", cookie])
     cmd.append(url)
@@ -104,11 +104,11 @@ def download_video(url: str, *, sessdata: str = "", cookies_file: str = "", outp
     return candidates[0]
 
 
-def download_audio(url: str, *, sessdata: str = "", cookies_file: str = "", output_dir: Path | None = None) -> Path:
+def download_audio(url: str, *, sessdata: str = "", cookies_str: str = "", output_dir: Path | None = None) -> Path:
     """用 yt-dlp 只下载音频（m4a），返回音频文件路径。
 
     音频文件小（~8MB/10分钟），下载快。whisper 只需要音频。
-    cookies_file 用于抖音等需要完整 cookie 文件的平台（B站用 sessdata）。
+    cookies_str 用于抖音等需要 cookie 字符串的平台（B站用 sessdata）。
     """
     import sys
 
@@ -125,7 +125,7 @@ def download_audio(url: str, *, sessdata: str = "", cookies_file: str = "", outp
         "--socket-timeout", "30",
         "-o", output_template,
     ]
-    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_file=cookies_file, output_dir=out_dir)
+    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_str=cookies_str, output_dir=out_dir)
     if cookie:
         cmd.extend(["--cookies", cookie])
     cmd.append(url)
@@ -152,22 +152,39 @@ def _write_cookies(sessdata: str, output_dir: Path) -> Path:
 
 
 def _resolve_cookie_file(
-    *, sessdata: str = "", cookies_file: str = "", output_dir: Path | None = None
+    *, sessdata: str = "", cookies_str: str = "", output_dir: Path | None = None
 ) -> str | None:
-    """统一 cookie 处理：cookies_file（完整 cookie 文件，如抖音）优先于 sessdata（B站 SESSDATA）。
+    """统一 cookie 处理：cookies_str（抖音 cookie 字符串）优先于 sessdata（B站 SESSDATA）。
 
     返回 cookie 文件路径或 None（无 cookie）。
     """
-    if cookies_file:
-        from pathlib import Path as _P
-
-        p = _P(cookies_file)
-        if p.is_file():
-            return str(p)
+    if cookies_str:
+        out_dir = output_dir or Path(tempfile.mkdtemp(prefix="cookies_"))
+        return str(_write_cookie_string(cookies_str, out_dir))
     if sessdata:
         out_dir = output_dir or Path(tempfile.mkdtemp(prefix="cookies_"))
         return str(_write_cookies(sessdata, out_dir))
     return None
+
+
+def _write_cookie_string(cookies_str: str, output_dir: Path) -> Path:
+    """把 cookie 字符串（key=value; key=value 格式，从浏览器 dev tools 复制）写成 Netscape cookie 文件。
+
+    用于抖音等需要多个 cookie 的平台（ttwid/msToken/__ac_nonce 等）。
+    """
+    cookie_file = output_dir / "cookies.txt"
+    lines = ["# Netscape HTTP Cookie File\n"]
+    for part in cookies_str.split(";"):
+        part = part.strip()
+        if "=" not in part:
+            continue
+        name, _, value = part.partition("=")
+        name = name.strip()
+        value = value.strip()
+        if name:
+            lines.append(f".douyin.com\tTRUE\t/\tFALSE\t0\t{name}\t{value}\n")
+    cookie_file.write_text("".join(lines), encoding="utf-8")
+    return cookie_file
 
 
 def extract_audio(video_path: Path, output_dir: Path) -> Path:
@@ -329,7 +346,7 @@ def build_video_markdown(
     return "\n".join(parts)
 
 
-def _fetch_video_info(url: str, *, sessdata: str = "", cookies_file: str = "") -> dict:
+def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "") -> dict:
     """用 yt-dlp 提取视频元信息（不下载，只取 JSON）。平台无关。
 
     返回 {title, duration, uploader, description, webpage_url}。
@@ -344,7 +361,7 @@ def _fetch_video_info(url: str, *, sessdata: str = "", cookies_file: str = "") -
         "--no-playlist", "--quiet",
         "--socket-timeout", "30",
     ]
-    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_file=cookies_file, output_dir=output_dir)
+    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
     if cookie:
         cmd.extend(["--cookies", cookie])
     cmd.append(url)
@@ -367,7 +384,7 @@ def extract_video_content(
     url: str,
     *,
     sessdata: str = "",
-    cookies_file: str = "",
+    cookies_str: str = "",
     client=None,
 ) -> VideoContent:
     """主入口：下载音频 → whisper 转写 → （可选）下载视频提取帧 → 拼 markdown。
@@ -376,14 +393,14 @@ def extract_video_content(
     不依赖平台字幕系统，直接从音频转写——内容可靠。
     需要 yt-dlp + ffmpeg + whisper + LLMClient（视觉模型，可选）。
 
-    sessdata 用于 B站（SESSDATA cookie）；cookies_file 用于抖音等需要完整 cookie 文件的平台。
+    sessdata 用于 B站（SESSDATA cookie）；cookies_str 用于抖音等需要 cookie 字符串的平台。
     """
     import shutil
 
     output_dir = Path(tempfile.mkdtemp(prefix="video_extract_"))
 
     # ① 获取视频元信息（yt-dlp --dump-json，平台无关）
-    info = _fetch_video_info(url, sessdata=sessdata, cookies_file=cookies_file)
+    info = _fetch_video_info(url, sessdata=sessdata, cookies_str=cookies_str)
     title = info["title"]
     description = info["description"]
     owner_name = info["uploader"]
@@ -401,7 +418,7 @@ def extract_video_content(
         )
 
     # ② 下载音频（总是执行——小文件、可靠）
-    audio_file = download_audio(resolved_url, sessdata=sessdata, cookies_file=cookies_file, output_dir=output_dir)
+    audio_file = download_audio(resolved_url, sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
     wav_path = extract_audio(audio_file, output_dir)
 
     # ③ whisper 转写
@@ -411,7 +428,7 @@ def extract_video_content(
     frame_descriptions: list[FrameDescription] = []
     if client is not None:
         try:
-            video_path = download_video(resolved_url, sessdata=sessdata, cookies_file=cookies_file, output_dir=output_dir)
+            video_path = download_video(resolved_url, sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
             frames = extract_key_frames(video_path, output_dir)
             if frames:
                 frame_descriptions = describe_frames(frames, client=client)

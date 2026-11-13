@@ -224,7 +224,6 @@ async def extract_and_import_video(
     source_id: int,
     mode: str = "whisper",
     sessdata: str = "",
-    cookies_file: str = "",
 ) -> dict:
     """arq 任务：异步视频提取 → 写 markdown → 跑 pipeline。
 
@@ -242,11 +241,14 @@ async def extract_and_import_video(
 
     from app.service.imports import run_import_async
     from app.service.llm.resolve import resolve_charter, resolve_llm_config
+    from app.repo.settings import SettingsRepo
 
-    # 解析 LLM 配置（同 import_file）
+    # 解析 LLM 配置 + 抖音 cookies（同 import_file 模式，从 DB 读）
     async with session_factory() as session:
         charter = await resolve_charter(session, owner_id)
         base_url, api_key, model = await resolve_llm_config(session, owner_id)
+        settings_row = await SettingsRepo(session, owner_id).get()
+        douyin_cookies = (settings_row.douyin_cookies if settings_row else None) or ""
     client = (
         LLMClient(
             base_url=base_url,
@@ -265,7 +267,7 @@ async def extract_and_import_video(
 
             await _update_video_stage(source_id, "下载音频中…", owner_id)
             vc = await asyncio.to_thread(
-                extract_video_content, url, sessdata=sessdata, cookies_file=cookies_file, client=client,
+                extract_video_content, url, sessdata=sessdata, cookies_str=douyin_cookies, client=client,
             )
             markdown_content = vc.markdown
             video_title = vc.title
@@ -325,20 +327,20 @@ async def extract_and_import_video(
 
 async def enqueue_video_extract(
     url: str, *, mode: str, source_id: int, owner_id: int,
-    sessdata: str = "", cookies_file: str = "",
+    sessdata: str = "",
 ) -> str | None:
     """入队视频提取任务。
 
     ``_timeout=7200``（2 小时）：whisper base GPU ~1x 实时，60 分钟视频 ≈ 60 分钟转写。
     ``_job_id`` 用 source_id 保证幂等（同一 source 不会重复入队）。
-    sessdata 用于 B站；cookies_file 用于抖音等需要完整 cookie 文件的平台。
+    sessdata 用于 B站；抖音 cookies 由 worker 从 DB 设置页读取（不需要 API 传）。
     """
     pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     try:
         job = await pool.enqueue_job(
             "extract_and_import_video", url,
             mode=mode, source_id=source_id, owner_id=owner_id,
-            sessdata=sessdata, cookies_file=cookies_file,
+            sessdata=sessdata,
             _job_id=f"video:{source_id}",
             _timeout=7200,
         )

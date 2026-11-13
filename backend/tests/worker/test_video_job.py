@@ -79,7 +79,7 @@ def test_extract_video_success_calls_pipeline_with_source_id(
     # fake extraction
     fake_vc = type("VC", (), {"markdown": "# 测试视频\n\n内容", "title": "测试视频"})()
 
-    def fake_extract(url, *, sessdata="", cookies_file="", client=None):
+    def fake_extract(url, *, sessdata="", cookies_str="", client=None):
         return fake_vc
 
     monkeypatch.setattr(vextract, "extract_video_content", fake_extract)
@@ -183,7 +183,7 @@ def test_extract_video_failure_marks_job_failed(
         monkeypatch.setattr(worker_module, "session_factory", factory)
 
         # fake extraction raises
-        def boom(url, *, sessdata="", cookies_file="", client=None):
+        def boom(url, *, sessdata="", cookies_str="", client=None):
             raise RuntimeError("download failed")
 
         monkeypatch.setattr(vextract, "extract_video_content", boom)

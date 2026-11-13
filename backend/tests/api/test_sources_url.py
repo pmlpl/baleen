@@ -270,7 +270,7 @@ def test_douyin_whisper_import_async(env) -> None:
     call = env.video_calls[0]
     assert call["mode"] == "whisper"
     assert call["source_id"] == body["source_id"]
-    # 抖音不传 sessdata（B站 cookie），cookies_file 由 settings 决定
+    # 抖音不传 sessdata（B站 cookie），cookies 由 worker 从设置页读取
     assert call["sessdata"] == ""
     assert env.calls == []  # 不走 enqueue_import
 

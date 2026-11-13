@@ -299,8 +299,7 @@ async def import_from_url(
             video_id = extract_douyin_id(body.url) or "unknown"
             placeholder_sha = f"video:douyin:{video_id}:whisper"
             filename = f"douyin_{video_id}.md"
-            video_sessdata = ""
-            video_cookies = settings.douyin_cookies_file
+            video_sessdata = ""  # 抖音不用 B站 sessdata；cookies 由 worker 从设置页读
         else:
             bvid = extract_bvid(body.url)
             if not bvid:
@@ -311,7 +310,6 @@ async def import_from_url(
             placeholder_sha = f"video:{bvid}:whisper"
             filename = f"{bvid}.md"
             video_sessdata = sessdata
-            video_cookies = ""
 
         repos = Repos(session, owner_id=owner_id)
         source, source_created = await repos.sources.create_or_get_by_sha256(
@@ -344,7 +342,6 @@ async def import_from_url(
                     source_id=source.id,
                     owner_id=owner_id,
                     sessdata=video_sessdata,
-                    cookies_file=video_cookies,
                 )
             except Exception as exc:
                 raise HTTPException(
