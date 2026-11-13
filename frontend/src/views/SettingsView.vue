@@ -135,12 +135,15 @@ onMounted(() => {
         <textarea
           v-model="douyinCookies"
           class="input textarea-cookies"
-          placeholder="打开 douyin.com → F12 → Application → Cookies → 复制 ttwid 的值粘贴到这里"
+          placeholder="粘贴 Cookie 值，例如 ttwid=xxx%2F...; msToken=xxx; ..."
           rows="3"
           autocomplete="off"
         />
         <span v-if="douyinSet" class="muted key-hint">已设置(末四位 {{ douyinTail }})</span>
-        <span class="muted key-hint">抖音视频导入需要。只需 ttwid 一个值，或粘贴完整 Cookie 头。</span>
+        <span class="muted key-hint">
+          获取：打开 douyin.com → F12 → Network(网络) → 随便点一个 douyin.com 请求 →
+          Request Headers(请求标头) → 复制整个 Cookie 的值粘贴到这里
+        </span>
       </label>
       <button class="btn btn--primary" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : '保存' }}

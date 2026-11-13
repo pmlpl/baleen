@@ -184,17 +184,21 @@ def _write_cookie_string(cookies_str: str, output_dir: Path) -> Path:
     """把 cookie 字符串（key=value; key=value 格式，从浏览器 dev tools 复制）写成 Netscape cookie 文件。
 
     用于抖音等需要多个 cookie 的平台（ttwid/msToken/__ac_nonce 等）。
+    兼容粘贴整个 Cookie 请求头（带 "Cookie:" 前缀）——自动剥掉前缀再解析。
     """
     cookie_file = output_dir / "cookies.txt"
+    text = cookies_str.strip()
+    if text.lower().startswith("cookie:"):
+        text = text[7:].strip()
     lines = ["# Netscape HTTP Cookie File\n"]
-    for part in cookies_str.split(";"):
+    for part in text.split(";"):
         part = part.strip()
         if "=" not in part:
             continue
         name, _, value = part.partition("=")
         name = name.strip()
         value = value.strip()
-        if name:
+        if name and " " not in name:
             lines.append(f".douyin.com\tTRUE\t/\tFALSE\t0\t{name}\t{value}\n")
     cookie_file.write_text("".join(lines), encoding="utf-8")
     return cookie_file
