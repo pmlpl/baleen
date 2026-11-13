@@ -355,13 +355,13 @@ def extract_video_content(
             pass
 
     # 时长检查：whisper base 模型转写速度约 1x 实时（GPU），
-    # 30 分钟视频 ≈ 30 分钟转写 ≈ 1800 秒，远超 API 超时。限制在 30 分钟以内。
-    MAX_WHISPER_DURATION = 1800  # 30 分钟
+    # 60 分钟视频 ≈ 60 分钟转写。worker 的 _timeout=7200（2 小时）够用。
+    MAX_WHISPER_DURATION = 3600  # 60 分钟
     if duration > MAX_WHISPER_DURATION:
         minutes = duration // 60
         raise BilibiliError(
-            f"视频时长 {minutes} 分钟，超过 whisper 模式 30 分钟上限。"
-            "whisper 转写长视频需要几十分钟，请改用「字幕快速」模式，或选择较短的视频。"
+            f"视频时长 {minutes} 分钟，超过 whisper 模式 60 分钟上限。"
+            "whisper 转写长视频需要较长时间，请改用「字幕快速」模式，或选择较短的视频。"
         )
 
     # ② 下载音频（总是执行——小文件、可靠）

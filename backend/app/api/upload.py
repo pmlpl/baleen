@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentOwnerDep, get_session
 from app.repo import Repos
 from app.service.parse.router import IMAGE_EXTS, PARSERS, UNSUPPORTED_MESSAGES
-from app.worker import STAGING_ROOT, enqueue_import
+from app.worker import STAGING_ROOT, enqueue_import, enqueue_video_extract
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 BODY_LIMIT_BYTES = 55 * 1024 * 1024
@@ -121,6 +121,8 @@ class SourceStatus(BaseModel):
     g2_skipped: bool
     # 导入时是否跑过标题结构二次加工
     headings_rewritten: bool
+    # 视频异步提取进度（下载音频中/whisper转写中/❌错误），非视频导入为 None
+    video_stage: str | None = None
     note_id: int | None
     created_at: datetime
     job: JobOut | None
@@ -260,9 +262,11 @@ async def import_from_url(
 ) -> UploadResponse:
     """通过 B 站视频链接导入:两种模式可选。
 
-    - ``mode="subtitle"``：拉 B 站 CC/AI 字幕（秒级，但不稳定）
-    - ``mode="whisper"``：下载音频 + whisper 转写 + 帧提取（分钟级，但可靠）
-    两种模式都产出 markdown，后续 sha256/暂存/blob/enqueue/dedupe 完全一致。
+    - ``mode="subtitle"``：拉 B 站 CC/AI 字幕（秒级，同步，但不稳定）
+    - ``mode="whisper"``：异步——立即返回 201，worker 后台下载音频 + whisper 转写 + 帧提取（分钟级，可靠）
+    字幕模式产出 markdown 后走常规 sha256/暂存/blob/enqueue/dedupe；
+    whisper 模式创建 stub source + job（占位 sha），入队 ``extract_and_import_video``，
+    worker 提取完 markdown 后调 ``run_import_async(source_id=...)`` 入库。
     """
     from app.core.config import get_settings
     from app.service.bilibili import BilibiliError, fetch_bilibili, sanitize_filename
@@ -284,40 +288,77 @@ async def import_from_url(
 
     # 根据 mode 选择内容提取方式
     if body.mode == "whisper":
-        # whisper 模式：下载音频 → whisper 转写 → （可选）帧描述
-        from app.service.video_extractor import extract_video_content
+        # whisper 模式：异步——创建 stub source + job，入队后台提取，立即返回。
+        # 不再阻塞 API 请求（之前同步调用 extract_video_content 导致 502 超时）。
+        from app.service.bilibili import extract_bvid
 
-        llm_client = LLMClient(
-            base_url=_base, api_key=api_key, model=_model,
-            timeout=settings.llm_long_task_timeout,
+        bvid = extract_bvid(body.url)
+        if not bvid:
+            raise HTTPException(
+                status_code=400,
+                detail="无法识别 B 站视频链接，请确认 URL 包含 BV 号或 b23.tv 短链",
+            )
+        placeholder_sha = f"video:{bvid}:whisper"
+        filename = f"{bvid}.md"
+
+        repos = Repos(session, owner_id=owner_id)
+        source, source_created = await repos.sources.create_or_get_by_sha256(
+            sha256=placeholder_sha,
+            filename=filename,
+            ext=".md",
+            size_bytes=0,
+            storage_path="",
+            mime="text/markdown",
+            parse_status="pending",
         )
-        try:
-            vc = await asyncio.to_thread(
-                extract_video_content, body.url,
-                sessdata=sessdata, client=llm_client,
-            )
-            markdown_content = vc.markdown
-            video_title = vc.title
-        except BilibiliError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(
-                status_code=502,
-                detail=f"视频提取失败:{type(exc).__name__}: {exc}"[:300],
-            ) from exc
-    else:
-        # 字幕模式（现有逻辑）
-        try:
-            result = await asyncio.to_thread(fetch_bilibili, body.url, sessdata=sessdata)
-        except BilibiliError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        except Exception:
-            raise HTTPException(
-                status_code=502,
-                detail="B 站接口请求失败,请稍后重试",
-            )
-        markdown_content = result.markdown
-        video_title = result.info.title
+        # 设置视频元信息 + 进度（前端轮询读 video_stage）
+        meta = {"video_url": body.url, "video_mode": "whisper", "video_stage": "排队中"}
+        await repos.sources.update_parse_meta(source.id, meta)
+        job, job_created = await repos.jobs.create_or_get(
+            dedupe_key=DEDUPE_PREFIX + placeholder_sha,
+            payload={"url": body.url, "mode": "whisper", "source_id": source.id},
+            kind="import",
+        )
+        await session.commit()
+
+        deduped = not job_created
+        if job.status in ("done", "running"):
+            pass  # 已完成或在途，不重复入队
+        else:
+            try:
+                await enqueue_video_extract(
+                    body.url,
+                    mode="whisper",
+                    source_id=source.id,
+                    owner_id=owner_id,
+                    sessdata=sessdata,
+                )
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=f"任务队列不可用,请稍后重试:{type(exc).__name__}",
+                ) from exc
+
+        response.status_code = 201 if job_created else 200
+        return UploadResponse(
+            source_id=source.id,
+            job_id=job.id,
+            job_status=job.status,
+            deduped=deduped,
+        )
+
+    # 字幕模式（同步快速路径：秒级拉 B 站字幕 → 写 markdown → 入库）
+    try:
+        result = await asyncio.to_thread(fetch_bilibili, body.url, sessdata=sessdata)
+    except BilibiliError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        raise HTTPException(
+            status_code=502,
+            detail="B 站接口请求失败,请稍后重试",
+        )
+    markdown_content = result.markdown
+    video_title = result.info.title
 
     # 写 markdown 到暂存区(与 upload 同款:每次一个 uuid 目录)
     filename = sanitize_filename(video_title) + ".md"
@@ -419,6 +460,7 @@ async def get_source_status(
         warnings=list(meta.get("warnings") or []),
         g2_skipped=bool(meta.get("g2_skipped")),
         headings_rewritten=bool(meta.get("headings_rewritten")),
+        video_stage=meta.get("video_stage"),
         note_id=note.id if note else None,
         created_at=source.created_at,
         job=(

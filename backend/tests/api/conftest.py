@@ -60,6 +60,7 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(pipeline_module, "STORAGE_ROOT", tmp_path / "storage")
     monkeypatch.setattr(upload_module, "STAGING_ROOT", tmp_path / "uploads")
     calls: list[dict[str, Any]] = []
+    video_calls: list[dict[str, Any]] = []
 
     async def fake_enqueue(
         file_path: str, *, dedupe_key: str, no_llm: bool = False, owner_id: int = 1
@@ -74,7 +75,22 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         )
         return dedupe_key
 
+    async def fake_video_enqueue(
+        url: str, *, mode: str, source_id: int, owner_id: int, sessdata: str = "",
+    ) -> str | None:
+        video_calls.append(
+            {
+                "url": url,
+                "mode": mode,
+                "source_id": source_id,
+                "owner_id": owner_id,
+                "sessdata": sessdata,
+            }
+        )
+        return f"video:{source_id}"
+
     monkeypatch.setattr(upload_module, "enqueue_import", fake_enqueue)
+    monkeypatch.setattr(upload_module, "enqueue_video_extract", fake_video_enqueue)
 
     # 外层事务在 portal 循环上急切建立;所有请求共享,结束一并回滚
     shared: dict[str, Any] = {}
@@ -118,6 +134,7 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 yield SimpleNamespace(
                     client=client,
                     calls=calls,
+                    video_calls=video_calls,
                     shared=shared,
                     tmp_path=tmp_path,
                     token=shared["token"],

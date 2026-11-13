@@ -180,6 +180,169 @@ async def enqueue_import(
         await pool.aclose()
 
 
+async def _update_video_stage(source_id: int, stage: str, owner_id: int) -> None:
+    """更新 source.parse_meta["video_stage"]，供前端轮询显示提取进度。
+
+    独立 DB session，不影响 pipeline 的 session。
+    """
+    async with session_factory() as session:
+        repos = Repos(session, owner_id=owner_id)
+        source = await repos.sources.get(source_id)
+        if source is None:
+            return
+        meta = dict(source.parse_meta or {})
+        meta["video_stage"] = stage
+        await repos.sources.update_parse_meta(source_id, meta)
+        await session.commit()
+
+
+async def _fail_video_job(source_id: int, owner_id: int, exc: Exception) -> None:
+    """提取阶段失败：标记 job failed + source.parse_meta 显示错误。"""
+    from app.service.imports.pipeline import DEDUPE_PREFIX
+
+    async with session_factory() as session:
+        repos = Repos(session, owner_id=owner_id)
+        source = await repos.sources.get(source_id)
+        if source is not None:
+            job = await repos.jobs.get_by_dedupe_key(DEDUPE_PREFIX + source.sha256)
+            if job is not None:
+                await repos.jobs.update_status(
+                    job.id, "failed",
+                    last_error=f"{type(exc).__name__}: {exc}"[:1000],
+                )
+            meta = dict(source.parse_meta or {})
+            meta["video_stage"] = f"❌ {type(exc).__name__}: {str(exc)[:80]}"
+            await repos.sources.update_parse_meta(source_id, meta)
+        await session.commit()
+
+
+async def extract_and_import_video(
+    ctx: dict,
+    url: str,
+    *,
+    owner_id: int,
+    source_id: int,
+    mode: str = "whisper",
+    sessdata: str = "",
+) -> dict:
+    """arq 任务：异步视频提取 → 写 markdown → 跑 pipeline。
+
+    替代 upload.py 中的同步 ``extract_video_content`` 调用。
+    API 立即返回 201，worker 在后台完成：
+    1. 下载音频 → whisper 转写（或字幕模式拉字幕）
+    2. 写 markdown 到暂存区
+    3. 调 ``run_import_async(source_id=...)`` — pipeline 用预创建的 source+job
+
+    进度通过 source.parse_meta["video_stage"] 传达给前端轮询。
+    提取失败 → 标记 job failed + re-raise（arq 自动重试）。
+    pipeline 失败 → pipeline 自己的异常处理器标记 job failed。
+    """
+    import uuid
+
+    from app.service.imports import run_import_async
+    from app.service.llm.resolve import resolve_charter, resolve_llm_config
+
+    # 解析 LLM 配置（同 import_file）
+    async with session_factory() as session:
+        charter = await resolve_charter(session, owner_id)
+        base_url, api_key, model = await resolve_llm_config(session, owner_id)
+    client = (
+        LLMClient(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            timeout=get_settings().llm_long_task_timeout,
+        )
+        if api_key
+        else None
+    )
+
+    # ---- Phase 1: 提取（下载音频 → whisper / 拉字幕）----
+    try:
+        if mode == "whisper":
+            from app.service.video_extractor import extract_video_content
+
+            await _update_video_stage(source_id, "下载音频中…", owner_id)
+            vc = await asyncio.to_thread(
+                extract_video_content, url, sessdata=sessdata, client=client,
+            )
+            markdown_content = vc.markdown
+            video_title = vc.title
+        else:
+            from app.service.bilibili import fetch_bilibili, sanitize_filename
+
+            await _update_video_stage(source_id, "拉取字幕中…", owner_id)
+            result = await asyncio.to_thread(fetch_bilibili, url, sessdata=sessdata)
+            markdown_content = result.markdown
+            video_title = result.info.title
+    except Exception as exc:
+        await _fail_video_job(source_id, owner_id, exc)
+        raise
+
+    # ---- Phase 2: 写 markdown 到暂存区 ----
+    from app.service.bilibili import sanitize_filename
+
+    filename = sanitize_filename(video_title) + ".md"
+    staging_dir = STAGING_ROOT / uuid.uuid4().hex
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staging = staging_dir / filename
+    staging.write_text(markdown_content, encoding="utf-8")
+
+    # ---- Phase 3: 跑 pipeline（用预创建 source + job）----
+    result = await run_import_async(
+        str(staging),
+        no_llm=False,
+        worker=WORKER_NAME,
+        charter=charter,
+        owner_id=owner_id,
+        client=client,
+        source_id=source_id,
+    )
+
+    # 清理暂存（成功才删，失败保留供重试）
+    if not result.deduped:
+        _remove_staging(str(staging))
+
+    # best-effort 摘要会话（同 import_file）
+    if result.note_id is not None and not result.deduped:
+        try:
+            from app.service.qa.summarizer import summarize_import
+
+            qa_session = await summarize_import(
+                result.note_id, Path(staging).name, owner_id=owner_id,
+            )
+            if qa_session is not None:
+                log.info(
+                    "视频导入后摘要会话已建: qa_sessions #%s(笔记 #%s)",
+                    qa_session.id, result.note_id,
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("视频导入后摘要生成失败(不影响导入): %s", exc)
+
+    return asdict(result)
+
+
+async def enqueue_video_extract(
+    url: str, *, mode: str, source_id: int, owner_id: int, sessdata: str = "",
+) -> str | None:
+    """入队视频提取任务。
+
+    ``_timeout=7200``（2 小时）：whisper base GPU ~1x 实时，60 分钟视频 ≈ 60 分钟转写。
+    ``_job_id`` 用 source_id 保证幂等（同一 source 不会重复入队）。
+    """
+    pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
+    try:
+        job = await pool.enqueue_job(
+            "extract_and_import_video", url,
+            mode=mode, source_id=source_id, owner_id=owner_id, sessdata=sessdata,
+            _job_id=f"video:{source_id}",
+            _timeout=7200,
+        )
+        return job.job_id if job is not None else None
+    finally:
+        await pool.aclose()
+
+
 async def on_startup(ctx: dict) -> None:
     await asyncio.to_thread(clean_stale_uploads)
 
@@ -189,9 +352,10 @@ class WorkerSettings:
 
     max_jobs=1:bge 在 GPU 上,导入串行;job_timeout=900s 按最坏 300s×3 倍余量定(协调方拍板)。
     no_llm 模式若仍超时说明有死循环,不许靠调大 timeout 糊过去。
+    视频提取任务(extract_and_import_video)通过 enqueue 时的 _timeout=7200 单独给 2 小时。
     """
 
-    functions = [import_file]
+    functions = [import_file, extract_and_import_video]
     on_startup = on_startup
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     max_jobs = 1

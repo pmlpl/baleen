@@ -5,6 +5,8 @@ from .worker import (
     WorkerSettings,
     clean_stale_uploads,
     enqueue_import,
+    enqueue_video_extract,
+    extract_and_import_video,
     import_file,
 )
 
@@ -13,5 +15,7 @@ __all__ = [
     "WorkerSettings",
     "clean_stale_uploads",
     "enqueue_import",
+    "enqueue_video_extract",
+    "extract_and_import_video",
     "import_file",
 ]

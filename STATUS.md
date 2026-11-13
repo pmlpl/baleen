@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-12 · 视频笔记页 + whisper(v22);基线 **423 passed**
+**最后更新**：2026-11-13 · whisper 异步化(v23);基线 **434 passed**
 
 ### 已完成模块
 
@@ -59,12 +59,12 @@
 | **对话附件（v17）** | `qa.py` `attachments`/`images` + QaView 📎 | ✅ 文本入 `<reference_files>` 不入库；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级；无视觉模型也能用 |
 | **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
-| **视频笔记页 + whisper（v22）** | `app/service/video_extractor.py` + `VideoView.vue` + `POST /api/sources/url?mode=whisper` | ✅ yt-dlp 下载音频→whisper 转写→ffmpeg 帧提取→视觉模型描述；B 站嵌入式播放器；不依赖 B 站字幕系统（内容可靠）；多分P+短链+重试；423 passed |
+| **视频笔记页 + whisper（v22→v23）** | `app/service/video_extractor.py` + `VideoView.vue` + `POST /api/sources/url?mode=whisper` | ✅ yt-dlp 下载音频→whisper 转写→帧提取→视觉描述；B 站嵌入式播放器；**v23: whisper 异步化**——API 立即返回 201，worker 后台提取（≤60min 视频，2h 超时），前端多阶段进度（video_stage）；434 passed |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  371 passed
+cd backend && uv run pytest -q     →  434 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -81,6 +81,8 @@ cd backend && uv run pytest -q     →  371 passed
 → **346**（挂图不搜网 1;2026-11-05）
 → **366**（引用重编号/出处清单 11 + finish_reason 2 + 截断续写 7;2026-11-05）
 → **371**（笔记渲染 table/mermaid 修复;2026-11-06）
+→ **423**（B站字幕+G2编辑器+whisper;2026-11-12）
+→ **434**（whisper 异步化;2026-11-13）
 
 **任何新任务都不许把这个数降下来。**
 

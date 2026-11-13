@@ -32,6 +32,10 @@ def test_worker_settings_registers_import_task() -> None:
     assert WorkerSettings.max_jobs == 1
     assert WorkerSettings.job_timeout == 900
     assert WorkerSettings.redis_settings.host  # 来自 config.redis_url,非默认 127.0.0.1 也能构造
+    # v23: 视频异步提取任务也注册了
+    from app.worker.worker import extract_and_import_video
+
+    assert extract_and_import_video in WorkerSettings.functions
 
 
 # ---------- 暂存区清理 ----------

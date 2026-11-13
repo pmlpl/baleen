@@ -62,6 +62,8 @@ export interface SourceDetail {
   g2_skipped: boolean
   /** 导入时是否跑过 AI 标题结构整理 */
   headings_rewritten: boolean
+  /** 视频异步提取进度（下载音频中/whisper转写中/❌错误），非视频导入为 null */
+  video_stage: string | null
   note_id: number | null
   created_at: string
   job: JobInfo
@@ -156,6 +158,7 @@ function toSourceDetail(raw: unknown): SourceDetail {
     warnings: asTextArray(data.warnings),
     g2_skipped: data.g2_skipped === true,
     headings_rewritten: data.headings_rewritten === true,
+    video_stage: asNullableText(data.video_stage),
     note_id: typeof data.note_id === 'number' ? data.note_id : null,
     created_at: asText(data.created_at),
     job: toJobInfo(data.job),

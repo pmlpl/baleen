@@ -30,10 +30,10 @@ def _fake_bilibili_result() -> bilibili_module.BilibiliResult:
     )
 
 
-def _post_url(env, url: str = "https://www.bilibili.com/video/BV1GJ411x7h7/"):
+def _post_url(env, url: str = "https://www.bilibili.com/video/BV1GJ411x7h7/", mode: str = "subtitle"):
     return env.client.post(
         "/api/sources/url",
-        json={"url": url},
+        json={"url": url, "mode": mode},
     )
 
 
@@ -153,3 +153,99 @@ def test_url_import_filename_sanitized(env, monkeypatch: pytest.MonkeyPatch) -> 
     assert "*" not in staging.name
     assert "?" not in staging.name
     assert staging.suffix == ".md"
+
+
+# ==================== whisper 异步模式测试 ====================
+
+
+def test_whisper_import_async_returns_immediately(env) -> None:
+    """whisper 模式：API 立即返回 201，不阻塞；enqueue_video_extract 被调用。"""
+    resp = _post_url(env, mode="whisper")
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["deduped"] is False
+    assert body["job_status"] == "queued"
+    assert body["source_id"] > 0
+    assert body["job_id"] > 0
+
+    # enqueue_video_extract 被调了一次（不是 enqueue_import）
+    assert len(env.video_calls) == 1
+    call = env.video_calls[0]
+    assert call["mode"] == "whisper"
+    assert call["source_id"] == body["source_id"]
+    assert call["owner_id"] == 1
+    # enqueue_import 没被调（whisper 走 video 队列）
+    assert env.calls == []
+
+
+def test_whisper_import_creates_stub_source(env) -> None:
+    """whisper 模式：创建占位 sha 的 stub source + video_extract job。"""
+    resp = _post_url(env, mode="whisper")
+    body = resp.json()
+    source_id = body["source_id"]
+
+    async def check() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            # 占位 sha（不更新为真实 sha）
+            assert source.sha256.startswith("video:")
+            assert "whisper" in source.sha256
+            assert source.size_bytes == 0  # stub，还没提取
+            assert source.parse_status == "pending"
+            # parse_meta 有视频元信息
+            meta = source.parse_meta
+            assert meta["video_mode"] == "whisper"
+            assert meta["video_url"] is not None
+            assert meta["video_stage"] == "排队中"
+            # job 的 kind 是 import（视频提取也是一种 import）
+            job = await repos.jobs.get_by_dedupe_key(f"import:{source.sha256}")
+            assert job is not None
+            assert job.kind == "import"
+
+    env.client.portal.call(check)
+
+
+def test_whisper_import_dedupe(env) -> None:
+    """whisper 模式：同一 BVID 重复导入 → deduped（同 source + job 复用）。"""
+    first = _post_url(env, mode="whisper")
+    assert first.status_code == 201
+    second = _post_url(env, mode="whisper")
+    assert second.status_code == 200
+    body = second.json()
+    assert body["deduped"] is True
+    assert body["source_id"] == first.json()["source_id"]
+
+
+def test_whisper_import_no_api_key_rejected(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """whisper 模式：没配 API Key → 400（不入队）。"""
+    from app.service.llm import resolve as resolve_module
+
+    async def fake_resolve(session, owner_id):
+        return ("http://fake/v1", "", "fake-model")
+
+    monkeypatch.setattr(resolve_module, "resolve_llm_config", fake_resolve)
+    resp = _post_url(env, mode="whisper")
+    assert resp.status_code == 400
+    assert "API Key" in resp.json()["detail"]
+    assert env.video_calls == []
+
+
+def test_whisper_import_invalid_url(env) -> None:
+    """whisper 模式：非 B 站链接 → 400。"""
+    resp = _post_url(env, url="https://www.youtube.com/watch?v=abc", mode="whisper")
+    assert resp.status_code == 400
+
+
+def test_source_status_includes_video_stage(env) -> None:
+    """GET /api/sources/{id} 返回 video_stage 字段。"""
+    resp = _post_url(env, mode="whisper")
+    body = resp.json()
+    status = env.client.get(f"/api/sources/{body['source_id']}")
+    assert status.status_code == 200
+    detail = status.json()
+    assert "video_stage" in detail
+    assert detail["video_stage"] == "排队中"

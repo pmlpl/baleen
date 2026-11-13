@@ -70,6 +70,42 @@ class SourcesRepo(Repo):
             .values(parse_status=parse_status)
         )
 
+    async def update_content(
+        self,
+        source_id: int,
+        *,
+        storage_path: str,
+        size_bytes: int,
+        filename: str,
+        ext: str,
+        mime: str | None = None,
+    ) -> None:
+        """更新 source 的内容字段（视频异步路径：提取完成后填入真实内容信息）。
+
+        sha256 保持占位值不变——dedupe 基于 BVID，不需要真实 sha。
+        """
+        values: dict = {
+            "storage_path": storage_path,
+            "size_bytes": size_bytes,
+            "filename": filename,
+            "ext": ext,
+        }
+        if mime is not None:
+            values["mime"] = mime
+        await self.session.execute(
+            update(Source)
+            .where(Source.id == source_id, Source.owner_id == self.owner_id)
+            .values(**values)
+        )
+
+    async def update_parse_meta(self, source_id: int, meta: dict) -> None:
+        """只更新 parse_meta 字段（视频进度更新用，不影响 parse_status/doc）。"""
+        await self.session.execute(
+            update(Source)
+            .where(Source.id == source_id, Source.owner_id == self.owner_id)
+            .values(parse_meta=meta)
+        )
+
     async def count_notes_for(self, source_id: int) -> int:
         """还挂着这个 source 的笔记行数(含 archived——软删的行也还占着引用)。"""
         return int(

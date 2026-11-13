@@ -185,6 +185,7 @@ async def run_import_async(
     embed_func: EmbedFunc | None = None,
     token_counter: TokenCounter | None = None,
     worker: str = WORKER,
+    source_id: int | None = None,
 ) -> ImportResult:
     """异步核心;所有外部依赖可注入(测试用假 embedder / 假 token 计数 / 隔离 session)。"""
     path = Path(file_path)
@@ -217,7 +218,6 @@ async def run_import_async(
         return result
 
     factory = session_factory or _default_factory()
-    dedupe_key = DEDUPE_PREFIX + sha
     job_id: int | None = None
     note_id: int | None = None
 
@@ -226,46 +226,73 @@ async def run_import_async(
         try:
             # ---- 去重 + job + source ----
             t = time.perf_counter()
-            job, _ = await repos.jobs.create_or_get(
-                dedupe_key=dedupe_key,
-                payload={"filename": path.name, "no_llm": no_llm},
-            )
-            job_id = job.id
-            existing = await repos.sources.get_by_sha256(sha)
-            if existing is not None and job.status == "done":
-                result.deduped = True
-                result.source_id = existing.id
-                result.parse_status = existing.parse_status
-                note = await repos.notes.get_by_source(existing.id)
-                result.note_id = note.id if note else None
-                g1_run = await repos.review_runs.get(existing.id, "G1")
-                if g1_run is not None:
-                    result.g1_verdict = g1_run.verdict
-                    result.quality = g1_run.quality
-                    result.action = g1_run.action
-                g2_run = await repos.review_runs.get(existing.id, "G2")
-                if g2_run is not None:
-                    result.g2_verdict = g2_run.verdict
-                    result.quality = g2_run.quality
-                    result.action = g2_run.action
-                await session.commit()
-                mark("dedupe", t)
-                return await _finish(repos, job_id, result, result.note_id, session)
-
-            if existing is None:
+            if source_id is not None:
+                # 视频异步路径：API 已预创建 source + job（占位 sha），直接用。
+                # sha256 保持占位值（"video:{bvid}:whisper"），dedupe 基于 BVID；
+                # 真实 sha 存入 parse_meta.content_sha256 供溯源。
+                source = await repos.sources.get(source_id)
+                if source is None:
+                    raise ValueError(f"预创建 source {source_id} 不存在")
+                job = await repos.jobs.get_by_dedupe_key(DEDUPE_PREFIX + source.sha256)
+                if job is None:
+                    raise ValueError(f"source {source_id} 对应的 job 不存在")
+                job_id = job.id
+                result.source_id = source_id
                 storage_path = _store_blob(data, sha)
-                source, _ = await repos.sources.create_or_get_by_sha256(
-                    sha256=sha,
+                await repos.sources.update_content(
+                    source_id,
+                    storage_path=str(storage_path),
+                    size_bytes=len(data),
                     filename=path.name,
                     ext=path.suffix.lower(),
-                    size_bytes=len(data),
-                    storage_path=str(storage_path),
                     mime=mimetypes.guess_type(path.name)[0],
-                    parse_status="pending",  # 等 G0;解析完立刻改为真实状态
                 )
-                result.source_id = source.id
+                meta = dict(source.parse_meta or {})
+                meta["content_sha256"] = sha
+                meta.pop("video_stage", None)  # 清除进度标记，pipeline 接管
+                await repos.sources.update_parse_meta(source_id, meta)
             else:
-                result.source_id = existing.id
+                dedupe_key = DEDUPE_PREFIX + sha
+                job, _ = await repos.jobs.create_or_get(
+                    dedupe_key=dedupe_key,
+                    payload={"filename": path.name, "no_llm": no_llm},
+                )
+                job_id = job.id
+                existing = await repos.sources.get_by_sha256(sha)
+                if existing is not None and job.status == "done":
+                    result.deduped = True
+                    result.source_id = existing.id
+                    result.parse_status = existing.parse_status
+                    note = await repos.notes.get_by_source(existing.id)
+                    result.note_id = note.id if note else None
+                    g1_run = await repos.review_runs.get(existing.id, "G1")
+                    if g1_run is not None:
+                        result.g1_verdict = g1_run.verdict
+                        result.quality = g1_run.quality
+                        result.action = g1_run.action
+                    g2_run = await repos.review_runs.get(existing.id, "G2")
+                    if g2_run is not None:
+                        result.g2_verdict = g2_run.verdict
+                        result.quality = g2_run.quality
+                        result.action = g2_run.action
+                    await session.commit()
+                    mark("dedupe", t)
+                    return await _finish(repos, job_id, result, result.note_id, session)
+
+                if existing is None:
+                    storage_path = _store_blob(data, sha)
+                    source, _ = await repos.sources.create_or_get_by_sha256(
+                        sha256=sha,
+                        filename=path.name,
+                        ext=path.suffix.lower(),
+                        size_bytes=len(data),
+                        storage_path=str(storage_path),
+                        mime=mimetypes.guess_type(path.name)[0],
+                        parse_status="pending",  # 等 G0;解析完立刻改为真实状态
+                    )
+                    result.source_id = source.id
+                else:
+                    result.source_id = existing.id
             await repos.jobs.claim(job_id, worker)
             await session.commit()
             mark("dedupe", t)

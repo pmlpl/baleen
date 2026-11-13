@@ -52,11 +52,13 @@ interface ImportItem {
 const imports = ref<ImportItem[]>([])
 
 const IMPORT_POLL_MS = 2000
-const IMPORT_MAX_POLLS = 300 // 2s × 300 = 10 分钟上限（whisper 模式可能要几分钟）
+const IMPORT_MAX_POLLS = 1800 // 2s × 1800 = 60 分钟上限（whisper 异步可能几十分钟）
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
 function importStageText(detail: SourceDetail): string {
+  // 视频异步提取阶段（下载音频中/whisper转写中/❌错误）——优先显示
+  if (detail.video_stage) return detail.video_stage
   if (detail.job.status === 'queued') return '排队中'
   if (detail.job.status === 'running') {
     return detail.parse_status === 'ok' ? 'AI 整理笔记中' : '解析中'
@@ -85,14 +87,14 @@ async function importVideo(): Promise<void> {
   imports.value = []
 
   const item: ImportItem = {
-    stage: mode.value === 'whisper' ? '下载音频 + whisper 转写中（约 2-3 分钟，请耐心等待）' : '拉取字幕中',
+    stage: mode.value === 'whisper' ? '提交中…' : '拉取字幕中',
     status: 'pending',
     noteId: null,
   }
   imports.value.push(item)
 
   try {
-    // API 调用（whisper 模式会等几分钟）
+    // API 调用（whisper 模式立即返回，worker 后台提取）
     const upload = await createSourceFromUrl(url, mode.value)
 
     if (upload.deduped) {
@@ -100,7 +102,7 @@ async function importVideo(): Promise<void> {
       item.status = 'done'
       item.noteId = null
     } else {
-      item.stage = mode.value === 'whisper' ? 'whisper 完成,AI 整理笔记中' : '排队中'
+      item.stage = importStageText(await getSource(upload.source_id))
       const detail = await waitImportDone(upload.source_id, (d) => {
         item.stage = importStageText(d)
       })

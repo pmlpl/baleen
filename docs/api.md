@@ -1,4 +1,4 @@
-# API 契约 v22
+# API 契约 v23
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -98,27 +98,29 @@ LLM 异常/输出不可解析 → 降级原文入库（不因整理失败丢内�
 
 > ⚠️ **需要非推理模型**。推理模型会把 `max_tokens` 全用在 reasoning 上、`content` 返回空，导致整理降级。
 
-### `POST /api/sources/url`（v20 新增）
+### `POST /api/sources/url`（v20 新增，v23 whisper 改异步）
 
-B 站视频链接导入：后端拉取视频的 CC/AI 字幕，拼成 markdown，走与文件导入完全相同的管线
-（G0→G1→G2→标题整理→切块→向量化）。**不下载视频、不做语音识别**——没有字幕的视频返回 400。
+B 站视频链接导入。两种模式：
+
+- `mode="subtitle"`（默认）：同步拉取 B 站 CC/AI 字幕，拼成 markdown，走常规管线。秒级返回。
+- `mode="whisper"`（v23 改异步）：**立即返回 201**，worker 在后台下载音频 + whisper 转写 + 帧提取 → 写 markdown → 调 `run_import_async(source_id=...)` 入库。不阻塞 API。
 
 `application/json`
 
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `url` | string | ✅ | B 站视频链接，如 `https://www.bilibili.com/video/BV1GJ411x7h7` |
-| `mode` | string | ❌ | `"subtitle"`（默认，秒级，拉 B 站 CC/AI 字幕） \| `"whisper"`（分钟级，下载音频+whisper 转写+帧描述，内容可靠） |
+| `mode` | string | ❌ | `"subtitle"`（默认，秒级，同步） \| `"whisper"`（分钟级，异步，内容可靠） |
 
 响应与 `POST /api/sources` 完全一致（`{ source_id, job_id, job_status, deduped }`）。
-轮询 `GET /api/sources/{source_id}` 拿全链路状态，与文件导入完全一致。
+轮询 `GET /api/sources/{source_id}` 拿全链路状态。whisper 模式通过 `video_stage` 字段显示提取进度。
 
-- `mode="whisper"` 时请求会阻塞 2-3 分钟（下载音频 + whisper 转写），前端需显示等待提示。
-- 400 = URL 无法识别 BV 号 / 视频没有字幕（subtitle 模式）/ 没配 API Key。
-- 502 = B 站接口请求失败（网络不可达 / 接口异常）。
+- `mode="whisper"` 时 API 立即返回 201，不阻塞；worker 后台提取（最多 2 小时，支持 ≤60 分钟视频）。
+- whisper 模式的 source.sha256 是占位值（`"video:{bvid}:whisper"`），真实 sha 存在 `parse_meta.content_sha256`；dedupe 基于 BVID。
+- 400 = URL 无法识别 BV 号 / 视频没有字幕（subtitle 模式）/ 没配 API Key / 视频超过 60 分钟。
+- 502 = B 站接口请求失败（subtitle 模式）/ 视频提取失败（whisper 模式，worker 内部错误）。
 - 字幕来源：B 站 player/v2 接口，需在 `.env` 配置 `BILIBILI_SESSDATA`（登录 bilibili.com → F12 → Cookies → SESSDATA）才能拿到大部分视频的 CC/AI 字幕；未配置时部分视频会报「没有字幕」。
-- 视频有章节（view_points）时按章节分 heading；字幕片段按句末标点和时间间隔（>3s）合并成段落。
-- 同一视频重复导入 → sha256 去重（基于字幕 markdown 内容哈希）。
+- 同一视频重复导入 → BVID 去重（whisper 模式）或 sha256 去重（subtitle 模式）。
 
 ### `GET /api/sources/{source_id}`
 
@@ -147,6 +149,7 @@ B 站视频链接导入：后端拉取视频的 CC/AI 字幕，拼成 markdown�
   "warnings": [],
   "g2_skipped": false,
       "headings_rewritten": true,
+  "video_stage": null,
   "note_id": 7,
   "created_at": "2026-10-29T01:20:00+08:00",
   "job": { "id": 34, "status": "done", "attempts": 1, "last_error": null },
@@ -519,6 +522,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-13 | v23 | **whisper 模式异步化**：`POST /api/sources/url` 的 `mode="whisper"` 从 API 同步阻塞改为 worker 后台异步——API 立即返回 201（创建占位 source + job），worker 在后台做 下载音频→whisper 转写→写 markdown→调 `run_import_async(source_id=...)` 入库；`GET /api/sources/{id}` 响应新增 `video_stage` 字段（`"下载音频中…"` / `"whisper 转写中…"` / `"❌ 错误"` / `null`）；whisper 时长上限从 30 分钟提高到 60 分钟（worker `_timeout=7200`）；source.sha256 用占位值 `"video:{bvid}:whisper"`（dedupe 基于 BVID）；subtitle 模式不变（保持同步快速路径） |
 | 2026-11-12 | v22 | **视频笔记页 + whisper 模式**：`POST /api/sources/url` 新增 `mode` 参数（`"subtitle"` / `"whisper"`）；whisper 模式下载音频+whisper 转写+帧描述（不依赖 B 站字幕系统，内容可靠）；新增前端「视频笔记」页（B 站嵌入式播放器 + 模式选择 + 导入进度） |
 | 2026-11-12 | v21 | **G2 从判官变编辑 + 用户上传必须配 API Key**：G2 归属闸 + 标题整理合并为「AI 笔记整理」（`organizer.py`）——LLM 读 `note-format.md` 契约重写整篇 markdown（补标题/组织结构/去噪），无可整理内容→不入库，LLM 异常→降级原文入库；`POST /api/sources` 和 `POST /api/sources/url` 删除 `no_llm` 参数，没配 API Key → 400（防止未整理内容污染知识库）；charter 从导入流水线中去掉（API/问卷暂留）；`no_llm` 保留为内部参数（chat save-note 用） |
 | 2026-11-12 | v20 | **B 站视频字幕导入**：§2 新增 `POST /api/sources/url`（JSON body `{url}`，响应同 `POST /api/sources`）——后端纯 HTTP（urllib，零新依赖）拉取 B 站 CC/AI 字幕拼成 markdown，走现有导入管线；无字幕→400，B 站接口不可达→502；需 `.env` 配 `BILIBILI_SESSDATA` 才能拿到大部分视频字幕；有章节按章节分 heading，字幕片段按句末标点+时间间隔合段 |
