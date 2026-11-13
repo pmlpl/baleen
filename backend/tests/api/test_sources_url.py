@@ -249,3 +249,74 @@ def test_source_status_includes_video_stage(env) -> None:
     detail = status.json()
     assert "video_stage" in detail
     assert detail["video_stage"] == "排队中"
+
+
+# ==================== 抖音视频测试 ====================
+
+
+_DOUYIN_URL = "https://v.douyin.com/uqCjtoCtXh4/"
+
+
+def test_douyin_whisper_import_async(env) -> None:
+    """抖音 whisper 模式：立即返回 201 + stub source（占位 sha video:douyin:*）。"""
+    resp = _post_url(env, url=_DOUYIN_URL, mode="whisper")
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["deduped"] is False
+    assert body["job_status"] == "queued"
+    assert body["source_id"] > 0
+
+    assert len(env.video_calls) == 1
+    call = env.video_calls[0]
+    assert call["mode"] == "whisper"
+    assert call["source_id"] == body["source_id"]
+    # 抖音不传 sessdata（B站 cookie），cookies_file 由 settings 决定
+    assert call["sessdata"] == ""
+    assert env.calls == []  # 不走 enqueue_import
+
+
+def test_douyin_whisper_stub_source_sha(env) -> None:
+    """抖音 stub source 的 sha256 是占位值 video:douyin:*。"""
+    resp = _post_url(env, url=_DOUYIN_URL, mode="whisper")
+    body = resp.json()
+
+    async def check() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(body["source_id"])
+            assert source is not None
+            assert source.sha256.startswith("video:douyin:")
+            assert source.size_bytes == 0
+            assert source.parse_meta["video_mode"] == "whisper"
+            assert source.parse_meta["video_stage"] == "排队中"
+
+    env.client.portal.call(check)
+
+
+def test_douyin_subtitle_mode_rejected(env) -> None:
+    """抖音 + subtitle 模式 → 400（抖音不支持字幕模式）。"""
+    resp = _post_url(env, url=_DOUYIN_URL, mode="subtitle")
+    assert resp.status_code == 400
+    assert "字幕" in resp.json()["detail"] or "whisper" in resp.json()["detail"]
+    assert env.video_calls == []
+
+
+def test_douyin_whisper_dedupe(env) -> None:
+    """抖音 whisper 模式：同一 URL 重复导入 → deduped。"""
+    first = _post_url(env, url=_DOUYIN_URL, mode="whisper")
+    assert first.status_code == 201
+    second = _post_url(env, url=_DOUYIN_URL, mode="whisper")
+    assert second.status_code == 200
+    body = second.json()
+    assert body["deduped"] is True
+    assert body["source_id"] == first.json()["source_id"]
+
+
+def test_douyin_full_url_whisper(env) -> None:
+    """抖音完整 URL（www.douyin.com/video/{id}）也能导入。"""
+    resp = _post_url(env, url="https://www.douyin.com/video/7467293802585378048", mode="whisper")
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["source_id"] > 0

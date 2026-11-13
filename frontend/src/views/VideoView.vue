@@ -1,12 +1,13 @@
 <script setup lang="ts">
 /**
- * 视频笔记：粘贴 B 站链接 → 看视频 → 选模式 → 导入成笔记。
+ * 视频笔记：粘贴 B 站 / 抖音链接 → 看视频 → 选模式 → 导入成笔记。
  *
  * - B 站嵌入式播放器（iframe）让用户可以边看视频边等导入
- * - 两种模式：字幕快速（秒级） / whisper 深度（分钟级，下载音频+whisper转写）
+ * - 抖音无嵌入式播放器，显示「在抖音中打开」外链
+ * - 两种模式：字幕快速（秒级，仅 B 站） / whisper 深度（分钟级，下载音频+whisper转写）
  * - 导入进度面板复用 LibraryView 的模式
  */
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
@@ -15,13 +16,18 @@ import type { SourceDetail } from '../api/sources'
 
 const BV_RE = /BV[a-zA-Z0-9]{10}/
 const PAGE_RE = /[?&]p=(\d+)/
+const DOUYIN_RE = /v\.douyin\.com|www\.douyin\.com|iesdouyin\.com/
 
 const urlInput = ref('')
 const mode = ref<'subtitle' | 'whisper'>('whisper')
 const importing = ref(false)
 
+/** 检测抖音链接 */
+const isDouyin = computed(() => DOUYIN_RE.test(urlInput.value))
+
 /** 从 URL 提取 BV 号用于嵌入播放器 */
 const bvid = computed(() => {
+  if (isDouyin.value) return null
   const m = BV_RE.exec(urlInput.value)
   return m ? m[0] : null
 })
@@ -38,8 +44,13 @@ const embedUrl = computed(() => {
   return `https://player.bilibili.com/player.html?bvid=${bvid.value}&page=${pageNum.value}&high_quality=1&danmaku=0&autoplay=0`
 })
 
-/** 是否可以预览（有 BV 号才能嵌入） */
-const canPreview = computed(() => bvid.value !== null)
+/** 是否可以预览（B站有BV号能嵌入；抖音显示外链） */
+const canPreview = computed(() => bvid.value !== null || isDouyin.value)
+
+/** 抖音只支持 whisper 模式，检测到抖音 URL 时自动切换 */
+watch(isDouyin, (douyin) => {
+  if (douyin) mode.value = 'whisper'
+})
 
 // ---- 导入进度 ----
 
@@ -145,13 +156,14 @@ async function importVideo(): Promise<void> {
             v-model="urlInput"
             class="input"
             type="url"
-            placeholder="粘贴 B 站视频链接或分享链接..."
-            aria-label="B 站视频链接"
+            placeholder="粘贴 B 站或抖音视频链接..."
+            aria-label="视频链接"
           />
         </div>
 
         <div v-if="canPreview && urlInput.trim() !== ''" class="player-box">
           <iframe
+            v-if="bvid"
             :src="embedUrl"
             class="player-iframe"
             scrolling="no"
@@ -161,10 +173,17 @@ async function importVideo(): Promise<void> {
             allowfullscreen="true"
             sandbox="allow-scripts allow-same-origin allow-popups"
           />
+          <div v-else-if="isDouyin" class="douyin-preview">
+            <p>🎵 抖音视频</p>
+            <a :href="urlInput.trim()" target="_blank" rel="noopener noreferrer" class="douyin-link">
+              在抖音中打开 →
+            </a>
+            <p class="muted">支持 whisper 转写导入</p>
+          </div>
         </div>
         <div v-else-if="urlInput.trim() !== ''" class="player-hint muted">
-          <p>⚠️ 无法从链接中识别 BV 号。</p>
-          <p>短链（b23.tv）无法直接预览，但可以直接点击导入，后端会自动解析。</p>
+          <p>⚠️ 无法识别视频链接。</p>
+          <p>支持 B 站（BV号/b23.tv）和抖音（v.douyin.com）链接。</p>
         </div>
         <div v-else class="player-hint muted">
           <p>📺 粘贴链接后这里会显示视频播放器，你可以边看视频边等导入完成。</p>
@@ -182,9 +201,9 @@ async function importVideo(): Promise<void> {
               <span class="mode-label">whisper 深度</span>
               <span class="mode-desc muted">下载音频 + whisper 转写（约 2-3 分钟，内容可靠）</span>
             </label>
-            <label class="mode-option" :class="{ 'mode-option--active': mode === 'subtitle' }">
-              <input v-model="mode" type="radio" value="subtitle" />
-              <span class="mode-label">字幕快速</span>
+            <label class="mode-option" :class="{ 'mode-option--active': mode === 'subtitle', 'mode-option--disabled': isDouyin }">
+              <input v-model="mode" type="radio" value="subtitle" :disabled="isDouyin" />
+              <span class="mode-label">字幕快速{{ isDouyin ? '（仅 B 站）' : '' }}</span>
               <span class="mode-desc muted">拉 B 站 CC 字幕（秒级，但 B 站字幕不稳定）</span>
             </label>
           </div>
@@ -268,6 +287,34 @@ async function importVideo(): Promise<void> {
   line-height: 1.8;
 }
 
+.douyin-preview {
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 14px;
+  line-height: 1.8;
+}
+
+.douyin-preview p:first-child {
+  font-size: 18px;
+  margin-bottom: 12px;
+}
+
+.douyin-link {
+  display: inline-block;
+  color: var(--accent, #6c5ce7);
+  text-decoration: none;
+  font-weight: 600;
+  padding: 8px 20px;
+  border: 1px solid var(--accent, #6c5ce7);
+  border-radius: 6px;
+  margin-bottom: 8px;
+}
+
+.douyin-link:hover {
+  background: var(--accent, #6c5ce7);
+  color: #fff;
+}
+
 .import-card {
   padding: 16px 18px;
 }
@@ -294,6 +341,11 @@ async function importVideo(): Promise<void> {
   border-radius: 8px;
   cursor: pointer;
   transition: border-color 0.15s;
+}
+
+.mode-option--disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .mode-option--active {

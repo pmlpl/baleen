@@ -71,6 +71,12 @@ class Settings(BaseSettings):
     # 空=不传(部分视频的字幕可能拿不到)。
     bilibili_sessdata: str = ""
 
+    # 抖音 cookie 文件路径（Netscape 格式，用浏览器扩展导出）。
+    # 抖音的 anti-bot 保护需要 JS 生成的 cookies（msToken 等），不能用简单的 sessdata。
+    # 获取方式:Chrome 装 "Get cookies.txt LOCALLY" 扩展 → 访问 douyin.com → 导出 → 保存路径填这里。
+    # 空=不传(抖音视频可能无法下载)。
+    douyin_cookies_file: str = ""
+
     def resolve_charter(self) -> str:
         """charter 解析优先级:``baleen/charter.md`` 全文 > `CHARTER` 环境变量 > 内置默认。
 

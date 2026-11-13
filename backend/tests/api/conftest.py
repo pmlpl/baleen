@@ -76,7 +76,8 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return dedupe_key
 
     async def fake_video_enqueue(
-        url: str, *, mode: str, source_id: int, owner_id: int, sessdata: str = "",
+        url: str, *, mode: str, source_id: int, owner_id: int,
+        sessdata: str = "", cookies_file: str = "",
     ) -> str | None:
         video_calls.append(
             {
@@ -85,6 +86,7 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                 "source_id": source_id,
                 "owner_id": owner_id,
                 "sessdata": sessdata,
+                "cookies_file": cookies_file,
             }
         )
         return f"video:{source_id}"

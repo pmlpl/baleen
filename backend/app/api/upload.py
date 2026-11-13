@@ -286,20 +286,32 @@ async def import_from_url(
 
     sessdata = settings.bilibili_sessdata
 
+    # 平台检测（B站 vs 抖音）
+    from app.service.bilibili import extract_bvid
+    from app.service.douyin import detect_douyin, extract_douyin_id
+
+    is_douyin = detect_douyin(body.url)
+
     # 根据 mode 选择内容提取方式
     if body.mode == "whisper":
         # whisper 模式：异步——创建 stub source + job，入队后台提取，立即返回。
-        # 不再阻塞 API 请求（之前同步调用 extract_video_content 导致 502 超时）。
-        from app.service.bilibili import extract_bvid
-
-        bvid = extract_bvid(body.url)
-        if not bvid:
-            raise HTTPException(
-                status_code=400,
-                detail="无法识别 B 站视频链接，请确认 URL 包含 BV 号或 b23.tv 短链",
-            )
-        placeholder_sha = f"video:{bvid}:whisper"
-        filename = f"{bvid}.md"
+        if is_douyin:
+            video_id = extract_douyin_id(body.url) or "unknown"
+            placeholder_sha = f"video:douyin:{video_id}:whisper"
+            filename = f"douyin_{video_id}.md"
+            video_sessdata = ""
+            video_cookies = settings.douyin_cookies_file
+        else:
+            bvid = extract_bvid(body.url)
+            if not bvid:
+                raise HTTPException(
+                    status_code=400,
+                    detail="无法识别视频链接，请确认是 B 站(BV号/b23.tv)或抖音(v.douyin.com)链接",
+                )
+            placeholder_sha = f"video:{bvid}:whisper"
+            filename = f"{bvid}.md"
+            video_sessdata = sessdata
+            video_cookies = ""
 
         repos = Repos(session, owner_id=owner_id)
         source, source_created = await repos.sources.create_or_get_by_sha256(
@@ -331,7 +343,8 @@ async def import_from_url(
                     mode="whisper",
                     source_id=source.id,
                     owner_id=owner_id,
-                    sessdata=sessdata,
+                    sessdata=video_sessdata,
+                    cookies_file=video_cookies,
                 )
             except Exception as exc:
                 raise HTTPException(
@@ -348,6 +361,11 @@ async def import_from_url(
         )
 
     # 字幕模式（同步快速路径：秒级拉 B 站字幕 → 写 markdown → 入库）
+    if is_douyin:
+        raise HTTPException(
+            status_code=400,
+            detail="抖音不支持字幕模式，请使用 whisper 模式",
+        )
     try:
         result = await asyncio.to_thread(fetch_bilibili, body.url, sessdata=sessdata)
     except BilibiliError as exc:

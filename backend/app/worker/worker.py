@@ -224,6 +224,7 @@ async def extract_and_import_video(
     source_id: int,
     mode: str = "whisper",
     sessdata: str = "",
+    cookies_file: str = "",
 ) -> dict:
     """arq 任务：异步视频提取 → 写 markdown → 跑 pipeline。
 
@@ -264,7 +265,7 @@ async def extract_and_import_video(
 
             await _update_video_stage(source_id, "下载音频中…", owner_id)
             vc = await asyncio.to_thread(
-                extract_video_content, url, sessdata=sessdata, client=client,
+                extract_video_content, url, sessdata=sessdata, cookies_file=cookies_file, client=client,
             )
             markdown_content = vc.markdown
             video_title = vc.title
@@ -323,18 +324,21 @@ async def extract_and_import_video(
 
 
 async def enqueue_video_extract(
-    url: str, *, mode: str, source_id: int, owner_id: int, sessdata: str = "",
+    url: str, *, mode: str, source_id: int, owner_id: int,
+    sessdata: str = "", cookies_file: str = "",
 ) -> str | None:
     """入队视频提取任务。
 
     ``_timeout=7200``（2 小时）：whisper base GPU ~1x 实时，60 分钟视频 ≈ 60 分钟转写。
     ``_job_id`` 用 source_id 保证幂等（同一 source 不会重复入队）。
+    sessdata 用于 B站；cookies_file 用于抖音等需要完整 cookie 文件的平台。
     """
     pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     try:
         job = await pool.enqueue_job(
             "extract_and_import_video", url,
-            mode=mode, source_id=source_id, owner_id=owner_id, sessdata=sessdata,
+            mode=mode, source_id=source_id, owner_id=owner_id,
+            sessdata=sessdata, cookies_file=cookies_file,
             _job_id=f"video:{source_id}",
             _timeout=7200,
         )

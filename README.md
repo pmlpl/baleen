@@ -12,8 +12,8 @@
 - 工程状态（模块表 / 测试基线 / 已知限制）→ `STATUS.md` 顶部「系统状态速览」
 - 时间线（哪天做了什么、为什么）→ `../日志/YYYY-MM-DD.md`
 
-最近一次收口：2026-11-13，whisper 异步化 v23，基线 **434 passed**。
-架构决策见 `docs/adr/0001`–`0009`，接口契约见 `docs/api.md`（v23）。
+最近一次收口：2026-11-13，抖音视频支持 v24，基线 **450 passed**。
+架构决策见 `docs/adr/0001`–`0009`，接口契约见 `docs/api.md`（v24）。
 
 **这是本科毕业设计**，目标是本地多用户可用的完整闭环，不是多用户 SaaS。
 
@@ -116,7 +116,7 @@ pnpm dev                          # http://localhost:5173
 cd backend
 # 需 Docker 容器运行（docker compose up -d）
 uv run pytest
-# 基线 434 passed
+# 基线 450 passed
 ```
 
 ## 文档一致性

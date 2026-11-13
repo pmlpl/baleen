@@ -67,14 +67,15 @@ def _get_whisper_model():
     return _whisper_model
 
 
-def download_video(url: str, *, sessdata: str = "", output_dir: Path | None = None) -> Path:
+def download_video(url: str, *, sessdata: str = "", cookies_file: str = "", output_dir: Path | None = None) -> Path:
     """用 yt-dlp 下载视频（含音频），返回视频文件路径。
 
     B 站 CDN 不稳定，视频文件大，下载可能失败/超时。调用方应捕获异常并降级。
+    cookies_file 用于抖音等需要完整 cookie 文件的平台（B站用 sessdata）。
     """
     import sys
 
-    out_dir = output_dir or Path(tempfile.mkdtemp(prefix="bilibili_video_"))
+    out_dir = output_dir or Path(tempfile.mkdtemp(prefix="video_dl_"))
     out_dir.mkdir(parents=True, exist_ok=True)
     output_template = str(out_dir / "video.%(ext)s")
 
@@ -88,9 +89,9 @@ def download_video(url: str, *, sessdata: str = "", output_dir: Path | None = No
         "--socket-timeout", "30",
         "-o", output_template,
     ]
-    if sessdata:
-        cookie_file = _write_cookies(sessdata, out_dir)
-        cmd.extend(["--cookies", str(cookie_file)])
+    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_file=cookies_file, output_dir=out_dir)
+    if cookie:
+        cmd.extend(["--cookies", cookie])
     cmd.append(url)
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
@@ -103,15 +104,15 @@ def download_video(url: str, *, sessdata: str = "", output_dir: Path | None = No
     return candidates[0]
 
 
-def download_audio(url: str, *, sessdata: str = "", output_dir: Path | None = None) -> Path:
+def download_audio(url: str, *, sessdata: str = "", cookies_file: str = "", output_dir: Path | None = None) -> Path:
     """用 yt-dlp 只下载音频（m4a），返回音频文件路径。
 
     音频文件小（~8MB/10分钟），下载快。whisper 只需要音频。
-    用 subprocess 调 yt-dlp（B 站 CDN 不稳定，subprocess 方式更健壮）。
+    cookies_file 用于抖音等需要完整 cookie 文件的平台（B站用 sessdata）。
     """
     import sys
 
-    out_dir = output_dir or Path(tempfile.mkdtemp(prefix="bilibili_audio_"))
+    out_dir = output_dir or Path(tempfile.mkdtemp(prefix="audio_dl_"))
     out_dir.mkdir(parents=True, exist_ok=True)
     output_template = str(out_dir / "audio.%(ext)s")
 
@@ -124,9 +125,9 @@ def download_audio(url: str, *, sessdata: str = "", output_dir: Path | None = No
         "--socket-timeout", "30",
         "-o", output_template,
     ]
-    if sessdata:
-        cookie_file = _write_cookies(sessdata, out_dir)
-        cmd.extend(["--cookies", str(cookie_file)])
+    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_file=cookies_file, output_dir=out_dir)
+    if cookie:
+        cmd.extend(["--cookies", cookie])
     cmd.append(url)
 
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -148,6 +149,25 @@ def _write_cookies(sessdata: str, output_dir: Path) -> Path:
         encoding="utf-8",
     )
     return cookie_file
+
+
+def _resolve_cookie_file(
+    *, sessdata: str = "", cookies_file: str = "", output_dir: Path | None = None
+) -> str | None:
+    """统一 cookie 处理：cookies_file（完整 cookie 文件，如抖音）优先于 sessdata（B站 SESSDATA）。
+
+    返回 cookie 文件路径或 None（无 cookie）。
+    """
+    if cookies_file:
+        from pathlib import Path as _P
+
+        p = _P(cookies_file)
+        if p.is_file():
+            return str(p)
+    if sessdata:
+        out_dir = output_dir or Path(tempfile.mkdtemp(prefix="cookies_"))
+        return str(_write_cookies(sessdata, out_dir))
+    return None
 
 
 def extract_audio(video_path: Path, output_dir: Path) -> Path:
@@ -282,8 +302,8 @@ def build_video_markdown(
     parts: list[str] = [f"# {title}\n"]
 
     # 元数据
-    meta = [f"UP主: {owner_name}", f"时长: {_format_timestamp(duration)}"]
-    parts.append(f"> {' · '.join(meta)} · [B站原链接]({url})\n")
+    meta = [f"作者: {owner_name}", f"时长: {_format_timestamp(duration)}"]
+    parts.append(f"> {' · '.join(meta)} · [原链接]({url})\n")
     if description:
         parts.append(f"> {description[:200]}\n")
 
@@ -309,63 +329,79 @@ def build_video_markdown(
     return "\n".join(parts)
 
 
+def _fetch_video_info(url: str, *, sessdata: str = "", cookies_file: str = "") -> dict:
+    """用 yt-dlp 提取视频元信息（不下载，只取 JSON）。平台无关。
+
+    返回 {title, duration, uploader, description, webpage_url}。
+    """
+    import json
+    import sys
+
+    output_dir = Path(tempfile.mkdtemp(prefix="video_info_"))
+    cmd = [
+        sys.executable, "-m", "yt_dlp",
+        "--dump-json", "--skip-download",
+        "--no-playlist", "--quiet",
+        "--socket-timeout", "30",
+    ]
+    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_file=cookies_file, output_dir=output_dir)
+    if cookie:
+        cmd.extend(["--cookies", cookie])
+    cmd.append(url)
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp 元信息提取失败: {result.stderr[-400:]}")
+
+    info = json.loads(result.stdout)
+    return {
+        "title": info.get("title") or "video",
+        "duration": int(info.get("duration") or 0),
+        "uploader": info.get("uploader") or info.get("channel") or info.get("uploader_id") or "",
+        "description": info.get("description") or "",
+        "webpage_url": info.get("webpage_url") or url,
+    }
+
+
 def extract_video_content(
     url: str,
     *,
     sessdata: str = "",
+    cookies_file: str = "",
     client=None,
 ) -> VideoContent:
     """主入口：下载音频 → whisper 转写 → （可选）下载视频提取帧 → 拼 markdown。
 
     策略：音频优先（小文件、下载可靠），视频可选（CDN 不稳定，失败则跳过帧提取）。
-    不依赖 B 站 AI 字幕系统，直接从音频转写——内容可靠。
+    不依赖平台字幕系统，直接从音频转写——内容可靠。
     需要 yt-dlp + ffmpeg + whisper + LLMClient（视觉模型，可选）。
+
+    sessdata 用于 B站（SESSDATA cookie）；cookies_file 用于抖音等需要完整 cookie 文件的平台。
     """
     import shutil
 
-    output_dir = Path(tempfile.mkdtemp(prefix="bilibili_extract_"))
+    output_dir = Path(tempfile.mkdtemp(prefix="video_extract_"))
 
-    # ① 获取视频元信息
-    from app.service.bilibili import BilibiliError, extract_bvid, _resolve_short_link, _api_get
-
-    bvid = extract_bvid(url)
-    resolved_url = url
-    if not bvid:
-        try:
-            resolved_url = _resolve_short_link(url)
-            bvid = extract_bvid(resolved_url)
-        except Exception:
-            pass
-
-    title = "bilibili_video"
-    description = ""
-    owner_name = ""
-    duration = 0
-
-    if bvid:
-        try:
-            view = _api_get(f"https://api.bilibili.com/x/web-interface/view?bvid={bvid}", sessdata=sessdata)
-            if view.get("code") == 0:
-                d = view["data"]
-                title = d["title"]
-                description = d.get("desc", "")
-                owner_name = d["owner"]["name"]
-                duration = d.get("duration", 0)
-        except Exception:
-            pass
+    # ① 获取视频元信息（yt-dlp --dump-json，平台无关）
+    info = _fetch_video_info(url, sessdata=sessdata, cookies_file=cookies_file)
+    title = info["title"]
+    description = info["description"]
+    owner_name = info["uploader"]
+    duration = info["duration"]
+    resolved_url = info["webpage_url"]
 
     # 时长检查：whisper base 模型转写速度约 1x 实时（GPU），
     # 60 分钟视频 ≈ 60 分钟转写。worker 的 _timeout=7200（2 小时）够用。
     MAX_WHISPER_DURATION = 3600  # 60 分钟
     if duration > MAX_WHISPER_DURATION:
         minutes = duration // 60
-        raise BilibiliError(
+        raise RuntimeError(
             f"视频时长 {minutes} 分钟，超过 whisper 模式 60 分钟上限。"
-            "whisper 转写长视频需要较长时间，请改用「字幕快速」模式，或选择较短的视频。"
+            "whisper 转写长视频需要较长时间，请选择较短的视频。"
         )
 
     # ② 下载音频（总是执行——小文件、可靠）
-    audio_file = download_audio(resolved_url, sessdata=sessdata, output_dir=output_dir)
+    audio_file = download_audio(resolved_url, sessdata=sessdata, cookies_file=cookies_file, output_dir=output_dir)
     wav_path = extract_audio(audio_file, output_dir)
 
     # ③ whisper 转写
@@ -375,7 +411,7 @@ def extract_video_content(
     frame_descriptions: list[FrameDescription] = []
     if client is not None:
         try:
-            video_path = download_video(resolved_url, sessdata=sessdata, output_dir=output_dir)
+            video_path = download_video(resolved_url, sessdata=sessdata, cookies_file=cookies_file, output_dir=output_dir)
             frames = extract_key_frames(video_path, output_dir)
             if frames:
                 frame_descriptions = describe_frames(frames, client=client)

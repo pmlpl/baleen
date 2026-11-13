@@ -1,4 +1,4 @@
-# API 契约 v23
+# API 契约 v24
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -98,12 +98,12 @@ LLM 异常/输出不可解析 → 降级原文入库（不因整理失败丢内�
 
 > ⚠️ **需要非推理模型**。推理模型会把 `max_tokens` 全用在 reasoning 上、`content` 返回空，导致整理降级。
 
-### `POST /api/sources/url`（v20 新增，v23 whisper 改异步）
+### `POST /api/sources/url`（v20 新增，v23 whisper 改异步，v24 支持抖音）
 
-B 站视频链接导入。两种模式：
+B 站 / 抖音视频链接导入。两种模式：
 
-- `mode="subtitle"`（默认）：同步拉取 B 站 CC/AI 字幕，拼成 markdown，走常规管线。秒级返回。
-- `mode="whisper"`（v23 改异步）：**立即返回 201**，worker 在后台下载音频 + whisper 转写 + 帧提取 → 写 markdown → 调 `run_import_async(source_id=...)` 入库。不阻塞 API。
+- `mode="subtitle"`（默认）：同步拉取 B 站 CC/AI 字幕，拼成 markdown，走常规管线。秒级返回。**仅 B 站**。
+- `mode="whisper"`（v23 改异步）：**立即返回 201**，worker 在后台下载音频 + whisper 转写 + 帧提取 → 写 markdown → 调 `run_import_async(source_id=...)` 入库。不阻塞 API。**支持 B 站和抖音**。
 
 `application/json`
 
@@ -522,6 +522,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-13 | v24 | **抖音视频支持**：`POST /api/sources/url` whisper 模式支持抖音链接（`v.douyin.com` / `www.douyin.com`）；`video_extractor.py` 用 yt-dlp 统一提取元信息（替代 B 站 view API，平台无关）；新增 `douyin.py`（URL 检测 + ID 提取）；新增 `DOUYIN_COOKIES_FILE` 配置（Netscape cookie 文件，抖音 anti-bot 需要）；抖音只支持 whisper 模式（subtitle → 400）；前端 VideoView 检测抖音 URL 显示「在抖音中打开」链接 + 强制 whisper；`build_video_markdown` 标签通用化（"UP主"→"作者"、"B站原链接"→"原链接"） |
 | 2026-11-13 | v23 | **whisper 模式异步化**：`POST /api/sources/url` 的 `mode="whisper"` 从 API 同步阻塞改为 worker 后台异步——API 立即返回 201（创建占位 source + job），worker 在后台做 下载音频→whisper 转写→写 markdown→调 `run_import_async(source_id=...)` 入库；`GET /api/sources/{id}` 响应新增 `video_stage` 字段（`"下载音频中…"` / `"whisper 转写中…"` / `"❌ 错误"` / `null`）；whisper 时长上限从 30 分钟提高到 60 分钟（worker `_timeout=7200`）；source.sha256 用占位值 `"video:{bvid}:whisper"`（dedupe 基于 BVID）；subtitle 模式不变（保持同步快速路径） |
 | 2026-11-12 | v22 | **视频笔记页 + whisper 模式**：`POST /api/sources/url` 新增 `mode` 参数（`"subtitle"` / `"whisper"`）；whisper 模式下载音频+whisper 转写+帧描述（不依赖 B 站字幕系统，内容可靠）；新增前端「视频笔记」页（B 站嵌入式播放器 + 模式选择 + 导入进度） |
 | 2026-11-12 | v21 | **G2 从判官变编辑 + 用户上传必须配 API Key**：G2 归属闸 + 标题整理合并为「AI 笔记整理」（`organizer.py`）——LLM 读 `note-format.md` 契约重写整篇 markdown（补标题/组织结构/去噪），无可整理内容→不入库，LLM 异常→降级原文入库；`POST /api/sources` 和 `POST /api/sources/url` 删除 `no_llm` 参数，没配 API Key → 400（防止未整理内容污染知识库）；charter 从导入流水线中去掉（API/问卷暂留）；`no_llm` 保留为内部参数（chat save-note 用） |
