@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import base64
+import re
 import subprocess
 import tempfile
 import time
@@ -20,6 +21,18 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.config import get_settings
+
+# 从分享文本提取 URL（用户常把整段分享文本直接粘贴进来）。
+# 停在空白/中日韩字符/常见中文标点处——抖音短链后常直接跟「复制此链接」。
+_URL_RE = re.compile(r"https?://[^\s\u4e00-\u9fff，。；！？、\"'（）【】<>《》]+")
+
+
+def _extract_url(text: str) -> str:
+    """分享文本 → 真 URL。纯 URL 原样返回；找不到 URL 也原样返回（让 yt-dlp 报错）。"""
+    if text.startswith(("http://", "https://")):
+        return text
+    m = _URL_RE.search(text)
+    return m.group(0) if m else text
 
 # whisper 模型懒加载（第一次调用时加载，后续复用）
 _whisper_model = None
@@ -396,6 +409,10 @@ def extract_video_content(
     sessdata 用于 B站（SESSDATA cookie）；cookies_str 用于抖音等需要 cookie 字符串的平台。
     """
     import shutil
+
+    # 用户可能粘贴整段分享文本（"8.48 复制打开抖音… https://v.douyin.com/xxx/ 复制此链接"），
+    # 提取出真正的 URL 再交给 yt-dlp
+    url = _extract_url(url)
 
     output_dir = Path(tempfile.mkdtemp(prefix="video_extract_"))
 

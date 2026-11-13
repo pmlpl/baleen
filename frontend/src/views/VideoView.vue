@@ -17,10 +17,20 @@ import type { SourceDetail } from '../api/sources'
 const BV_RE = /BV[a-zA-Z0-9]{10}/
 const PAGE_RE = /[?&]p=(\d+)/
 const DOUYIN_RE = /v\.douyin\.com|www\.douyin\.com|iesdouyin\.com/
+// 从分享文本提取真 URL（用户常整段粘贴 "8.48 复制打开抖音… https://v.douyin.com/xxx/ 复制此链接"）
+const URL_RE = /https?:\/\/[^\s，。；！？、"'"（）【】<>《》]+/
 
 const urlInput = ref('')
 const mode = ref<'subtitle' | 'whisper'>('whisper')
 const importing = ref(false)
+
+/** 输入框里的真 URL（分享文本 → 提取第一个链接；纯 URL 原样返回） */
+const cleanUrl = computed(() => {
+  const raw = urlInput.value.trim()
+  if (raw === '') return ''
+  const m = URL_RE.exec(raw)
+  return m ? m[0] : raw
+})
 
 /** 检测抖音链接 */
 const isDouyin = computed(() => DOUYIN_RE.test(urlInput.value))
@@ -91,7 +101,7 @@ async function waitImportDone(
 }
 
 async function importVideo(): Promise<void> {
-  const url = urlInput.value.trim()
+  const url = cleanUrl.value
   if (url === '' || importing.value) return
 
   importing.value = true
@@ -175,7 +185,7 @@ async function importVideo(): Promise<void> {
           />
           <div v-else-if="isDouyin" class="douyin-preview">
             <p>🎵 抖音视频</p>
-            <a :href="urlInput.trim()" target="_blank" rel="noopener noreferrer" class="douyin-link">
+            <a :href="cleanUrl" target="_blank" rel="noopener noreferrer" class="douyin-link">
               在抖音中打开 →
             </a>
             <p class="muted">支持 whisper 转写导入</p>

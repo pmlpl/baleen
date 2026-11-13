@@ -17,7 +17,7 @@ import time
 from dataclasses import asdict
 from pathlib import Path
 
-from arq import create_pool
+from arq import create_pool, func
 from arq.connections import RedisSettings
 
 from app.core.config import ROOT_DIR, get_settings
@@ -331,18 +331,23 @@ async def enqueue_video_extract(
 ) -> str | None:
     """入队视频提取任务。
 
-    ``_timeout=7200``（2 小时）：whisper base GPU ~1x 实时，60 分钟视频 ≈ 60 分钟转写。
+    超时 2 小时在 WorkerSettings.func(timeout=7200) 定义（enqueue_job 没有 _timeout 参数）。
     ``_job_id`` 用 source_id 保证幂等（同一 source 不会重复入队）。
+    重试场景：先删掉上一次失败的 arq job/result 键，否则 enqueue_job 会因同 ID
+    已存在而被静默丢弃（用户配好 cookies 重试就永远不生效）。
     sessdata 用于 B站；抖音 cookies 由 worker 从 DB 设置页读取（不需要 API 传）。
     """
+    from arq.constants import job_key_prefix, result_key_prefix
+
     pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     try:
+        job_id = f"video:{source_id}"
+        await pool.delete(f"{job_key_prefix}{job_id}", f"{result_key_prefix}{job_id}")
         job = await pool.enqueue_job(
             "extract_and_import_video", url,
             mode=mode, source_id=source_id, owner_id=owner_id,
             sessdata=sessdata,
-            _job_id=f"video:{source_id}",
-            _timeout=7200,
+            _job_id=job_id,
         )
         return job.job_id if job is not None else None
     finally:
@@ -358,10 +363,14 @@ class WorkerSettings:
 
     max_jobs=1:bge 在 GPU 上,导入串行;job_timeout=900s 按最坏 300s×3 倍余量定(协调方拍板)。
     no_llm 模式若仍超时说明有死循环,不许靠调大 timeout 糊过去。
-    视频提取任务(extract_and_import_video)通过 enqueue 时的 _timeout=7200 单独给 2 小时。
+    视频提取任务(extract_and_import_video)用 func(timeout=7200) 单独给 2 小时
+    (arq 的 enqueue_job 没有 _timeout 参数——传了会被当 kwargs 转发给任务函数直接 TypeError)。
     """
 
-    functions = [import_file, extract_and_import_video]
+    functions = [
+        import_file,
+        func(extract_and_import_video, timeout=7200),
+    ]
     on_startup = on_startup
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)
     max_jobs = 1

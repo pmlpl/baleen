@@ -32,9 +32,13 @@ PortalFn = Any  # callable returning Awaitable[Any]
 
 
 def test_worker_settings_registers_video_task() -> None:
-    assert import_file in WorkerSettings.functions
-    assert extract_and_import_video in WorkerSettings.functions
-    assert WorkerSettings.job_timeout == 900
+    # 视频任务用 arq func() 包装注册（timeout=7200），functions 里是 Function 对象
+    names = [getattr(f, "name", None) or f.__name__ for f in WorkerSettings.functions]
+    assert "import_file" in names
+    assert "extract_and_import_video" in names
+    video_fn = next(f for f in WorkerSettings.functions if getattr(f, "name", "") == "extract_and_import_video")
+    assert video_fn.timeout_s == 7200  # 2 小时（enqueue_job 没有 _timeout 参数，只能在这里设）
+    assert WorkerSettings.job_timeout == 900  # 文件导入保持 15 分钟
 
 
 # ---------- stub session（不需要 DB 的编排测试）----------
