@@ -1,4 +1,4 @@
-"""app_settings 加 charter(问卷生成的知识库章程,DB 优先于 charter.md 文件)
+"""app_settings 加 charter(问卷生成的知识库章程,DB 优先于内置默认)
 
 Revision ID: 0007
 Revises: 0006

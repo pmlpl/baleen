@@ -1,0 +1,155 @@
+"""POST /api/sources/url 测试:B 站链接导入。
+
+用 TestClient(in-process)+ fake enqueue(不连真 Redis);
+fetch_bilibili 通过 monkeypatch 替换成假数据,不联网。
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from app.service import bilibili as bilibili_module
+
+
+def _fake_bilibili_result() -> bilibili_module.BilibiliResult:
+    return bilibili_module.BilibiliResult(
+        info=bilibili_module.BilibiliVideoInfo(
+            bvid="BV1GJ411x7h7",
+            aid=12345,
+            cid=67890,
+            title="深入理解闭包",
+            description="JS 闭包详解",
+            owner_name="技术UP主",
+            duration=1200,
+            chapters=[],
+        ),
+        markdown="# 深入理解闭包\n\n> UP主: 技术UP主\n\n大家好。今天讲闭包。\n",
+    )
+
+
+def _post_url(env, url: str = "https://www.bilibili.com/video/BV1GJ411x7h7/"):
+    return env.client.post(
+        "/api/sources/url",
+        json={"url": url},
+    )
+
+
+def test_url_import_creates_source_and_job(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result())
+
+    resp = _post_url(env)
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["deduped"] is False
+    assert body["job_status"] == "queued"
+    assert body["source_id"] > 0
+    assert body["job_id"] > 0
+
+    # enqueue 被调了一次,文件是 .md
+    assert len(env.calls) == 1
+    call = env.calls[0]
+    assert call["owner_id"] == 1
+    staging = Path(call["file_path"])
+    assert staging.exists()
+    assert staging.suffix == ".md"
+    assert staging.name == "深入理解闭包.md"
+    # markdown 内容写进了暂存
+    assert "深入理解闭包" in staging.read_text(encoding="utf-8")
+
+    # via=url 标记在 job payload 里
+    sha = call["dedupe_key"].removeprefix("import:")
+
+    async def check() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(body["source_id"])
+            assert source is not None
+            assert source.sha256 == sha
+            assert source.filename == "深入理解闭包.md"
+            assert source.ext == ".md"
+            assert source.parse_status == "pending"
+            job = await repos.jobs.get_by_dedupe_key("import:" + sha)
+            assert job is not None
+            assert job.payload["via"] == "url"
+
+    env.client.portal.call(check)
+
+
+def test_url_import_dedupe(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result())
+
+    first = _post_url(env)
+    assert first.status_code == 201
+    second = _post_url(env)
+    assert second.status_code == 200
+    body = second.json()
+    assert body["deduped"] is True
+    assert body["source_id"] == first.json()["source_id"]
+
+
+def test_url_import_invalid_url(env) -> None:
+    resp = _post_url(env, url="https://www.youtube.com/watch?v=abc")
+    assert resp.status_code == 400
+    assert "BV" in resp.json()["detail"] or "链接" in resp.json()["detail"]
+
+
+def test_url_import_no_subtitle(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_no_sub(url: str, *, sessdata: str = "") -> Any:
+        raise bilibili_module.BilibiliError("该视频没有字幕(CC 字幕或 AI 字幕),暂无法导入。")
+
+    monkeypatch.setattr(bilibili_module, "fetch_bilibili", raise_no_sub)
+    resp = _post_url(env)
+    assert resp.status_code == 400
+    assert "没有字幕" in resp.json()["detail"]
+    assert env.calls == []  # 没入队
+
+
+def test_url_import_bilibili_api_error(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_network(url: str, *, sessdata: str = "") -> Any:
+        raise ConnectionError("network down")
+
+    monkeypatch.setattr(bilibili_module, "fetch_bilibili", raise_network)
+    resp = _post_url(env)
+    assert resp.status_code == 502
+    assert "B 站" in resp.json()["detail"]
+
+
+def test_url_import_no_api_key_rejected(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """没配 API Key → 400(不调 fetch_bilibili)。"""
+    from app.service.llm import resolve as resolve_module
+
+    async def fake_resolve(session, owner_id):
+        return ("http://fake/v1", "", "fake-model")
+
+    monkeypatch.setattr(resolve_module, "resolve_llm_config", fake_resolve)
+    called: list[bool] = []
+    monkeypatch.setattr(
+        bilibili_module, "fetch_bilibili",
+        lambda *a, **kw: called.append(True) or _fake_bilibili_result(),
+    )
+
+    resp = _post_url(env)
+    assert resp.status_code == 400
+    assert "API Key" in resp.json()["detail"]
+    assert called == []
+
+
+def test_url_import_filename_sanitized(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """视频标题含非法字符 → 文件名净化后写入暂存。"""
+    result = _fake_bilibili_result()
+    result.info.title = "视频/标题:含*非法?字符"
+    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": result)
+
+    resp = _post_url(env)
+    assert resp.status_code == 201, resp.text
+    staging = Path(env.calls[0]["file_path"])
+    assert "/" not in staging.name
+    assert ":" not in staging.name
+    assert "*" not in staging.name
+    assert "?" not in staging.name
+    assert staging.suffix == ".md"

@@ -43,7 +43,7 @@ def _chat(content: str, *, total: int = 20) -> bytes:
 
 
 def _clear(env: SimpleNamespace) -> None:
-    """把该账号的 charter 清空(UPDATE 空串 = 清空,回退 charter.md)。"""
+    """把该账号的 charter 清空(UPDATE 空串 = 清空,回退内置默认章程)。"""
     assert env.client.put("/api/charter", json={"charter": ""}).status_code == 200
 
 

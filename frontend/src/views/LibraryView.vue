@@ -205,18 +205,7 @@ async function importOneFile(file: File, attachments: File[] = []): Promise<bool
   imports.value.push(item)
   let upload
   try {
-    try {
-      upload = await createSource(file, false, attachments)
-    } catch (error) {
-      // 没配 API Key(要跑 G2 会 400)→ 自动降级为「跳过 AI 判定」再试一次
-      const msg = describeApiError(error)
-      if (msg.includes('API Key')) {
-        upload = await createSource(file, true, attachments)
-        item.stage = '排队中(未配 Key,跳过 AI 归属判定)'
-      } else {
-        throw error
-      }
-    }
+    upload = await createSource(file, attachments)
   } catch (error) {
     item.stage = `❌ 导入失败:${describeApiError(error)}`
     item.status = 'failed'

@@ -38,7 +38,7 @@ LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 
 
 class CharterStatus(BaseModel):
-    has_charter: bool  # DB 里有问卷生成的 charter → true;没有 → false(回退 charter.md 文件)
+    has_charter: bool  # DB 里有问卷生成的 charter → true;没有 → false(回退内置默认章程)
     charter: str | None  # 有则返回全文,无则 null
 
 
@@ -77,7 +77,7 @@ class CharterGenerateResponse(BaseModel):
 
 
 class CharterUpdate(BaseModel):
-    """charter 全文;空串 = 清空(删除该账号的章程,回退 charter.md 文件)。"""
+    """charter 全文;空串 = 清空(删除该账号的章程,回退内置默认章程)。"""
 
     charter: str = Field(max_length=20000)
 
@@ -87,7 +87,7 @@ class CharterUpdate(BaseModel):
 
 @router.get("", response_model=CharterStatus)
 async def get_charter(session: SessionDep, owner_id: CurrentOwnerDep) -> CharterStatus:
-    """查 charter:DB 有 → 返回全文 + has_charter=true;DB 无 → null + false(回退 charter.md)。"""
+    """查 charter:DB 有 → 返回全文 + has_charter=true;DB 无 → null + false(回退内置默认章程)。"""
     row = await SettingsRepo(session, owner_id).get()
     text = row.charter if row is not None else None
     return CharterStatus(has_charter=bool(text), charter=text)

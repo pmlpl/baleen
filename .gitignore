@@ -84,3 +84,13 @@ Desktop.ini
 *.log
 tmp/
 temp/
+
+# ---------- 视频提取临时文件（yt-dlp 下载碎片） ----------
+*.mp4.part
+*.mp4
+*.mkv
+*.m4a
+*.wav
+bilibili_video_*/
+bilibili_audio_*/
+bilibili_extract_*/

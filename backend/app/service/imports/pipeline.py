@@ -26,17 +26,11 @@ from app.repo import Repos
 from app.service.chunk import ChunkResult, chunk
 from app.service.embed import EMBEDDING_MODEL, count_tokens, embed_passage
 from app.service.gate import judge as judge_g1
-from app.service.gate.g2 import judge as judge_g2
 from app.service.llm import LLMClient
 from app.service.media import store_media
 from app.service.parse import ParseResult, ParseStatus, parse_file
 from app.service.parse.blocks import empty_doc
-from app.service.rewrite.outline import (
-    apply_outline,
-    needs_rewrite,
-    number_headings,
-    plan_outline,
-)
+from app.service.rewrite.organizer import OrganizeResult, organize_note
 
 STORAGE_ROOT = ROOT_DIR / "storage"
 DEDUPE_PREFIX = "import:"
@@ -353,43 +347,56 @@ async def run_import_async(
                     capture=_capture_info(result, path, sha, owner_id, worker, None),
                 )
 
-            # ---- G2 归属闸(可选)----
+            # ---- AI 笔记整理（替代 G2 归属闸 + 标题整理）----
+            # no_llm=True（内部路径：chat save-note，内容已被 LLM 整理过）→ 跳过
+            # no_llm=False → 读 note-format.md 契约 → LLM 重写 markdown → 更新 blocks
+            original_title = _title(pr.blocks, path.name)
+            org: OrganizeResult | None = None
             if no_llm:
                 result.g2_verdict = None
             else:
                 t = time.perf_counter()
                 g2_run = await repos.review_runs.get(source_id, "G2")
                 if g2_run is not None:
+                    # 断点续跑：organizer 已跑过，直接读结果
                     result.g2_verdict, result.quality, result.action = (
                         g2_run.verdict,
                         g2_run.quality,
                         g2_run.action,
                     )
                 else:
-                    g2 = judge_g2(
-                        pr,
-                        charter if charter is not None else get_settings().resolve_charter(),
-                        filename=path.name,
-                        ext=path.suffix.lower(),
-                        size_bytes=len(data),
-                        client=client,
-                    )
+                    try:
+                        org = await asyncio.to_thread(
+                            organize_note,
+                            pr,
+                            filename=path.name,
+                            ext=path.suffix.lower(),
+                            size_bytes=len(data),
+                            client=client,
+                        )
+                    except Exception as exc:  # noqa: BLE001 — LLM 网络异常，降级原文入库
+                        log.warning("AI 笔记整理异常(降级原文入库): %s", exc)
+                        org = OrganizeResult(
+                            organizable=True,
+                            blocks=pr.blocks,
+                            quality="normal",
+                            reasons=[f"AI 整理异常({type(exc).__name__})，已按原文入库"],
+                        )
                     await repos.review_runs.add(
                         source_id=source_id,
                         gate="G2",
-                        verdict=g2.verdict,
-                        quality=g2.quality,
-                        note_type=g2.note_type,
-                        score=g2.score,
-                        action=g2.action,
-                        reasons=g2.reasons,
-                        model=g2.model,
-                        cost_tokens=g2.cost_tokens or 0,
-                        latency_ms=int(round(g2.latency_ms)),
+                        verdict="accept" if org.organizable else "reject",
+                        quality=org.quality,
+                        note_type=org.note_type,
+                        action="index" if org.organizable else "drop",
+                        reasons=org.reasons,
+                        model=org.model,
+                        cost_tokens=org.cost_tokens,
+                        latency_ms=int(round(org.latency_ms)),
                     )
-                    result.g2_verdict = g2.verdict
-                    result.quality = g2.quality
-                    result.action = g2.action
+                    result.g2_verdict = "accept" if org.organizable else "reject"
+                    result.quality = org.quality
+                    result.action = "index" if org.organizable else "drop"
                 await session.commit()
                 mark("G2", t)
                 if result.g2_verdict == "reject":
@@ -397,34 +404,14 @@ async def run_import_async(
                         repos, job_id, result, None, session,
                         capture=_capture_info(result, path, sha, owner_id, worker, None),
                     )
-
-            # ---- 标题结构二次加工(可选)----
-            # 放在建笔记之前:改的是 pr.blocks,同一份会流向 notes.doc 与 chunk(),
-            # 一处修改两处生效。失败静默跳过(与 G2 降级同口径,不因整理失败而导入失败)。
-            original_title = _title(pr.blocks, path.name)  # 先记下原标题,避免被重写的 H1 覆盖
-            t = time.perf_counter()
-            if (
-                not no_llm
-                and client is not None
-                and not (source.parse_meta or {}).get("headings_rewritten")
-                and needs_rewrite(pr.blocks)
-            ):
-                try:
-                    specs = await asyncio.to_thread(
-                        plan_outline, pr.blocks, title=original_title, client=client
-                    )
-                    if specs:
-                        pr.blocks = apply_outline(pr.blocks, number_headings(specs))
-                        result.headings_rewritten = True
-                        result.headings_added = len(specs)
-                        # 幂等标记:断点续跑时不再重复整理(重写结果幂等,但会白花钱)
-                        meta = dict(source.parse_meta or {})
-                        meta["headings_rewritten"] = True
-                        source.parse_meta = meta
-                        log.info("标题已整理: %s 条(%s)", len(specs), original_title)
-                except Exception as exc:  # noqa: BLE001 —— 整理是锦上添花,静默跳过
-                    log.warning("标题整理失败(不影响导入): %s", exc)
-            mark("rewrite", t)
+                # organizer 返回了重写后的 blocks → 替换（流向 note.doc 与 chunk）
+                if org is not None and org.blocks is not None:
+                    pr.blocks = org.blocks
+                    result.headings_rewritten = True
+                    meta = dict(source.parse_meta or {})
+                    meta["headings_rewritten"] = True
+                    source.parse_meta = meta
+                    log.info("AI 笔记整理完成: %s", original_title)
 
             # ---- note ----
             t = time.perf_counter()

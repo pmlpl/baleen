@@ -2,7 +2,7 @@
 
 - base_url / model:非密钥,回退 .env 作为默认值(新用户开箱有个合理网关)
 - api_key / tavily_key:**不回退**,必须由该用户自己配(用户已拍板:不继承别人的 key)
-- charter:DB → charter.md 文件 → 内置默认
+- charter:DB → 内置默认(charter.md 文件或 CHARTER 环境变量可覆盖,但 charter.md 已非常规配置)
 
 每次调用前现读 → 设置页保存后**热生效**,无需重启。
 """
@@ -47,7 +47,7 @@ async def resolve_tavily_key(session: AsyncSession, owner_id: int) -> str | None
 
 
 async def resolve_charter(session: AsyncSession, owner_id: int) -> str:
-    """返回 charter:该用户的 DB 配置优先,回退 charter.md 文件 > env > 默认。"""
+    """返回 charter:该用户的 DB 配置优先,回退内置默认(charter.md 文件或 CHARTER 环境变量可覆盖)。"""
     row = await _row(session, owner_id)
     if row is not None and row.charter:
         return row.charter

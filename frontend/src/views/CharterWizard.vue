@@ -7,7 +7,7 @@
  * - **编辑模式**(已有 charter,从设置页进来):直接展示现有章程供修改,也可重新填问卷。
  *
  * 3 步问卷(你是谁 → 收什么/不能收什么 → 拿不准+补充) → 预览可编辑 → 保存。
- * 保存后 G2 热用新章程(DB 优先于 charter.md 文件)。
+ * 保存后 G2 热用新章程(DB 优先于内置默认)。
  */
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -54,7 +54,7 @@ const rejectOptions = [
   '纯流程流水账（只写做了什么，没写为什么）',
 ]
 const selectedCollect = ref<string[]>([])
-/** 默认全部不收(与 charter.md 默认一致);取消勾选表示「这类我其实想保留」 */
+/** 默认全部不收(与内置默认章程一致);取消勾选表示「这类我其实想保留」 */
 const selectedReject = ref<string[]>([...rejectOptions])
 
 function toggleCollect(item: string): void {

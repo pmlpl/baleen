@@ -28,8 +28,9 @@ from app.service.parse.blocks import flatten_text
 from app.service.parse.types import ParseResult
 
 # ---- prompt 预算 ----
-# charter.md 有 1373 字符(≈1373 token);3000 总预算下正文只剩约 1450 token,判定信息不足,
-# 主人确认上调到 4000(HANDOFF 线 I-批1 §4b)。
+# charter 来自问卷生成(DB)或内置默认兜底;早期 charter.md 文件约 1373 token,
+# 3000 总预算下正文只剩约 1450 token 判定信息不足,主人确认上调到 4000(HANDOFF 线 I-批1 §4b)。
+# charter.md 退役后默认兜底约 200 字符,预算更宽松;此阈值仍保留(防问卷生成的 charter 过长)。
 PROMPT_TOKEN_BUDGET = 4000  # 总输入(系统 + 用户消息)的估算 token 上限
 CHARTER_TOKEN_WARN = 1200  # charter 超过此值 → 记 warning,提示主人精简章程
 MIN_SAMPLE_TOKENS = 200  # 结构化摘要挤压后仍不足此值 → 放弃采样只报 warning
@@ -206,7 +207,7 @@ def build_messages(
     if charter_tokens > CHARTER_TOKEN_WARN:
         warnings.append(
             f"charter 约 {charter_tokens} token,超过 {CHARTER_TOKEN_WARN};"
-            "正文可用预算被压缩,建议精简 charter.md"
+            "正文可用预算被压缩,建议精简章程"
         )
     structure, text, chars, heading_path = _summary(parse_result)
 

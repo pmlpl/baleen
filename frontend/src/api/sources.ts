@@ -180,14 +180,23 @@ function toUploadResponse(raw: unknown): UploadResponse {
  */
 export async function createSource(
   file: File,
-  noLlm = false,
   attachments: File[] = [],
 ): Promise<UploadResponse> {
   const form = new FormData()
   form.append('file', file)
   for (const att of attachments) form.append('attachments', att, att.name)
-  const query = noLlm ? '?no_llm=true' : ''
-  return toUploadResponse(await http.postForm<unknown>(`/sources${query}`, form))
+  return toUploadResponse(await http.postForm<unknown>('/sources', form))
+}
+
+/**
+ * POST /api/sources/url —— B 站视频链接导入(JSON body)。
+ * mode: "subtitle"（秒级，拉B站字幕） | "whisper"（分钟级，下载音频+whisper转写）
+ */
+export async function createSourceFromUrl(
+  url: string,
+  mode: 'subtitle' | 'whisper' = 'subtitle',
+): Promise<UploadResponse> {
+  return toUploadResponse(await http.post<unknown>('/sources/url', { url, mode }))
 }
 
 /** GET /api/sources/{id} —— 前端轮询这一个接口就能拿到全链路状态 */

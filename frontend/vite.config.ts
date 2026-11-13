@@ -18,6 +18,9 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,
+        // whisper 模式的视频提取要 1-2 分钟，默认代理超时太短会 502
+        timeout: 300000,
+        proxyTimeout: 300000,
       },
     },
   },

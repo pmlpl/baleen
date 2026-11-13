@@ -286,46 +286,54 @@ class TestDryRun:
 
 
 class _RoutingLLM:
-    """按 system prompt 区分 G2 与标题整理,各自返回可预期的内容。"""
+    """假 LLM：organizer 调用时返回预设的 JSON（organizable + markdown）。"""
 
     model = "fake-routing-llm"
 
-    def __init__(self, outline_json: str = "[]") -> None:
+    def __init__(self, organizer_json: str | None = None) -> None:
         self.calls: list[str] = []
-        self._outline_json = outline_json
+        # 默认返回一个可整理的成功响应
+        self._organizer_json = organizer_json or json.dumps(
+            {
+                "organizable": True,
+                "markdown": "# 整理后的标题\n\n## 小节\n\n" + _PARAGRAPH,
+                "quality": "core",
+                "note_type": "concept",
+                "reasons": ["整理了内容"],
+            },
+            ensure_ascii=False,
+        )
 
     def chat(self, messages, **kwargs) -> ChatResult:
         system = messages[0]["content"] if messages else ""
-        if "文档结构整理助手" in system:
-            self.calls.append("rewrite")
-            content = self._outline_json
+        if "笔记编辑助手" in system:
+            self.calls.append("organize")
+            content = self._organizer_json
         else:
-            self.calls.append("g2")
-            content = json.dumps(
-                {
-                    "verdict": "accept",
-                    "quality": "core",
-                    "note_type": "case",
-                    "score": 4,
-                    "action": "index",
-                    "reasons": ["fake"],
-                    "missing": [],
-                },
-                ensure_ascii=False,
-            )
+            self.calls.append("other")
+            content = "{}"
         return ChatResult(content=content, model=self.model, total_tokens=10)
 
 
 class TestHeadingRewrite:
-    """导入时的标题结构二次加工(仅在 no_llm=False 且结构不佳时触发)。"""
+    """AI 笔记整理（替代 G2 + 标题整理）：no_llm=False 时 always 跑 organizer。"""
 
     def test_long_doc_without_headings_gets_rewritten(
         self, tmp_path, db_scope, fake_embed, fake_tokens
     ):
-        # 一段很长的纯正文(无标题),把行号与标题计划对上
+        # 一段很长的纯正文(无标题),organizer 应返回带标题的 markdown
         body = "\n\n".join([_PARAGRAPH] * 4)
         path = _write(tmp_path, "plain.md", body)
-        llm = _RoutingLLM('[{"at": 0, "level": 1, "title": "闭包与内存泄漏"}]')
+        llm = _RoutingLLM(json.dumps(
+            {
+                "organizable": True,
+                "markdown": "# 闭包与内存泄漏\n\n## 定义\n\n" + _PARAGRAPH,
+                "quality": "core",
+                "note_type": "concept",
+                "reasons": ["补了标题"],
+            },
+            ensure_ascii=False,
+        ))
 
         async def case():
             async with db_scope() as factory:
@@ -336,32 +344,30 @@ class TestHeadingRewrite:
                     embed_func=fake_embed,
                     token_counter=fake_tokens,
                     client=llm,
-                    charter="只收自己想明白的东西",
                 )
                 assert result.headings_rewritten is True
-                assert result.headings_added == 1
-                assert "rewrite" in llm.calls
+                assert "organize" in llm.calls
                 async with factory() as session:
                     note = await session.scalar(
                         select(Note).where(Note.source_id == result.source_id)
                     )
                     assert note is not None
-                    # 笔记标题仍是原文派生(没被重写的 H1 顶掉)
+                    # 笔记标题仍是原文派生(不被 organizer 的 H1 顶掉)
                     assert note.title == "plain"
                     doc_headings = [
                         b for b in (note.doc or {}).get("content", []) if b.get("type") == "heading"
                     ]
-                    assert doc_headings, "应当插入了标题块"
+                    assert doc_headings, "应当有标题块"
                     text = "".join(n.get("text", "") for n in doc_headings[0]["content"])
                     assert text.startswith("一、")
                     assert "闭包与内存泄漏" in text
 
         asyncio.run(case())
 
-    def test_no_llm_skips_rewrite(self, tmp_path, db_scope, fake_embed, fake_tokens):
+    def test_no_llm_skips_organize(self, tmp_path, db_scope, fake_embed, fake_tokens):
         body = "\n\n".join([_PARAGRAPH] * 4)
         path = _write(tmp_path, "skip.md", body)
-        llm = _RoutingLLM('[{"at": 0, "level": 1, "title": "不该出现"}]')
+        llm = _RoutingLLM()
 
         async def case():
             async with db_scope() as factory:
@@ -374,14 +380,14 @@ class TestHeadingRewrite:
                     client=llm,
                 )
                 assert result.headings_rewritten is False
-                assert "rewrite" not in llm.calls  # 一次 LLM 都没调
+                assert len(llm.calls) == 0  # 一次 LLM 都没调
 
         asyncio.run(case())
 
-    def test_well_structured_doc_is_not_rewritten(
+    def test_well_structured_doc_still_organized(
         self, tmp_path, db_scope, fake_embed, fake_tokens
     ):
-        # 已经带编号且无重名 → needs_rewrite 返回 False,不该花 LLM
+        # organizer always runs (no needs_rewrite check) — 验证它跑了且产出有标题
         md = (
             "# 一、总览\n\n" + _PARAGRAPH + "\n\n"
             "# 二、细节\n\n" + _PARAGRAPH + "\n\n"
@@ -389,7 +395,16 @@ class TestHeadingRewrite:
             "## 2.2 子节乙\n\n" + _PARAGRAPH
         )
         path = _write(tmp_path, "good.md", md)
-        llm = _RoutingLLM('[{"at": 0, "level": 1, "title": "不该出现"}]')
+        llm = _RoutingLLM(json.dumps(
+            {
+                "organizable": True,
+                "markdown": "# 总览\n\n" + _PARAGRAPH + "\n\n## 细节\n\n" + _PARAGRAPH,
+                "quality": "normal",
+                "note_type": "concept",
+                "reasons": ["结构良好，轻度整理"],
+            },
+            ensure_ascii=False,
+        ))
 
         async def case():
             async with db_scope() as factory:
@@ -400,11 +415,9 @@ class TestHeadingRewrite:
                     embed_func=fake_embed,
                     token_counter=fake_tokens,
                     client=llm,
-                    charter="只收自己想明白的东西",
                 )
-                assert result.headings_rewritten is False
-                assert "rewrite" not in llm.calls
-                assert llm.calls.count("g2") == 1  # G2 照常跑
+                assert result.headings_rewritten is True  # organizer 跑了
+                assert "organize" in llm.calls
 
         asyncio.run(case())
 

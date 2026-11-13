@@ -12,7 +12,7 @@
 
 ## 契约与决策
 
-- [API 契约 v18](docs/api.md) — 前后端接口（版本以「变更记录」为准）
+- [API 契约 v22](docs/api.md) — 前后端接口（版本以「变更记录」为准）
 - ADR（技术决策，答辩素材）：
   - [0001 架构基线](docs/adr/0001-architecture-baseline.md)
   - [0002 解析栈](docs/adr/0002-parsing-stack.md)
@@ -20,11 +20,13 @@
   - [0004 文本切分](docs/adr/0004-text-splitting.md)
   - [0005 导入摘要](docs/adr/0005-import-summary-and-artifacts.md)
   - [0006 图片视觉](docs/adr/0006-image-vision.md)
-- [charter 章程](charter.md) — G2 归属闸的运行时输入（非常规文档，清理时别碰）
+  - [0007 B 站字幕导入](docs/adr/0007-bilibili-subtitle-import.md)
+  - [0008 G2 变编辑](docs/adr/0008-g2-judge-to-editor.md)
+- [笔记格式规范](docs/note-format.md) — 完整笔记契约（格式层+内容层），人/AI 写笔记前必读；charter 由问卷生成存 DB，不再独立成文件
 
 ## 交付历史
 
-- 后端归档：[foundation](backend/delivery/2026-10-foundation.md) · [gates-retrieval](backend/delivery/2026-10-gates-retrieval.md) · [qa-and-eval](backend/delivery/2026-10-qa-and-eval.md) · [pending 待填](backend/delivery/pending.md)
+- 后端归档：[foundation](backend/delivery/2026-10-foundation.md) · [gates-retrieval](backend/delivery/2026-10-gates-retrieval.md) · [qa-and-eval](backend/delivery/2026-10-qa-and-eval.md) · [2026-11](backend/delivery/2026-11.md)
 - [评测线交付](eval/DELIVERY.md) · [前端线交付](frontend/DELIVERY.md)
 
 ## 评测

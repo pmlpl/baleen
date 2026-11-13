@@ -113,7 +113,7 @@
 | **线 L** | `frontend/` 全目录（含 `frontend/DELIVERY.md`） | 三页界面（导入 / 笔记库 / 检索） |
 | **线 M** | `app/api/library.py`（新）· `app/repo/library.py`（新）· `app/main.py`（只加 2 行）· `tests/api/`（新）· `STATUS.md` | 4 个查询 API（`docs/api.md` §3 §4） |
 | **线 N** | `eval/queries/`（新）· `eval/scripts/ablation.py`（新）· `eval/ablation.md`（新）· `eval/scripts/make_split.py` · `eval/metrics.py` · `eval/split_meta.json` · **`eval/labels.csv` 的 `split` 列（主人 2026-10-29 专门批准，仅此一列）** · `eval/DELIVERY.md` | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) |
-| **协调方** | `HANDOFF.md` · `charter.md` · `docs/adr/` · **`docs/api.md`** · `eval/rubric.md` · `eval/labels.csv`（除 `split` 列） · `AGENTS.md` · git 提交 | 只由协调方改 |
+| **协调方** | `HANDOFF.md` · `docs/note-format.md` · `docs/adr/` · **`docs/api.md`** · `eval/rubric.md` · `eval/labels.csv`（除 `split` 列） · `AGENTS.md` · git 提交 | 只由协调方改 |
 | **已冻结** | `app/service/parse/` · `chunk/` · `embed/` · `imports/pipeline.py` · `app/repo/`（已有文件）· `alembic/` · `eval/samples/` | 已验收，要改先提 ADR |
 
 ### 三秒自查

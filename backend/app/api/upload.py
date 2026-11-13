@@ -13,6 +13,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import mimetypes
 import shutil
@@ -26,7 +27,6 @@ from fastapi import (
     Depends,
     File,
     HTTPException,
-    Query,
     Request,
     Response,
     UploadFile,
@@ -58,6 +58,13 @@ class UploadResponse(BaseModel):
     job_id: int
     job_status: str
     deduped: bool
+
+
+class UrlImportRequest(BaseModel):
+    """POST /api/sources/url 的请求体:B 站视频链接导入。"""
+
+    url: str
+    mode: str = "subtitle"  # "subtitle"（秒级，拉B站字幕） | "whisper"（分钟级，下载音频+whisper转写）
 
 
 async def _write_attachments(attachments: list[UploadFile], target_dir: Path) -> None:
@@ -137,9 +144,6 @@ async def upload_source(
     file: UploadFile,
     session: SessionDep,
     owner_id: CurrentOwnerDep,
-    no_llm: Annotated[
-        bool, Query(description="跳过 G2(不写 G2 判定行,parse_meta 记 g2_skipped)")
-    ] = False,
     attachments: Annotated[
         list[UploadFile] | None,
         File(description="md 里引用的本地图片(v16):按相对路径随主文件一起上传"),
@@ -165,14 +169,13 @@ async def upload_source(
                 status_code=415, detail=f"附件只支持图片:{att.filename or '(无文件名)'}"
             )
 
-    # 预检:要跑 G2 却没配 API Key → 当场提示去设置页,别让任务在队列里静默降级
-    if not no_llm:
-        _base, api_key, _model = await resolve_llm_config(session, owner_id)
-        if not api_key:
-            raise HTTPException(
-                status_code=400,
-                detail="这个账号还没配置 API Key,请先到设置页配置,或勾选「跳过 AI 判定」后再上传",
-            )
+    # 预检:没配 API Key → 不允许上传(所有内容必须经 AI 笔记整理，防止未整理内容污染知识库)
+    _base, api_key, _model = await resolve_llm_config(session, owner_id)
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="这个账号还没配置 API Key,请先到设置页配置后再上传",
+        )
 
     # 流式落暂存区:**每次上传建一个目录**,主文件按原文件名放进去、附件也放进去 ——
     # md 解析器按「相对 md 文件所在目录」解析图片路径,目录结构天然对上,
@@ -216,7 +219,7 @@ async def upload_source(
     )
     job, job_created = await repos.jobs.create_or_get(
         dedupe_key=DEDUPE_PREFIX + sha,
-        payload={"filename": raw_name, "no_llm": no_llm, "via": "api"},
+        payload={"filename": raw_name, "via": "api"},
     )
     await session.commit()
 
@@ -231,7 +234,130 @@ async def upload_source(
             await enqueue_import(
                 str(staging),
                 dedupe_key=DEDUPE_PREFIX + sha,
-                no_llm=no_llm,
+                owner_id=owner_id,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=f"任务队列不可用,请稍后重试:{type(exc).__name__}",
+            ) from exc
+
+    response.status_code = 201 if job_created else 200
+    return UploadResponse(
+        source_id=source.id,
+        job_id=job.id,
+        job_status=job.status,
+        deduped=deduped,
+    )
+
+
+@router.post("/sources/url", response_model=UploadResponse)
+async def import_from_url(
+    body: UrlImportRequest,
+    response: Response,
+    session: SessionDep,
+    owner_id: CurrentOwnerDep,
+) -> UploadResponse:
+    """通过 B 站视频链接导入:两种模式可选。
+
+    - ``mode="subtitle"``：拉 B 站 CC/AI 字幕（秒级，但不稳定）
+    - ``mode="whisper"``：下载音频 + whisper 转写 + 帧提取（分钟级，但可靠）
+    两种模式都产出 markdown，后续 sha256/暂存/blob/enqueue/dedupe 完全一致。
+    """
+    from app.core.config import get_settings
+    from app.service.bilibili import BilibiliError, fetch_bilibili, sanitize_filename
+    from app.service.imports.pipeline import DEDUPE_PREFIX, _store_blob
+    from app.service.llm.client import LLMClient
+    from app.service.llm.resolve import resolve_llm_config
+
+    settings = get_settings()
+
+    # 预检 API Key(没配 key 不允许导入，防止未整理内容污染知识库)
+    _base, api_key, _model = await resolve_llm_config(session, owner_id)
+    if not api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="这个账号还没配置 API Key,请先到设置页配置后再导入",
+        )
+
+    sessdata = settings.bilibili_sessdata
+
+    # 根据 mode 选择内容提取方式
+    if body.mode == "whisper":
+        # whisper 模式：下载音频 → whisper 转写 → （可选）帧描述
+        from app.service.video_extractor import extract_video_content
+
+        llm_client = LLMClient(
+            base_url=_base, api_key=api_key, model=_model,
+            timeout=settings.llm_long_task_timeout,
+        )
+        try:
+            vc = await asyncio.to_thread(
+                extract_video_content, body.url,
+                sessdata=sessdata, client=llm_client,
+            )
+            markdown_content = vc.markdown
+            video_title = vc.title
+        except BilibiliError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"视频提取失败:{type(exc).__name__}: {exc}"[:300],
+            ) from exc
+    else:
+        # 字幕模式（现有逻辑）
+        try:
+            result = await asyncio.to_thread(fetch_bilibili, body.url, sessdata=sessdata)
+        except BilibiliError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception:
+            raise HTTPException(
+                status_code=502,
+                detail="B 站接口请求失败,请稍后重试",
+            )
+        markdown_content = result.markdown
+        video_title = result.info.title
+
+    # 写 markdown 到暂存区(与 upload 同款:每次一个 uuid 目录)
+    filename = sanitize_filename(video_title) + ".md"
+    unique = uuid.uuid4().hex
+    staging_dir = STAGING_ROOT / unique
+    staging_dir.mkdir(parents=True, exist_ok=True)
+    staging = staging_dir / filename
+    try:
+        staging.write_text(markdown_content, encoding="utf-8")
+    except OSError:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise HTTPException(status_code=500, detail="暂存文件写入失败")
+
+    sha = hashlib.sha256(staging.read_bytes()).hexdigest()
+    blob = _store_blob(staging.read_bytes(), sha)
+
+    repos = Repos(session, owner_id=owner_id)
+    source, _ = await repos.sources.create_or_get_by_sha256(
+        sha256=sha,
+        filename=filename,
+        ext=".md",
+        size_bytes=staging.stat().st_size,
+        storage_path=str(blob),
+        mime="text/markdown",
+        parse_status="pending",
+    )
+    job, job_created = await repos.jobs.create_or_get(
+        dedupe_key=DEDUPE_PREFIX + sha,
+        payload={"filename": filename, "via": "url"},
+    )
+    await session.commit()
+
+    deduped = not job_created
+    if job.status in ("done", "running"):
+        shutil.rmtree(staging_dir, ignore_errors=True)
+    else:
+        try:
+            await enqueue_import(
+                str(staging),
+                dedupe_key=DEDUPE_PREFIX + sha,
                 owner_id=owner_id,
             )
         except Exception as exc:

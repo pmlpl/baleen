@@ -11,7 +11,7 @@
 
 ## 1. 这是什么
 
-**baleen** —— 中文优先的**个人**智能笔记库。
+**baleen** —— **个人**智能笔记库。
 
 一句话定位：**一个能自己判断该不该收、收了之后还能被追问出处的本地知识库。**
 
@@ -272,4 +272,6 @@ chore: 升级 uv 到 0.13
 | 2026-10-28 | 模型自包含：bge 从 `asklaw` 搬到 `智能笔记库\models\bge-large-zh-v1.5`（展开符号链接，1.21 GB）；§6 路径与说明同步更新 |
 | 2026-11-07 | **解除「禁止 AI 修改本文件」**（主人明确授权）：§3.11 改为「改必须留痕」（§11 记录 + 回复明示），头部声明同步；理由——原限制挡住的是「有痕改动」，挡不住真实漂移，而漂移只能靠改约定来治 |
 | 2026-11-07 | §10 开工流程把「文档同步」列为第 6 步（原来只在第 6 步「交付说明」里含糊带过）：交付块 / 当天日志 / api.md 版本 / `doc_lint` 0 ERROR；并明确「没写文档的交付不算交付」 |
+| 2026-11-09 | charter.md 退役 + 笔记契约内容层：① 删 `charter.md`（charter 已问卷化存 DB，不再手写文件）；② `config.py` `DEFAULT_CHARTER` 改通用兜底（去掉"软件本科生"身份预设）；③ `docs/note-format.md` 加 §5 内容层（5 条好笔记骨架：用自己的话/原子化/定义+例子/三段可复现/出处，融合 charter 判据 + Zettelkasten）；④ `generator.py` prompt「判据」「笔记长什么样」对齐内容层；⑤ `g2.py` warning 文案 `charter.md`→章程；⑥ `api.md` v18→v19 + 优先级描述更新；⑦ NAVIGATION/HANDOFF/各 docstring 同步清理 `charter.md` 引用。跨 docs/backend/frontend/根目录，理由：charter.md 退役的引用散落全项目 |
+| 2026-11-12 | §1 定位去掉「中文优先」（主人拍板：定位就是「智能笔记库」）：同步 `docs/adr/0001` §1、`backend/pyproject.toml` description、`eval/TASK.md` §一。跨根目录/docs/backend/eval，理由：同一句定位散落 4 处；测试 fixture `utf8.txt` 中的「中文优先」是 UTF-8 编码测试文本，与定位无关，不动 |
 

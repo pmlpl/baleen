@@ -70,7 +70,7 @@ def test_remove_staging_refuses_paths_outside_root(tmp_path: Path, monkeypatch) 
 
 
 class _StubSession:
-    """最小假 session:scalar → None,resolve_charter 回退 charter.md 文件。
+    """最小假 session:scalar → None,resolve_charter 回退内置默认章程。
 
     import_file 现在读 charter(需 session),这两个编排测试不连真 DB,
     用 stub 避免跨 asyncio.run 事件循环复用 asyncpg 连接。

@@ -90,6 +90,9 @@ onBeforeUnmount(() => {
             <RouterLink class="nav-link" :to="{ name: 'notes' }" active-class="nav-link--active">
               笔记库
             </RouterLink>
+            <RouterLink class="nav-link" :to="{ name: 'video' }" active-class="nav-link--active">
+              视频笔记
+            </RouterLink>
             <RouterLink class="nav-link" :to="{ name: 'qa' }" active-class="nav-link--active">
               问答
             </RouterLink>

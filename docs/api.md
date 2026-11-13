@@ -1,4 +1,4 @@
-# API 契约 v18
+# API 契约 v22
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -69,7 +69,6 @@
 | 字段 | 类型 | 必填 | 说明 |
 |---|---|---|---|
 | `file` | file | ✅ | 单个文件，≤ 50 MB |
-| `no_llm` | bool（query） | ❌ | `true` 时跳过 G2（不耗额度），结果打 `g2_skipped=true` |
 
 ```json
 { "id": 12, "job_id": 34, "job_status": "queued", "deduped": false }
@@ -89,22 +88,43 @@
 - **支持格式**：.pdf / .docx / .pptx / .md / .markdown / .txt / **.csv（v14 新增：整篇表格，首行当表头，
   自动嗅探分隔符，GB18030 兼容）** / 图片（v13 起走视觉转写）；.doc / .xlsx / .xls 显式拒绝并给转换提示。
 - 415 = 扩展名不认识；413 = 超 50 MB；422 = 没带文件。
-- `no_llm=false` 且该账号没配 API Key → **400**（提示去设置页，或改勾「跳过 AI 判定」）。
+- 该账号没配 API Key → **400**（所有内容必须经 AI 笔记整理，防止未整理内容污染知识库）。
 
-**导入时的标题结构二次加工**（`no_llm=false` 才跑）：
-流水线在建笔记之前让 LLM 规划标题结构，补上缺失标题、给章节加编号
-（`一、` / `2.1 ` / `2.1.3 `）、消除同级重名。**只动标题，正文不改**。
-跳过条件：正文 < 400 字 / 已有 ≥2 个标题且无重名无空章且 80% 带编号。
-失败静默降级（原结构保留，导入照常成功）。
+**AI 笔记整理**（v21 起，替代 G2 归属闸 + 标题整理）：
+流水线在建笔记之前让 LLM 读 `note-format.md` 契约，重写整篇 markdown——
+补缺失标题、组织结构、去掉明显噪音（营销话术等），标题只写语义不写编号（编号系统自动加）。
+如果全文无可整理的知识点（纯广告）→ 不入库（`G2 verdict=reject`）。
+LLM 异常/输出不可解析 → 降级原文入库（不因整理失败丢内容）。
 
-> ⚠️ **需要非推理模型**。推理模型（某些推理型网关模型）会把 `max_tokens` 全用在 reasoning 上、
-> `content` 返回空，导致整理静默失败。实测 deepseek-flash 正常。
+> ⚠️ **需要非推理模型**。推理模型会把 `max_tokens` 全用在 reasoning 上、`content` 返回空，导致整理降级。
+
+### `POST /api/sources/url`（v20 新增）
+
+B 站视频链接导入：后端拉取视频的 CC/AI 字幕，拼成 markdown，走与文件导入完全相同的管线
+（G0→G1→G2→标题整理→切块→向量化）。**不下载视频、不做语音识别**——没有字幕的视频返回 400。
+
+`application/json`
+
+| 字段 | 类型 | 必填 | 说明 |
+|---|---|---|---|
+| `url` | string | ✅ | B 站视频链接，如 `https://www.bilibili.com/video/BV1GJ411x7h7` |
+| `mode` | string | ❌ | `"subtitle"`（默认，秒级，拉 B 站 CC/AI 字幕） \| `"whisper"`（分钟级，下载音频+whisper 转写+帧描述，内容可靠） |
+
+响应与 `POST /api/sources` 完全一致（`{ source_id, job_id, job_status, deduped }`）。
+轮询 `GET /api/sources/{source_id}` 拿全链路状态，与文件导入完全一致。
+
+- `mode="whisper"` 时请求会阻塞 2-3 分钟（下载音频 + whisper 转写），前端需显示等待提示。
+- 400 = URL 无法识别 BV 号 / 视频没有字幕（subtitle 模式）/ 没配 API Key。
+- 502 = B 站接口请求失败（网络不可达 / 接口异常）。
+- 字幕来源：B 站 player/v2 接口，需在 `.env` 配置 `BILIBILI_SESSDATA`（登录 bilibili.com → F12 → Cookies → SESSDATA）才能拿到大部分视频的 CC/AI 字幕；未配置时部分视频会报「没有字幕」。
+- 视频有章节（view_points）时按章节分 heading；字幕片段按句末标点和时间间隔（>3s）合并成段落。
+- 同一视频重复导入 → sha256 去重（基于字幕 markdown 内容哈希）。
 
 ### `GET /api/sources/{source_id}`
 
 > **图片文件（ADR 0006，2026-11-01 v13）**：配置了 LLM 后，图片(jpg/png/gif/webp/bmp/tif)导入时
 > 由该用户的视觉模型转写为 Markdown 正文 → 正常过闸入库（`parse_status=ok`，`warnings` 带
-> 「AI 视觉识别转写,可能有误差」）。没配 key / `no_llm` / 识别失败 → `no_text_expected`（旧语义）。
+> 「AI 视觉识别转写,可能有误差」）。没配 key / 识别失败 → `no_text_expected`（旧语义）。
 > 转写模型用推理型网关时可能返回空转写而被 G1 拒——换非推理视觉模型。（已实现）
 >
 > **扫描件 PDF（ADR 0006 §6，2026-11-02 v15）**：无文本层的 PDF（扫描件/纯图 PDF）在配置了 LLM 时
@@ -438,7 +458,7 @@
 ## 8. Charter 章程（**已实现**）
 
 **每个账号各自一份章程**（`app_settings` 每用户一行）。首次登录弹问卷向导 → LLM 生成章程 → 存该用户行 → G2 热生效。
-DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 → DEFAULT_CHARTER）。
+DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；项目根的 charter 文件或 `CHARTER` 环境变量仍可覆盖，但已非常规配置）。charter.md 已退役，未填问卷时用 `config.py` 的通用 `DEFAULT_CHARTER` 兜底；好笔记的内容层骨架见 `docs/note-format.md` §5。
 
 ### `GET /api/charter`
 
@@ -446,9 +466,9 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 { "has_charter": false, "charter": null }
 ```
 
-`has_charter=true` 表示**当前账号**已有章程；`false` = 回退 `charter.md` 文件。前端用它判断要不要弹问卷。
+`has_charter=true` 表示**当前账号**已有章程；`false` = 回退内置默认章程。前端用它判断要不要弹问卷。
 
-`PUT /api/charter` 传空串 = 清空该账号的章程（回退文件）。
+`PUT /api/charter` 传空串 = 清空该账号的章程（回退内置默认）。
 
 ### `POST /api/charter/generate`
 
@@ -491,7 +511,7 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 ```
 
 - 返回同 `GET` 的 `{ has_charter, charter }`
-- 空串 = 清空（回退 `charter.md` 文件）
+- 空串 = 清空（回退内置默认章程）
 
 ---
 
@@ -499,6 +519,10 @@ DB charter 优先于 `charter.md` 文件（`resolve_charter`：DB → 文件 →
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-12 | v22 | **视频笔记页 + whisper 模式**：`POST /api/sources/url` 新增 `mode` 参数（`"subtitle"` / `"whisper"`）；whisper 模式下载音频+whisper 转写+帧描述（不依赖 B 站字幕系统，内容可靠）；新增前端「视频笔记」页（B 站嵌入式播放器 + 模式选择 + 导入进度） |
+| 2026-11-12 | v21 | **G2 从判官变编辑 + 用户上传必须配 API Key**：G2 归属闸 + 标题整理合并为「AI 笔记整理」（`organizer.py`）——LLM 读 `note-format.md` 契约重写整篇 markdown（补标题/组织结构/去噪），无可整理内容→不入库，LLM 异常→降级原文入库；`POST /api/sources` 和 `POST /api/sources/url` 删除 `no_llm` 参数，没配 API Key → 400（防止未整理内容污染知识库）；charter 从导入流水线中去掉（API/问卷暂留）；`no_llm` 保留为内部参数（chat save-note 用） |
+| 2026-11-12 | v20 | **B 站视频字幕导入**：§2 新增 `POST /api/sources/url`（JSON body `{url}`，响应同 `POST /api/sources`）——后端纯 HTTP（urllib，零新依赖）拉取 B 站 CC/AI 字幕拼成 markdown，走现有导入管线；无字幕→400，B 站接口不可达→502；需 `.env` 配 `BILIBILI_SESSDATA` 才能拿到大部分视频字幕；有章节按章节分 heading，字幕片段按句末标点+时间间隔合段 |
+| 2026-11-09 | v19 | **charter.md 退役 + 笔记契约内容层**：§8 charter 优先级描述更新——charter.md 文件退役（未填问卷时用 `config.py` 通用 `DEFAULT_CHARTER` 兜底，不预设"软件本科生"身份）；好笔记内容层骨架（用自己的话/原子化/定义+例子/三段可复现/出处）见 `docs/note-format.md` §5，并注入 charter 生成 prompt 的「判据」「笔记长什么样」两节。API 行为不变（GET/POST/PUT 端点与字段不变，仅回退描述更新）|
 | 2026-11-05 | v18 | **整理笔记保留出处链接 + 截断兜底**：① `save-note` 的组织流程把各条回答的 `citations` 一起带进去——原先只传 role/content，导致笔记正文里的 `[W1]` 变成无指向的裸徽章。各条回答的 `[1]`/`[W1]` 是**本地编号**（都从 1 开始），直接拼成一篇会串号，故按首次出现顺序重编为全文唯一编号（`[W1..Wn]` 联网、`[1..n]` 库内，同一 URL 去重）。② 笔记末尾自动追加 **`## 出处`** 清单，只列正文真正引用到的编号：联网写 `<https://…>`（markdown autolink，被 chunker 拍平后 URL 仍保留），库内写站内路由 `/notes/{id}`。③ 前端笔记阅读页把 `[Wn]` 徽章升级为可点链接（外链 `target=_blank rel=noopener noreferrer`，库内跳笔记详情；无清单的老笔记降级为静态徽章）；补 `.sec` 容器的徽章样式（原先只挂 `.md`，笔记页的引用标记连徽章样式都没有）；`styles.css` 里误用的 scoped `:deep()`（全局样式表不生效）已改为普通选择器。④ 组织笔记的 `max_tokens` 从 3000 提到 **8000**，并在 `ChatResult` 新增 **`finish_reason`**：撞上 `length` 时按轮续写拼回（最多 2 轮），续写仍超限则在正文末尾追加显式截断警告——原先截断是静默的（一篇 5 表笔记停在第四张表第二行，末尾留一个孤立的 `|`）。**已在编辑笔记时手动补齐表格的情况不受影响** |
 | 2026-11-05 | v17 | **导入与对话附件职责分离 + 图片附件**：① §5 `POST /api/qa/chat`（及 `/chat/stream`）请求体新增可选 **`attachments`**：`[{name, text}]` 对话文本附件（≤5，`text` ≤ 20000 字符），注入 prompt 的 `<reference_files>` 块，**不入库**——前端把文本类文件（txt/md/json/csv/代码等）读成文本透传；PDF/DOCX/PPTX 等二进制文档走「笔记库页导入 → `note_ids` 引用」路径。② 新增可选 **`images`**：`[{name, mime, data_url}]` 对话图片附件（≤4），**不入库**，走视觉通道——前端 canvas 缩到长边 ≤1024px + JPEG 透传，后端复用 `attach_images`（OpenAI 视觉 content 数组）附到最后一条 user 消息，与命中笔记图合并但不受其 2 张上限约束；流式 meta `images_attached` 含附件图。**需视觉模型**（deepseek-flash）；配纯文本模型（glm-5.2）时拒图自动去图降级重试（答案前置说明，不 500）。后端 answerer 加 `_reference_files_block`（与 `<referenced_notes>` 平行、按 token 截断）、`answer_web` 加 `images`、短路条件含 attachments+images。③ 前端：对话框删 `/导入` 命令与拖放导入，改为 📎 附件（文本+图片 chips 随提问消耗、不落库）；笔记库页（LibraryView）新增「导入笔记」入口 + 进度面板，导入完成自动 `load()` 刷新书架（解掉「导入后要 F5 才看得见」） |
 | 2026-11-02 | v15 | **扫描件 PDF 视觉识别（ADR 0006 §6）**：无文本层 PDF 在有 LLM 配置时逐页栅格化(150dpi)走视觉转写，页间 `—— 第 N 页 ——` 普通段落分隔；单页失败跳过留痕、全失败降级 `no_text_expected`；页数上限 30 明说警告；有文本层的 PDF 不受影响（不烧视觉）。`meta.engine=pdf-vision(<模型>)` |

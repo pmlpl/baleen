@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-06 · 对话附件/图片 + 笔记渲染 v18;基线 **371 passed**
+**最后更新**：2026-11-12 · 视频笔记页 + whisper(v22);基线 **423 passed**
 
 ### 已完成模块
 
@@ -21,14 +21,15 @@
 | **切块** | `app/service/chunk/` | ✅ 同节内合并；真实笔记 in_range 64%–100% |
 | **向量化** | `app/service/embed/` | ✅ torch 2.14.1+cu126，cuda 52 items/s |
 | **G1 价值闸** | `app/service/gate/g1.py` | ✅ 真实样本**误拒率 0/15 = 0.0%** |
-| **G2 归属闸** | `app/service/gate/g2.py` | ✅ H-批2 + 线 J 政策修正；**live 已跑**（2026-10-31 全量 35 样本，ok 口径误拒率 0/15） |
+| **G2 归属闸** | `app/service/gate/g2.py` | ✅ H-批2 + 线 J 政策修正；eval 系统用（pipeline 改用 organizer，见下） |
+| **AI 笔记整理（v21）** | `app/service/rewrite/organizer.py` + `pipeline.py` | ✅ 替代 G2+outline：LLM 读 note-format.md 契约重写 markdown（补标题/去噪/组织结构）；无可整理→不入库；LLM 异常→降级原文入库；没配 key 不允许上传 |
 | **导入状态机** | `app/service/imports/pipeline.py` | ✅ I-批1；端到端实测，父块无向量已核对 |
 | **arq worker + 上传 API** | `app/worker/`、`app/api/upload.py` | ✅ I-批2；新建 201 / dedupe 200 / 轮询可用 |
 | **混合检索 + RRF** | `app/repo/search.py`、`app/service/retrieve/` | ✅ 线 K；真实 query 双路命中，RRF 与公式吻合 |
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
 | **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
 | **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效 |
-| **API 端点总览** | `app/main.py` | ✅ 26 个：healthz 1 · 认证 3 · 章程 3 · 上传 2 · 笔记/检索 7 · 问答/会话/导出 8 · 设置 2（数字由 `scripts/doc_lint.py` 守门） |
+| **API 端点总览** | `app/main.py` | ✅ 27 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 7 · 问答/会话/导出 8 · 设置 2（数字由 `scripts/doc_lint.py` 守门） |
 | **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页 + 登录注册 + 书架 + 笔记两栏阅读 |
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
 | **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷 → LLM 生成章程 → 存 DB → G2 热生效；每用户一份 |
@@ -57,6 +58,8 @@
 | **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
 | **对话附件（v17）** | `qa.py` `attachments`/`images` + QaView 📎 | ✅ 文本入 `<reference_files>` 不入库；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级；无视觉模型也能用 |
 | **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底 |
+| **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
+| **视频笔记页 + whisper（v22）** | `app/service/video_extractor.py` + `VideoView.vue` + `POST /api/sources/url?mode=whisper` | ✅ yt-dlp 下载音频→whisper 转写→ffmpeg 帧提取→视觉模型描述；B 站嵌入式播放器；不依赖 B 站字幕系统（内容可靠）；多分P+短链+重试；423 passed |
 
 ### 测试基线
 

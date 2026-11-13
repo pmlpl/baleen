@@ -12,14 +12,18 @@ ROOT_DIR = BASE_DIR.parent  # baleen/  (.env / charter.md 在这里)
 
 log = logging.getLogger(__name__)
 
-# 内置默认 charter(没有 baleen/charter.md 时兜底;CHARTER 环境变量可覆盖)
+# 内置默认 charter(未填问卷/无 charter.md 时兜底;CHARTER 环境变量可覆盖)。
+# 通用兜底,不预设用户身份——个性化的收什么/质量标准由问卷生成的 charter(DB)覆盖。
+# 内容对齐 docs/note-format.md §5 内容层骨架(charter 判据 + Zettelkasten)。
 DEFAULT_CHARTER = (
-    "我是一名软件过程技术方向的本科生,这个笔记库只收「以后还用得上」的内容。\n"
-    "收:需求与设计文档、测试计划与缺陷记录(含现象/根因/修复)、有实际进展的项目过程记录、"
-    "自写的技术笔记与论文整理、可复现的问题记录(环境配置踩坑、性能排查、bug 复盘)。\n"
-    "不收:无上下文的报错堆栈、纯模板周报、聊天记录、下载的发票与产品说明书、纯截图、"
-    "与个人知识库无关的外部资料。\n"
-    "判据:能留下一句「为什么这么做」的是知识,收;只在汇报「我做了什么」的不是知识,不收。"
+    "这是一个个人知识库,只收「以后还用得上」的内容。\n"
+    "收:讲清一个概念或方法的笔记(有定义、有例子)、技术文档与论文整理、课程课件与复习、"
+    "含「现象-原因-解决」的问题记录、手写或拍照的笔记。\n"
+    "不收:无上下文的报错堆栈、纯流程流水账(只写做了什么不写为什么)、"
+    "空文件与测试文件、壁纸表情包随手截图。\n"
+    "判据:自己踩坑想通了为什么、给出可复现解法的是知识,收;"
+    "只在复述别人定的规则、走流程、按模板汇报的不是知识,不收。\n"
+    "拿不准就收下、标低质量——错误地拒掉一篇好笔记比收下一份垃圾糟得多。"
 )
 
 
@@ -60,6 +64,12 @@ class Settings(BaseSettings):
     llm_max_output_tokens: int = 8192
     # 单次结构化任务的超时(秒):整理整篇比单轮问答慢得多
     llm_long_task_timeout: float = 300.0
+
+    # ---------- B 站视频字幕导入 ----------
+    # B 站 player/v2 接口带 SESSDATA cookie 才能拿到大部分视频的 CC/AI 字幕。
+    # 获取方式:登录 bilibili.com → F12 → Application → Cookies → SESSDATA 的值。
+    # 空=不传(部分视频的字幕可能拿不到)。
+    bilibili_sessdata: str = ""
 
     def resolve_charter(self) -> str:
         """charter 解析优先级:``baleen/charter.md`` 全文 > `CHARTER` 环境变量 > 内置默认。

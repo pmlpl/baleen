@@ -13,6 +13,7 @@ import LoginView from '../views/LoginView.vue'
 import NoteView from '../views/NoteView.vue'
 import QaView from '../views/QaView.vue'
 import SettingsView from '../views/SettingsView.vue'
+import VideoView from '../views/VideoView.vue'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
@@ -21,6 +22,7 @@ const router = createRouter({
     { path: '/login', name: 'login', component: LoginView },
     { path: '/notes', name: 'notes', component: LibraryView },
     { path: '/notes/:id', name: 'note', component: NoteView, props: true },
+    { path: '/video', name: 'video', component: VideoView },
     { path: '/qa', name: 'qa', component: QaView },
     // 首次强制填(无「稍后再填」);填过后只能从设置页进,是编辑模式
     { path: '/charter', name: 'charter', component: CharterWizard },
