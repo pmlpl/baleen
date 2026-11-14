@@ -476,10 +476,7 @@ async function importVideo(): Promise<void> {
 }
 
 .progress-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  display: block;
   padding: 6px 0;
   font-size: 13px;
   line-height: 1.5;
