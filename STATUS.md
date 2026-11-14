@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-14 · 抖音导入实战排障(dedupe语义+cookies校验);基线 **455 passed**
+**最后更新**：2026-11-14 · 抖音免cookie提取+导入进度条(v25);基线 **460 passed**
 
 ### 已完成模块
 
@@ -59,12 +59,12 @@
 | **对话附件（v17）** | `qa.py` `attachments`/`images` + QaView 📎 | ✅ 文本入 `<reference_files>` 不入库；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级；无视觉模型也能用 |
 | **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
-| **视频笔记页 + whisper（v22→v24）** | `app/service/video_extractor.py` + `VideoView.vue` + `POST /api/sources/url?mode=whisper` | ✅ yt-dlp 下载音频→whisper 转写→帧提取→视觉描述；B 站嵌入式播放器；v23 whisper 异步化（API 立即返回，worker 后台提取）；**v24: 抖音视频支持**——yt-dlp 统一元信息提取（平台无关），抖音 cookie 文件配置，前端「在抖音中打开」链接；450 passed |
+| **视频笔记页 + whisper（v22→v25）** | `app/service/video_extractor.py` + `douyin_extractor.py` + `VideoView.vue` | ✅ whisper 异步（API 立即 201，worker 2h 超时，video_stage/progress 进度）；B 站 yt-dlp 路径；**抖音 Playwright 免 cookie**（系统 Edge 拦截详情接口，实测 177MB 下载，用户零配置）；前端进度条（whisper 阶段按视频时长插值）；460 passed |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  455 passed
+cd backend && uv run pytest -q     →  460 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -85,6 +85,7 @@ cd backend && uv run pytest -q     →  455 passed
 → **434**（whisper 异步化;2026-11-13）
 → **450**（抖音视频支持;2026-11-13）
 → **455**（抖音实战排障:dedupe语义+cookies分级校验;2026-11-14）
+→ **460**（抖音免cookie提取+进度条+评级/多章指引;2026-11-14）
 
 **任何新任务都不许把这个数降下来。**
 

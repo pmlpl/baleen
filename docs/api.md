@@ -1,4 +1,4 @@
-# API 契约 v24
+# API 契约 v25
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -113,7 +113,7 @@ B 站 / 抖音视频链接导入。两种模式：
 | `mode` | string | ❌ | `"subtitle"`（默认，秒级，同步） \| `"whisper"`（分钟级，异步，内容可靠） |
 
 响应与 `POST /api/sources` 完全一致（`{ source_id, job_id, job_status, deduped }`）。
-轮询 `GET /api/sources/{source_id}` 拿全链路状态。whisper 模式通过 `video_stage` 字段显示提取进度。
+轮询 `GET /api/sources/{source_id}` 拿全链路状态。whisper 模式通过 `video_stage`（阶段文案）+ `video_progress`（0-100 进度）+ `video_est_seconds`（转写阶段预计秒数，前端据此插值）三个字段驱动进度条。抖音模式**免 cookie**：worker 用系统浏览器（Playwright，channel=msedge）打开视频页拦截详情接口获取元信息和播放地址，用户零配置。
 
 - `mode="whisper"` 时 API 立即返回 201，不阻塞；worker 后台提取（最多 2 小时，支持 ≤60 分钟视频）。
 - whisper 模式的 source.sha256 是占位值（`"video:{bvid}:whisper"`），真实 sha 存在 `parse_meta.content_sha256`；dedupe 基于 BVID。
@@ -150,6 +150,8 @@ B 站 / 抖音视频链接导入。两种模式：
   "g2_skipped": false,
       "headings_rewritten": true,
   "video_stage": null,
+  "video_progress": null,
+  "video_est_seconds": null,
   "note_id": 7,
   "created_at": "2026-10-29T01:20:00+08:00",
   "job": { "id": 34, "status": "done", "attempts": 1, "last_error": null },
@@ -522,6 +524,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-14 | v25 | **抖音免 cookie 提取 + 导入进度条**：①抖音模式改走 Playwright（`douyin_extractor.py`，channel=msedge 用系统 Edge）打开视频页拦截详情接口，元信息+播放地址全拿到，CDN 直连下载——**用户零配置**，废除 v24 的 `douyin_cookies` 设置字段（`PUT /api/settings` 移除，DB 列保留标注废弃；实测 ttwid 单值/首页 cookie/蜘蛛页全被抖音反爬封死，手动复制完整 Cookie 头对普通用户不可用）；②`GET /api/sources/{id}` 响应新增 `video_progress`（0-100）与 `video_est_seconds`（转写预计秒数），前端进度条在 whisper 阶段按视频时长插值（base 模型 ~1x 实时）；③worker `deduped=True` 语义收紧为仅 job done（失败重试不再被误报「之前导入过」），入队前清 arq 旧结果键；④organizer prompt：质量评级标准具体化（评整理后的笔记本身，视频/字幕来源不构成降级理由）+ 多并列大主题升多章结构指引（内部行为，无接口变化） |
 | 2026-11-13 | v24 | **抖音视频支持**：`POST /api/sources/url` whisper 模式支持抖音链接（`v.douyin.com` / `www.douyin.com`）；`video_extractor.py` 用 yt-dlp 统一提取元信息（替代 B 站 view API，平台无关）；新增 `douyin.py`（URL 检测 + ID 提取）；抖音 cookies 通过设置页配置（`PUT /api/settings` 的 `douyin_cookies` 字段，粘贴 cookie 字符串即可，无需手动导出文件）；抖音只支持 whisper 模式（subtitle → 400）；前端 VideoView 检测抖音 URL 显示「在抖音中打开」链接 + 强制 whisper；`build_video_markdown` 标签通用化（"UP主"→"作者"、"B站原链接"→"原链接"） |
 | 2026-11-13 | v23 | **whisper 模式异步化**：`POST /api/sources/url` 的 `mode="whisper"` 从 API 同步阻塞改为 worker 后台异步——API 立即返回 201（创建占位 source + job），worker 在后台做 下载音频→whisper 转写→写 markdown→调 `run_import_async(source_id=...)` 入库；`GET /api/sources/{id}` 响应新增 `video_stage` 字段（`"下载音频中…"` / `"whisper 转写中…"` / `"❌ 错误"` / `null`）；whisper 时长上限从 30 分钟提高到 60 分钟（worker `_timeout=7200`）；source.sha256 用占位值 `"video:{bvid}:whisper"`（dedupe 基于 BVID）；subtitle 模式不变（保持同步快速路径） |
 | 2026-11-12 | v22 | **视频笔记页 + whisper 模式**：`POST /api/sources/url` 新增 `mode` 参数（`"subtitle"` / `"whisper"`）；whisper 模式下载音频+whisper 转写+帧描述（不依赖 B 站字幕系统，内容可靠）；新增前端「视频笔记」页（B 站嵌入式播放器 + 模式选择 + 导入进度） |
