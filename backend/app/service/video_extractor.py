@@ -1,9 +1,9 @@
-"""视频内容提取：yt-dlp 下载 → ffmpeg 提取音频/帧 → whisper 转写 → 视觉模型描述帧。
+"""视频内容提取：yt-dlp 下载 → ffmpeg 提取音频/帧 → faster-whisper 转写 → 视觉模型描述帧。
 
 不依赖 B 站 AI 字幕系统（已证实不可靠），直接从视频本身提取内容。
 - yt-dlp 下载视频（B 站需要 SESSDATA cookie）
 - ffmpeg 提取音频（16kHz mono WAV，whisper 要求）+ 关键帧（每 60 秒一帧）
-- whisper base 模型转写音频 → 带时间戳的文字段
+- faster-whisper（ctranslate2）转写音频 → 带时间戳的文字段（GPU float16，失败退 CPU int8）
 - LLMClient 视觉能力描述每帧画面 → 补充字幕无法获取的视觉信息
 - 合并：whisper 转写（文字）+ 帧描述（画面）→ 富 markdown
 
@@ -36,13 +36,16 @@ def _extract_url(text: str) -> str:
 
 # whisper 模型懒加载（第一次调用时加载，后续复用）
 _whisper_model = None
+_whisper_device = ""  # 当前模型所在设备（"cuda"/"cpu"），GPU 推理失败退 CPU 后据此跳过重试
 
 # 关键帧提取间隔（秒）：每 60 秒取一帧，10 分钟视频 → 10 帧 → 10 次视觉调用
 FRAME_INTERVAL = 60
 # 帧图片上限（防止超长视频烧太多视觉调用）
 MAX_FRAMES = 20
-# whisper 模型名（base 平衡速度与精度；中文需要多语言模型不是 .en）
-WHISPER_MODEL = "base"
+# faster-whisper 模型名（small：benchmark 实测比 base 正确率高——base 把「一致性」错写成
+# 「移植性」且输出繁体，small 正确且简体；GPU 上 15x 实时，速度不是瓶颈。
+# 中文需要多语言模型不是 .en）
+WHISPER_MODEL = "small"
 
 
 @dataclass
@@ -67,16 +70,44 @@ class VideoContent:
     source: str = "video-extraction"  # 标识来源
 
 
-def _get_whisper_model():
-    """懒加载 whisper 模型（全局复用，避免每次调用都加载 139MB）。"""
-    global _whisper_model
-    if _whisper_model is None:
-        import whisper
+def _load_whisper(device: str):
+    """按设备构建 faster-whisper 模型。GPU 用 float16，CPU 用 int8。"""
+    from faster_whisper import WhisperModel
 
+    if device == "cuda":
+        return WhisperModel(WHISPER_MODEL, device="cuda", compute_type="float16")
+    return WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+
+
+def _register_cuda_dll_dirs() -> None:
+    """Windows: ctranslate2 动态加载 cublas64_12.dll/cudnn，但 DLL 在 torch/lib 里不在 PATH 上。
+
+    先 import torch（把 CUDA 运行时加载进进程），再显式注册 torch/lib 为 DLL 搜索目录。
+    两者都失败也不致命——WhisperModel 会再抛错，由上层降级到 CPU。
+    """
+    import os
+
+    try:
         import torch
 
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        _whisper_model = whisper.load_model(WHISPER_MODEL, device=device)
+        lib_dir = Path(torch.__file__).parent / "lib"
+        if lib_dir.exists():
+            os.add_dll_directory(str(lib_dir))
+    except Exception:  # noqa: BLE001 —— torch 都没有则 CUDA 必然不可用，交给上层降级
+        pass
+
+
+def _get_whisper_model():
+    """懒加载 faster-whisper 模型（全局单例复用；先试 CUDA float16，失败退 CPU int8）。"""
+    global _whisper_model, _whisper_device
+    if _whisper_model is None:
+        _register_cuda_dll_dirs()
+        try:
+            _whisper_model = _load_whisper("cuda")
+            _whisper_device = "cuda"
+        except Exception:  # noqa: BLE001 —— CUDA/cuDNN 不可用（无卡/驱动/DLL 缺失）退 CPU
+            _whisper_model = _load_whisper("cpu")
+            _whisper_device = "cpu"
     return _whisper_model
 
 
@@ -228,18 +259,33 @@ def extract_audio(video_path: Path, output_dir: Path) -> Path:
 
 
 def transcribe_audio(audio_path: Path) -> list[dict]:
-    """用 whisper 转写音频，返回段列表 [{start, end, text}]。"""
+    """用 faster-whisper 转写音频，返回段列表 [{start, end, text}]（下游拼 markdown 依赖此结构）。
+
+    GPU 模型构造成功但推理时报错（Windows 上 cuDNN 版本不匹配的典型表现）→
+    自动退 CPU int8 重建模型重跑一次；CPU 模型再报错则原样抛出。
+    """
+    global _whisper_model, _whisper_device
+
+    def _run(model) -> list[dict]:
+        segments_iter, _info = model.transcribe(
+            str(audio_path),
+            language="zh",  # 强制中文（视频来源主要是中文）
+        )
+        return [
+            {"start": seg.start, "end": seg.end, "text": seg.text.strip()}
+            for seg in segments_iter
+            if seg.text.strip()
+        ]
+
     model = _get_whisper_model()
-    result = model.transcribe(
-        str(audio_path),
-        language="zh",  # 强制中文（B 站视频主要是中文）
-        verbose=False,
-    )
-    return [
-        {"start": seg["start"], "end": seg["end"], "text": seg["text"].strip()}
-        for seg in result.get("segments", [])
-        if seg.get("text", "").strip()
-    ]
+    try:
+        return _run(model)
+    except Exception:
+        if _whisper_device != "cuda":
+            raise
+        _whisper_model = _load_whisper("cpu")
+        _whisper_device = "cpu"
+        return _run(_whisper_model)
 
 
 def extract_key_frames(
@@ -423,7 +469,7 @@ def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> Video
 
         wav_path = extract_audio(dv.video_path, output_dir)
         if progress_cb:
-            # whisper base ~1x 实时：按视频时长估算转写耗时，前端据此插值画进度条
+            # est=视频时长是保守上限（faster-whisper 通常数倍于实时），前端据此插值画进度条
             progress_cb("whisper 转写中…", 30, est_seconds=dv.duration_s)
         transcript_segments = transcribe_audio(wav_path)
         if progress_cb:
@@ -500,8 +546,8 @@ def extract_video_content(
     duration = info["duration"]
     resolved_url = info["webpage_url"]
 
-    # 时长检查：whisper base 模型转写速度约 1x 实时（GPU），
-    # 60 分钟视频 ≈ 60 分钟转写。worker 的 _timeout=7200（2 小时）够用。
+    # 时长检查：60 分钟上限保留（GPU 上 faster-whisper 转写远快于实时，
+    # 瓶颈主要是音频/视频下载），worker 的 timeout=7200（2 小时）够用。
     MAX_WHISPER_DURATION = 3600  # 60 分钟
     if duration > MAX_WHISPER_DURATION:
         minutes = duration // 60
@@ -514,7 +560,7 @@ def extract_video_content(
     audio_file = download_audio(resolved_url, sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
     wav_path = extract_audio(audio_file, output_dir)
 
-    # ③ whisper 转写（base ~1x 实时，按视频时长估算供前端画进度条）
+    # ③ whisper 转写（est=时长为保守上限，实际 GPU 上通常数倍于实时）
     if progress_cb:
         progress_cb("whisper 转写中…", 30, est_seconds=duration)
     transcript_segments = transcribe_audio(wav_path)

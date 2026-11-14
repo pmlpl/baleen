@@ -23,8 +23,9 @@ dependencies = [
     "python-multipart>=0.0.32",
     "pyjwt>=2.15.1",
     "yt-dlp>=2026.10.26",
-    "openai-whisper>=20250625",
     "playwright>=1.65.2",
+    "faster-whisper>=1.2.1",
+    "av<19",
 ]
 
 [dependency-groups]
