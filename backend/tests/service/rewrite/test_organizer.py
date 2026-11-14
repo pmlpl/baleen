@@ -203,6 +203,10 @@ def test_organize_prompt_contains_contract() -> None:
     assert "代码块" in system_msg
     assert "表格" in system_msg
     assert "内容骨架" in system_msg or "一节讲透" in system_msg
+    # quality 评级标准：评整理后的笔记本身，视频/字幕来源不构成降级理由
+    assert "评的是你整理出的这篇笔记本身" in system_msg
+    assert "不构成降级理由" in system_msg
+    assert "知识点完整闭环" in system_msg
     assert "<file_content>" in client.received_messages[0][1]["content"]
 
 
