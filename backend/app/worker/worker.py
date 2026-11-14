@@ -267,18 +267,28 @@ async def extract_and_import_video(
     )
 
     # ---- Phase 1: 提取（下载音频 → whisper / 拉字幕）----
-    # 抖音 whisper 且没配 cookies → 直接友好报错，不白跑 yt-dlp（必定 403）
-    if mode == "whisper" and not douyin_cookies:
+    # 抖音 whisper 且 cookies 缺失/不完整 → 直接友好报错，不白跑 yt-dlp（必定 403）。
+    # 实测（2026-11-14）：只有 ttwid 不够，抖音接口还要 msToken 等一整套——
+    # 必须复制浏览器请求头里的完整 Cookie。
+    if mode == "whisper":
         from app.service.douyin import detect_douyin
 
         if detect_douyin(url):
-            exc = RuntimeError(
-                "抖音视频导入需要 Cookies（还没有配置）。"
-                "请到「设置」页找到「抖音 Cookies」输入框：打开 douyin.com → 按 F12 → "
-                "Application → Cookies → 复制 ttwid 那一行的值 → 粘贴保存，然后重新导入。"
-            )
-            await _fail_video_job(source_id, owner_id, exc)
-            raise exc
+            if not douyin_cookies:
+                exc = RuntimeError(
+                    "抖音视频导入需要 Cookies（还没有配置）。"
+                    "请到「设置」页找到「抖音 Cookies」输入框，按那里的说明复制完整的 Cookie 头粘贴保存。"
+                )
+                await _fail_video_job(source_id, owner_id, exc)
+                raise exc
+            if "msToken" not in douyin_cookies:
+                exc = RuntimeError(
+                    "抖音 Cookies 不完整（实测只复制 ttwid 一个值不够用，接口还要 msToken 等）。"
+                    "请到「设置」页重新配置：打开 douyin.com → F12 → Network → 刷新页面 → "
+                    "点一个 douyin.com 请求 → Request Headers → 复制整个 Cookie 的值（一长串）→ 粘贴保存。"
+                )
+                await _fail_video_job(source_id, owner_id, exc)
+                raise exc
 
     try:
         if mode == "whisper":
@@ -302,8 +312,10 @@ async def extract_and_import_video(
         msg = str(exc)
         if "Fresh cookies" in msg:
             friendly = RuntimeError(
-                "抖音拒绝访问（Cookies 无效或过期）。请到「设置」页重新配置「抖音 Cookies」："
-                "打开 douyin.com → F12 → Application → Cookies → 复制 ttwid 的值 → 粘贴保存，再重新导入。"
+                "抖音拒绝访问（Cookies 无效、过期或不完整）。"
+                "请到「设置」页重新配置「抖音 Cookies」：打开 douyin.com → F12 → Network → 刷新页面 → "
+                "点一个 douyin.com 请求 → Request Headers → 复制整个 Cookie 的值（必须包含 msToken，"
+                "只复制 ttwid 单个值不够）→ 粘贴保存，再重新导入。"
             )
             await _fail_video_job(source_id, owner_id, friendly)
             raise friendly from exc

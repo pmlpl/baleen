@@ -253,6 +253,42 @@ def test_extract_video_subtitle_mode(tmp_path: Path, monkeypatch) -> None:
     assert result["source_id"] == 1
 
 
+# ---------- cookie 字符串解析 ----------
+
+
+def test_write_cookie_string_parses_pairs(tmp_path: Path) -> None:
+    from app.service.video_extractor import _resolve_cookie_file
+
+    cf = _resolve_cookie_file(cookies_str="ttwid=abc; msToken=xyz", output_dir=tmp_path)
+    assert cf is not None
+    text = Path(cf).read_text(encoding="utf-8")
+    assert "ttwid\tabc" in text
+    assert "msToken" in text
+
+
+def test_write_cookie_string_bare_value_becomes_ttwid(tmp_path: Path) -> None:
+    """用户只粘贴 ttwid 的纯值（无 = 号）→ 默认当作 ttwid。"""
+    from app.service.video_extractor import _resolve_cookie_file
+
+    raw = "1%7C_MDIALLS-xxx%7C1794615809%7C9b679e"
+    cf = _resolve_cookie_file(cookies_str=raw, output_dir=tmp_path)
+    assert cf is not None
+    text = Path(cf).read_text(encoding="utf-8")
+    assert "ttwid" in text
+    assert raw in text
+
+
+def test_write_cookie_string_strips_cookie_prefix(tmp_path: Path) -> None:
+    """粘贴整个请求头（带 Cookie: 前缀）也能解析。"""
+    from app.service.video_extractor import _resolve_cookie_file
+
+    cf = _resolve_cookie_file(cookies_str="Cookie: ttwid=abc; msToken=xyz", output_dir=tmp_path)
+    assert cf is not None
+    text = Path(cf).read_text(encoding="utf-8")
+    assert "ttwid" in text and "msToken" in text
+    assert "Cookie:" not in text.split("# Netscape HTTP Cookie File")[1]
+
+
 # ---------- DB fixture（同 test_import_job.py 模式）----------
 
 

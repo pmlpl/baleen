@@ -185,11 +185,15 @@ def _write_cookie_string(cookies_str: str, output_dir: Path) -> Path:
 
     用于抖音等需要多个 cookie 的平台（ttwid/msToken/__ac_nonce 等）。
     兼容粘贴整个 Cookie 请求头（带 "Cookie:" 前缀）——自动剥掉前缀再解析。
+    用户只粘贴单个裸值（如 ttwid 的 Value，没有 = 号）→ 默认当作 ttwid。
     """
     cookie_file = output_dir / "cookies.txt"
     text = cookies_str.strip()
     if text.lower().startswith("cookie:"):
         text = text[7:].strip()
+    # 裸值（无 = 号）→ 当作 ttwid 的值
+    if "=" not in text:
+        text = f"ttwid={text}"
     lines = ["# Netscape HTTP Cookie File\n"]
     for part in text.split(";"):
         part = part.strip()
