@@ -131,19 +131,18 @@ onMounted(() => {
         <span v-if="tavilySet" class="muted key-hint">已设置(末四位 {{ tavilyTail }})</span>
       </label>
       <label class="field">
-        <span class="field-label">抖音 Cookies(视频导入,可选)</span>
+        <span class="field-label">抖音 Cookies(一般无需配置)</span>
         <textarea
           v-model="douyinCookies"
           class="input textarea-cookies"
-          placeholder="粘贴完整的 Cookie 请求头值（一长串，包含 ttwid=...; msToken=...; ...）"
+          placeholder="一般留空即可——抖音导入会自动用浏览器提取，无需手动配置"
           rows="3"
           autocomplete="off"
         />
         <span v-if="douyinSet" class="muted key-hint">已设置(末四位 {{ douyinTail }})</span>
         <span class="muted key-hint">
-          ⚠️ 必须复制【整个 Cookie 头】，只复制 ttwid 单个值不够（接口还要 msToken 等）。<br />
-          获取：打开 douyin.com → F12 → Network(网络) → 刷新页面 → 点一个 douyin.com 请求 →
-          Request Headers(请求标头) → 找到 Cookie → 右键复制整个值粘贴到这里
+          仅当抖音导入报「获取视频信息失败」时才需要手动配置：打开 douyin.com → F12 → Network →
+          刷新 → 点一个 douyin.com 请求 → Request Headers → 复制整个 Cookie 的值粘贴到这里
         </span>
       </label>
       <button class="btn btn--primary" type="button" :disabled="saving" @click="save">

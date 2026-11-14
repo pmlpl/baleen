@@ -401,6 +401,60 @@ def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "") ->
     }
 
 
+def _extract_douyin_content(url: str, *, client=None) -> VideoContent:
+    """抖音专用路径：Playwright 拦截详情接口拿元信息+视频，免 cookie（2026-11-14）。
+
+    视频文件在手 → 帧提取必定可用（比 yt-dlp 路径的「视频下载经常失败」更稳）。
+    """
+    import shutil
+
+    from app.service.douyin_extractor import fetch_douyin_video
+
+    output_dir = Path(tempfile.mkdtemp(prefix="douyin_extract_"))
+    try:
+        dv = fetch_douyin_video(url, output_dir=output_dir)
+
+        # 时长检查（与主路径同一上限）
+        if dv.duration_s > 3600:
+            raise RuntimeError(
+                f"视频时长 {dv.duration_s // 60} 分钟，超过 whisper 模式 60 分钟上限。"
+            )
+
+        wav_path = extract_audio(dv.video_path, output_dir)
+        transcript_segments = transcribe_audio(wav_path)
+
+        frame_descriptions: list[FrameDescription] = []
+        if client is not None:
+            try:
+                frames = extract_key_frames(dv.video_path, output_dir)
+                if frames:
+                    frame_descriptions = describe_frames(frames, client=client)
+            except Exception:  # noqa: BLE001 —— 帧描述失败不影响转写
+                pass
+
+        markdown = build_video_markdown(
+            title=dv.title,
+            description=dv.description,
+            owner_name=dv.author,
+            duration=dv.duration_s,
+            transcript_segments=transcript_segments,
+            frame_descriptions=frame_descriptions,
+            url=url,
+        )
+    finally:
+        shutil.rmtree(output_dir, ignore_errors=True)
+
+    return VideoContent(
+        title=dv.title,
+        description=dv.description,
+        owner_name=dv.author,
+        duration=dv.duration_s,
+        transcript_segments=transcript_segments,
+        frame_descriptions=frame_descriptions,
+        markdown=markdown,
+    )
+
+
 def extract_video_content(
     url: str,
     *,
@@ -421,6 +475,12 @@ def extract_video_content(
     # 用户可能粘贴整段分享文本（"8.48 复制打开抖音… https://v.douyin.com/xxx/ 复制此链接"），
     # 提取出真正的 URL 再交给 yt-dlp
     url = _extract_url(url)
+
+    # 抖音走 Playwright 专用路径（免 cookie，2026-11-14）
+    from app.service.douyin import detect_douyin
+
+    if detect_douyin(url):
+        return _extract_douyin_content(url, client=client)
 
     output_dir = Path(tempfile.mkdtemp(prefix="video_extract_"))
 

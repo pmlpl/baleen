@@ -24,6 +24,7 @@ dependencies = [
     "pyjwt>=2.15.1",
     "yt-dlp>=2026.10.26",
     "openai-whisper>=20250625",
+    "playwright>=1.65.2",
 ]
 
 [dependency-groups]

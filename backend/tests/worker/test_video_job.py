@@ -289,6 +289,63 @@ def test_write_cookie_string_strips_cookie_prefix(tmp_path: Path) -> None:
     assert "Cookie:" not in text.split("# Netscape HTTP Cookie File")[1]
 
 
+# ---------- 抖音 Playwright 路径（mock，不弹浏览器）----------
+
+
+def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monkeypatch) -> None:
+    """抖音 URL → 走 douyin_extractor（免 cookie），不走 yt-dlp。"""
+    import app.service.video_extractor as ve
+
+    fake_dv = type(
+        "DV", (),
+        {
+            "title": "博弈论深度解读",
+            "description": "读懂策略互动",
+            "author": "向不惑",
+            "duration_s": 1500,
+            "video_path": tmp_path / "fake.mp4",
+        },
+    )()
+
+    calls: dict[str, Any] = {}
+
+    def fake_fetch(url, *, output_dir=None):
+        calls["url"] = url
+        return fake_dv
+
+    monkeypatch.setattr(ve, "extract_audio", lambda vp, od: od / "audio.wav")
+    monkeypatch.setattr(ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "内容"}])
+    monkeypatch.setattr(ve, "extract_key_frames", lambda vp, od: [])
+    monkeypatch.setattr("app.service.douyin_extractor.fetch_douyin_video", fake_fetch)
+
+    vc = ve.extract_video_content("https://v.douyin.com/UMeLLjAlXa8/")
+    assert "v.douyin.com" in calls["url"]
+    assert vc.title == "博弈论深度解读"
+    assert vc.owner_name == "向不惑"
+    assert vc.duration == 1500
+    assert "# 博弈论深度解读" in vc.markdown
+    assert "作者: 向不惑" in vc.markdown
+
+
+def test_extract_video_content_bilibili_still_ytdlp(tmp_path: Path, monkeypatch) -> None:
+    """B站 URL → 仍走 yt-dlp 路径（_fetch_video_info）。"""
+    import app.service.video_extractor as ve
+
+    def fake_info(url, *, sessdata="", cookies_str=""):
+        return {
+            "title": "B站视频", "duration": 100,
+            "uploader": "UP主", "description": "", "webpage_url": url,
+        }
+
+    monkeypatch.setattr(ve, "_fetch_video_info", fake_info)
+    monkeypatch.setattr(ve, "download_audio", lambda url, **kw: tmp_path / "a.m4a")
+    monkeypatch.setattr(ve, "extract_audio", lambda vp, od: od / "audio.wav")
+    monkeypatch.setattr(ve, "transcribe_audio", lambda wav: [])
+    # 无 client → 跳过帧提取，download_video 不会被调
+    vc = ve.extract_video_content("https://www.bilibili.com/video/BV1GJ411x7h7/")
+    assert vc.title == "B站视频"
+
+
 # ---------- DB fixture（同 test_import_job.py 模式）----------
 
 
