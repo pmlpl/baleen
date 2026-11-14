@@ -73,8 +73,9 @@ def test_upload_dedupe_hit_returns_same_source_and_skips_new_job(env) -> None:
     second = _upload(env)
     assert first.status_code == 201
     assert second.status_code == 200, second.text
+    # v24 语义修正:job 还在 queued(未真完成过)→ deduped=False,前端继续轮询
     body = second.json()
-    assert body["deduped"] is True
+    assert body["deduped"] is False
     assert body["source_id"] == first.json()["source_id"]
     assert body["job_id"] == first.json()["job_id"]
 

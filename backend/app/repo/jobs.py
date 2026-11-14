@@ -63,8 +63,8 @@ class JobsRepo(Repo):
         values: dict = {"status": status, "updated_at": func.now()}
         if last_error is not None:
             values["last_error"] = last_error
-        elif status == "done":
-            values["last_error"] = None  # 成功即清掉上一次失败的错误
+        elif status in ("done", "queued"):
+            values["last_error"] = None  # 成功/重新排队即清掉上一次失败的错误
         if payload is not None:
             values["payload"] = payload
         if status in ("queued", "done", "failed", "dead"):

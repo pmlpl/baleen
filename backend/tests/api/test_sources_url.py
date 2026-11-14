@@ -88,8 +88,84 @@ def test_url_import_dedupe(env, monkeypatch: pytest.MonkeyPatch) -> None:
     second = _post_url(env)
     assert second.status_code == 200
     body = second.json()
-    assert body["deduped"] is True
+    # v24 语义修正:job 还在 queued(未真完成过)→ deduped=False,前端继续轮询
+    assert body["deduped"] is False
     assert body["source_id"] == first.json()["source_id"]
+
+
+def test_url_import_done_job_dedupes(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """job 真完成过(done)→ 第二次导入 deduped=True,不再入队。"""
+    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result())
+
+    first = _post_url(env)
+    assert first.status_code == 201
+    source_id = first.json()["source_id"]
+
+    async def mark_done() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            await repos.jobs.update_status(job.id, "done")
+            await session.commit()
+
+    env.client.portal.call(mark_done)
+
+    second = _post_url(env)
+    assert second.status_code == 200
+    body = second.json()
+    assert body["deduped"] is True
+    assert body["source_id"] == source_id
+    # done → 不再入队
+    assert len(env.calls) == 1
+
+
+def test_url_import_failed_job_retries(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    """job 失败过 → 重新导入 = 重试:deduped=False,job 重置回 queued,重新入队。"""
+    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result())
+
+    first = _post_url(env)
+    assert first.status_code == 201
+    source_id = first.json()["source_id"]
+
+    async def mark_failed() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            await repos.jobs.update_status(job.id, "failed", last_error="boom")
+            await session.commit()
+
+    env.client.portal.call(mark_failed)
+
+    second = _post_url(env)
+    assert second.status_code == 200
+    body = second.json()
+    assert body["deduped"] is False  # 重试不算去重,前端要继续轮询
+    assert body["source_id"] == source_id
+    assert len(env.calls) == 2  # 重新入队了
+
+    async def check_reset() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            assert job.status == "queued"  # 已重置
+            assert job.last_error is None  # 旧错误已清
+
+    env.client.portal.call(check_reset)
 
 
 def test_url_import_invalid_url(env) -> None:
@@ -210,14 +286,87 @@ def test_whisper_import_creates_stub_source(env) -> None:
 
 
 def test_whisper_import_dedupe(env) -> None:
-    """whisper 模式：同一 BVID 重复导入 → deduped（同 source + job 复用）。"""
+    """whisper 模式：同一 BVID 重复导入 → 同 source + job 复用（job 未完成→deduped=False 继续轮询）。"""
     first = _post_url(env, mode="whisper")
     assert first.status_code == 201
     second = _post_url(env, mode="whisper")
     assert second.status_code == 200
     body = second.json()
-    assert body["deduped"] is True
+    assert body["deduped"] is False
     assert body["source_id"] == first.json()["source_id"]
+
+
+def test_whisper_import_done_job_dedupes(env) -> None:
+    """whisper 模式：job 真完成过 → deduped=True,不再入队。"""
+    first = _post_url(env, mode="whisper")
+    assert first.status_code == 201
+    source_id = first.json()["source_id"]
+
+    async def mark_done() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            await repos.jobs.update_status(job.id, "done")
+            await session.commit()
+
+    env.client.portal.call(mark_done)
+
+    second = _post_url(env, mode="whisper")
+    assert second.status_code == 200
+    body = second.json()
+    assert body["deduped"] is True
+    assert body["source_id"] == source_id
+    assert len(env.video_calls) == 1  # done → 不重复入队
+
+
+def test_whisper_import_failed_job_retries(env) -> None:
+    """whisper 模式：失败后重新导入 = 重试。deduped=False + job 重置 queued + 重新入队。
+
+    这是用户反馈的真 bug:第一次因没配 cookies 失败,第二次被误报「之前导入过」。
+    """
+    first = _post_url(env, mode="whisper")
+    assert first.status_code == 201
+    source_id = first.json()["source_id"]
+
+    async def mark_failed() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            await repos.jobs.update_status(job.id, "failed", last_error="抖音拒绝访问（Cookies 无效或过期）")
+            await session.commit()
+
+    env.client.portal.call(mark_failed)
+
+    second = _post_url(env, mode="whisper")
+    assert second.status_code == 200
+    body = second.json()
+    assert body["deduped"] is False  # 重试不算去重
+    assert body["source_id"] == source_id
+    assert len(env.video_calls) == 2  # 重新入队了
+
+    async def check_reset() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            assert job.status == "queued"
+            assert job.last_error is None
+
+    env.client.portal.call(check_reset)
 
 
 def test_whisper_import_no_api_key_rejected(env, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -304,14 +453,54 @@ def test_douyin_subtitle_mode_rejected(env) -> None:
 
 
 def test_douyin_whisper_dedupe(env) -> None:
-    """抖音 whisper 模式：同一 URL 重复导入 → deduped。"""
+    """抖音 whisper 模式：同一 URL 重复导入 → 同 source 复用（job 未完成→deduped=False）。"""
     first = _post_url(env, url=_DOUYIN_URL, mode="whisper")
     assert first.status_code == 201
     second = _post_url(env, url=_DOUYIN_URL, mode="whisper")
     assert second.status_code == 200
     body = second.json()
-    assert body["deduped"] is True
+    assert body["deduped"] is False
     assert body["source_id"] == first.json()["source_id"]
+
+
+def test_douyin_whisper_failed_job_retries(env) -> None:
+    """抖音：失败后重新导入 = 重试（用户反馈的真 bug 场景）。"""
+    first = _post_url(env, url=_DOUYIN_URL, mode="whisper")
+    assert first.status_code == 201
+    source_id = first.json()["source_id"]
+
+    async def mark_failed() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            await repos.jobs.update_status(job.id, "failed", last_error="抖音拒绝访问")
+            await session.commit()
+
+    env.client.portal.call(mark_failed)
+
+    second = _post_url(env, url=_DOUYIN_URL, mode="whisper")
+    assert second.status_code == 200
+    body = second.json()
+    assert body["deduped"] is False
+    assert len(env.video_calls) == 2  # 重新入队
+
+    async def check_reset() -> None:
+        async with env.shared["factory"]() as session:
+            from app.repo import Repos
+
+            repos = Repos(session, 1)
+            source = await repos.sources.get(source_id)
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            assert job.status == "queued"
+
+    env.client.portal.call(check_reset)
 
 
 def test_douyin_full_url_whisper(env) -> None:

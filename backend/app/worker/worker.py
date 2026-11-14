@@ -167,11 +167,17 @@ async def enqueue_import(
     """入队导入任务。以 dedupe_key 作 arq job id:同 key 的在途任务会被 arq 幂等挡掉
     (返回 None),重复上传/重复入队都安全。每次调用各开各的连接池,用完即关。
 
+    重试场景:先删掉上一次失败的 arq job/result 键,否则失败结果在 Redis 保留期间
+    同 ID 入队会被静默丢弃(用户重新上传失败过的文件永远不生效)。
+
     ``owner_id`` 必传:决定导入产物归属哪个账号(多用户后不能默认成 1)。
     dedupe_key 生产方应带上 owner 前缀,避免不同用户同内容互相去重。
     """
+    from arq.constants import job_key_prefix, result_key_prefix
+
     pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     try:
+        await pool.delete(f"{job_key_prefix}{dedupe_key}", f"{result_key_prefix}{dedupe_key}")
         job = await pool.enqueue_job(
             "import_file", file_path, no_llm=no_llm, owner_id=owner_id, _job_id=dedupe_key
         )

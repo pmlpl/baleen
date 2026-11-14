@@ -225,13 +225,18 @@ async def upload_source(
     )
     await session.commit()
 
-    deduped = not job_created  # 同一内容此前提交过(不论任务是否已完成)
+    # 只有真完成过(done)才算去重;failed/queued 的重试要返回 deduped=False 让前端继续轮询
+    deduped = not job_created and job.status == "done"
     if job.status in ("done", "running"):
         # 已完成或在途:不再入队,本次暂存目录也不会被任务用到,当场删掉
         shutil.rmtree(staging_dir, ignore_errors=True)
     else:
-        # queued/failed/dead:重入队(arq _job_id 幂等挡重复;队列丢失时也借此自愈)。
+        # queued/failed/dead:重入队(arq 侧先清旧失败结果,见 enqueue_import)。
         # 此时暂存文件可能被任务用到,不删;真正的孤儿由 worker 启动时的 24h 清理兜底
+        if job.status == "failed":
+            # 重试:重置为 queued 并清掉旧错误,否则前端轮询会立刻读到旧的 failed
+            await repos.jobs.update_status(job.id, "queued", last_error=None)
+            await session.commit()
         try:
             await enqueue_import(
                 str(staging),
@@ -331,10 +336,15 @@ async def import_from_url(
         )
         await session.commit()
 
-        deduped = not job_created
+        # 只有真完成过(done)才算去重;failed/queued 的重试返回 deduped=False 让前端继续轮询
+        deduped = not job_created and job.status == "done"
         if job.status in ("done", "running"):
             pass  # 已完成或在途，不重复入队
         else:
+            if job.status == "failed":
+                # 重试:重置为 queued 并清掉旧错误,否则前端轮询会立刻读到旧的 failed
+                await repos.jobs.update_status(job.id, "queued", last_error=None)
+                await session.commit()
             try:
                 await enqueue_video_extract(
                     body.url,
@@ -406,10 +416,15 @@ async def import_from_url(
     )
     await session.commit()
 
-    deduped = not job_created
+    # 只有真完成过(done)才算去重;failed/queued 的重试要返回 deduped=False 让前端继续轮询
+    deduped = not job_created and job.status == "done"
     if job.status in ("done", "running"):
         shutil.rmtree(staging_dir, ignore_errors=True)
     else:
+        if job.status == "failed":
+            # 重试:重置为 queued 并清掉旧错误,否则前端轮询会立刻读到旧的 failed
+            await repos.jobs.update_status(job.id, "queued", last_error=None)
+            await session.commit()
         try:
             await enqueue_import(
                 str(staging),

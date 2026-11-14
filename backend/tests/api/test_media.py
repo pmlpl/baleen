@@ -94,5 +94,7 @@ def test_same_md_different_attachment_hits_dedupe(env) -> None:
         params={"no_llm": True},
     )
     assert second.status_code == 200, "dedupe 命中返回 200"
-    assert second.json()["deduped"] is True
+    # v24 语义修正:deduped=True 仅在 job 真完成过(done);此处 job 还是 queued,
+    # 内容级去重体现在「同 sha → 同 source」上
+    assert second.json()["deduped"] is False
     assert first.json()["source_id"] == second.json()["source_id"]
