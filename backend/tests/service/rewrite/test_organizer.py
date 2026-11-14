@@ -207,6 +207,9 @@ def test_organize_prompt_contains_contract() -> None:
     assert "评的是你整理出的这篇笔记本身" in system_msg
     assert "不构成降级理由" in system_msg
     assert "知识点完整闭环" in system_msg
+    # 多并列大主题 → 多章结构指引
+    assert "并列的大主题" in system_msg
+    assert "多章结构" in system_msg
     assert "<file_content>" in client.received_messages[0][1]["content"]
 
 
