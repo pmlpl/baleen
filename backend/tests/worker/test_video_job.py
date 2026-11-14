@@ -289,6 +289,95 @@ def test_write_cookie_string_strips_cookie_prefix(tmp_path: Path) -> None:
     assert "Cookie:" not in text.split("# Netscape HTTP Cookie File")[1]
 
 
+def test_resolve_cookie_file_priority(tmp_path: Path) -> None:
+    """cookies_file（现成 Netscape 文件）> cookies_str > sessdata。"""
+    from app.service.video_extractor import _resolve_cookie_file
+
+    existing = tmp_path / "harvested.txt"
+    existing.write_text("# Netscape HTTP Cookie File\n.bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tx\n", encoding="utf-8")
+
+    # cookies_file 存在 → 直接用，不解析别的
+    cf = _resolve_cookie_file(sessdata="sd", cookies_str="a=b", cookies_file=str(existing), output_dir=tmp_path)
+    assert cf == str(existing)
+
+    # cookies_file 不存在 → 退回 cookies_str
+    cf2 = _resolve_cookie_file(
+        sessdata="sd", cookies_str="a=b", cookies_file=str(tmp_path / "nope.txt"), output_dir=tmp_path
+    )
+    text2 = Path(cf2).read_text(encoding="utf-8")
+    assert "a" in text2 and "b" in text2
+
+    # 只有 sessdata → SESSDATA cookie
+    cf3 = _resolve_cookie_file(sessdata="sd", output_dir=tmp_path)
+    assert "SESSDATA" in Path(cf3).read_text(encoding="utf-8")
+
+
+# ---------- B站风控兜底（Playwright 收获 cookie → yt-dlp 重试）----------
+
+
+def test_extract_video_content_bilibili_fallback_on_412(tmp_path: Path, monkeypatch) -> None:
+    """B站 yt-dlp 失败（412 风控）→ 浏览器提取兜底（bilibili_extractor）→ 成功。"""
+    import app.service.video_extractor as ve
+
+    calls: dict[str, int] = {"info": 0, "browser": 0}
+
+    def fake_info(url, *, sessdata="", cookies_str="", cookies_file=""):
+        calls["info"] += 1
+        raise RuntimeError("yt-dlp 元信息提取失败: HTTP Error 412: Precondition Failed")
+
+    fake_media = type(
+        "BilibiliMedia", (),
+        {
+            "bvid": "BV1wFZ8YBEt4",
+            "title": "吃盐科普",
+            "description": "为什么人类需要不断吃盐",
+            "author": "行者道荣",
+            "duration_s": 198,
+            "audio_path": tmp_path / "fake.m4a",
+            "video_path": None,  # 浏览器兜底视频流失败 → 帧提取跳过
+        },
+    )()
+
+    def fake_browser_fetch(url, *, sessdata="", output_dir=None):
+        calls["browser"] += 1
+        assert sessdata == "test-sd"  # SESSDATA 透传给浏览器提取器
+        return fake_media
+
+    monkeypatch.setattr(ve, "_fetch_video_info", fake_info)
+    monkeypatch.setattr("app.service.bilibili_extractor.fetch_bilibili_media", fake_browser_fetch)
+    monkeypatch.setattr(ve, "extract_audio", lambda vp, od: od / "audio.wav")
+    monkeypatch.setattr(ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "盐"}])
+
+    vc = ve.extract_video_content(
+        "https://www.bilibili.com/video/BV1wFZ8YBEt4/",
+        sessdata="test-sd",
+    )
+    assert vc.title == "吃盐科普"
+    assert vc.owner_name == "行者道荣"
+    assert "盐" in vc.markdown
+    assert calls["browser"] == 1
+    assert calls["info"] == 1  # generic 只试一次，失败即进兜底
+
+
+def test_extract_video_content_bilibili_no_fallback_for_duration(tmp_path: Path, monkeypatch) -> None:
+    """时长超限是确定性错误 → 不触发浏览器兜底。"""
+    import app.service.video_extractor as ve
+
+    monkeypatch.setattr(
+        ve, "_fetch_video_info",
+        lambda url, **kw: {"title": "长视频", "duration": 7200, "uploader": "",
+                           "description": "", "webpage_url": url},
+    )
+
+    def _no_browser(url, *, sessdata="", output_dir=None):
+        raise AssertionError("时长超限不该触发兜底")
+
+    monkeypatch.setattr("app.service.bilibili_extractor.fetch_bilibili_media", _no_browser)
+
+    with pytest.raises(RuntimeError, match="超过 whisper 模式"):
+        ve.extract_video_content("https://www.bilibili.com/video/BV1GJ411x7h7/")
+
+
 # ---------- 帧间隔自适应 ----------
 
 
@@ -349,7 +438,7 @@ def test_extract_video_content_bilibili_still_ytdlp(tmp_path: Path, monkeypatch)
     """B站 URL → 仍走 yt-dlp 路径（_fetch_video_info）。"""
     import app.service.video_extractor as ve
 
-    def fake_info(url, *, sessdata="", cookies_str=""):
+    def fake_info(url, *, sessdata="", cookies_str="", cookies_file=""):
         return {
             "title": "B站视频", "duration": 100,
             "uploader": "UP主", "description": "", "webpage_url": url,

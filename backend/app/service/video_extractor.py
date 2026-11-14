@@ -120,11 +120,19 @@ def _get_whisper_model():
     return _whisper_model
 
 
-def download_video(url: str, *, sessdata: str = "", cookies_str: str = "", output_dir: Path | None = None) -> Path:
+def download_video(
+    url: str,
+    *,
+    sessdata: str = "",
+    cookies_str: str = "",
+    cookies_file: str = "",
+    output_dir: Path | None = None,
+) -> Path:
     """用 yt-dlp 下载视频（含音频），返回视频文件路径。
 
     B 站 CDN 不稳定，视频文件大，下载可能失败/超时。调用方应捕获异常并降级。
     cookies_str 用于抖音等需要 cookie 字符串的平台（B站用 sessdata）。
+    cookies_file 是现成 Netscape cookie 文件路径（优先级最高，B站风控兜底收获的）。
     """
     import sys
 
@@ -142,7 +150,9 @@ def download_video(url: str, *, sessdata: str = "", cookies_str: str = "", outpu
         "--socket-timeout", "30",
         "-o", output_template,
     ]
-    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_str=cookies_str, output_dir=out_dir)
+    cookie = _resolve_cookie_file(
+        sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file, output_dir=out_dir
+    )
     if cookie:
         cmd.extend(["--cookies", cookie])
     cmd.append(url)
@@ -157,11 +167,19 @@ def download_video(url: str, *, sessdata: str = "", cookies_str: str = "", outpu
     return candidates[0]
 
 
-def download_audio(url: str, *, sessdata: str = "", cookies_str: str = "", output_dir: Path | None = None) -> Path:
+def download_audio(
+    url: str,
+    *,
+    sessdata: str = "",
+    cookies_str: str = "",
+    cookies_file: str = "",
+    output_dir: Path | None = None,
+) -> Path:
     """用 yt-dlp 只下载音频（m4a），返回音频文件路径。
 
     音频文件小（~8MB/10分钟），下载快。whisper 只需要音频。
     cookies_str 用于抖音等需要 cookie 字符串的平台（B站用 sessdata）。
+    cookies_file 是现成 Netscape cookie 文件路径（优先级最高，B站风控兜底收获的）。
     """
     import sys
 
@@ -178,7 +196,9 @@ def download_audio(url: str, *, sessdata: str = "", cookies_str: str = "", outpu
         "--socket-timeout", "30",
         "-o", output_template,
     ]
-    cookie = _resolve_cookie_file(sessdata=sessdata, cookies_str=cookies_str, output_dir=out_dir)
+    cookie = _resolve_cookie_file(
+        sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file, output_dir=out_dir
+    )
     if cookie:
         cmd.extend(["--cookies", cookie])
     cmd.append(url)
@@ -205,12 +225,23 @@ def _write_cookies(sessdata: str, output_dir: Path) -> Path:
 
 
 def _resolve_cookie_file(
-    *, sessdata: str = "", cookies_str: str = "", output_dir: Path | None = None
+    *,
+    sessdata: str = "",
+    cookies_str: str = "",
+    cookies_file: str = "",
+    output_dir: Path | None = None,
 ) -> str | None:
-    """统一 cookie 处理：cookies_str（抖音 cookie 字符串）优先于 sessdata（B站 SESSDATA）。
+    """统一 cookie 处理，优先级：cookies_file（现成 Netscape 文件，B站风控兜底收获的）
+    > cookies_str（抖音 cookie 字符串）> sessdata（B站 SESSDATA）。
 
     返回 cookie 文件路径或 None（无 cookie）。
     """
+    if cookies_file:
+        from pathlib import Path as _P
+
+        p = _P(cookies_file)
+        if p.is_file():
+            return str(p)
     if cookies_str:
         out_dir = output_dir or Path(tempfile.mkdtemp(prefix="cookies_"))
         return str(_write_cookie_string(cookies_str, out_dir))
@@ -422,7 +453,7 @@ def build_video_markdown(
     return "\n".join(parts)
 
 
-def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "") -> dict:
+def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "", cookies_file: str = "") -> dict:
     """用 yt-dlp 提取视频元信息（不下载，只取 JSON）。平台无关。
 
     返回 {title, duration, uploader, description, webpage_url}。
@@ -456,48 +487,48 @@ def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "") ->
     }
 
 
-def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> VideoContent:
-    """抖音专用路径：Playwright 拦截详情接口拿元信息+视频，免 cookie（2026-11-14）。
+def _content_from_media(
+    *,
+    title: str,
+    description: str,
+    owner_name: str,
+    duration_s: int,
+    audio_path: Path,
+    video_path: Path | None,
+    url: str,
+    client=None,
+    progress_cb=None,
+    output_dir: Path,
+) -> VideoContent:
+    """公共尾部：音频转写 + 可选帧 + markdown（douyin / B站浏览器兜底共用）。
 
-    视频文件在手 → 帧提取必定可用（比 yt-dlp 路径的「视频下载经常失败」更稳）。
-    progress_cb(stage, pct, est_seconds)：阶段回调节 worker 写 DB（前端进度条用）。
+    调用方负责 output_dir 的创建与清理（finally rmtree）。
     """
     import shutil
 
-    from app.service.douyin_extractor import fetch_douyin_video
-
-    output_dir = Path(tempfile.mkdtemp(prefix="douyin_extract_"))
     try:
-        dv = fetch_douyin_video(url, output_dir=output_dir)
-
-        # 时长检查（与主路径同一上限）
-        if dv.duration_s > 3600:
-            raise RuntimeError(
-                f"视频时长 {dv.duration_s // 60} 分钟，超过 whisper 模式 60 分钟上限。"
-            )
-
-        wav_path = extract_audio(dv.video_path, output_dir)
+        wav_path = extract_audio(audio_path, output_dir)
         if progress_cb:
             # est=视频时长是保守上限（faster-whisper 通常数倍于实时），前端据此插值画进度条
-            progress_cb("whisper 转写中…", 30, est_seconds=dv.duration_s)
+            progress_cb("whisper 转写中…", 30, est_seconds=duration_s)
         transcript_segments = transcribe_audio(wav_path)
         if progress_cb:
             progress_cb("识别画面中…", 72)
 
         frame_descriptions: list[FrameDescription] = []
-        if client is not None:
+        if client is not None and video_path is not None:
             try:
-                frames = extract_key_frames(dv.video_path, output_dir, interval=_frame_interval(dv.duration_s))
+                frames = extract_key_frames(video_path, output_dir, interval=_frame_interval(duration_s))
                 if frames:
                     frame_descriptions = describe_frames(frames, client=client)
             except Exception:  # noqa: BLE001 —— 帧描述失败不影响转写
                 pass
 
         markdown = build_video_markdown(
-            title=dv.title,
-            description=dv.description,
-            owner_name=dv.author,
-            duration=dv.duration_s,
+            title=title,
+            description=description,
+            owner_name=owner_name,
+            duration=duration_s,
             transcript_segments=transcript_segments,
             frame_descriptions=frame_descriptions,
             url=url,
@@ -506,49 +537,62 @@ def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> Video
         shutil.rmtree(output_dir, ignore_errors=True)
 
     return VideoContent(
-        title=dv.title,
-        description=dv.description,
-        owner_name=dv.author,
-        duration=dv.duration_s,
+        title=title,
+        description=description,
+        owner_name=owner_name,
+        duration=duration_s,
         transcript_segments=transcript_segments,
         frame_descriptions=frame_descriptions,
         markdown=markdown,
     )
 
 
-def extract_video_content(
+def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> VideoContent:
+    """抖音专用路径：Playwright 拦截详情接口拿元信息+视频，免 cookie（2026-11-14）。
+
+    视频文件在手 → 帧提取必定可用（比 yt-dlp 路径的「视频下载经常失败」更稳）。
+    """
+    from app.service.douyin_extractor import fetch_douyin_video
+
+    output_dir = Path(tempfile.mkdtemp(prefix="douyin_extract_"))
+    dv = fetch_douyin_video(url, output_dir=output_dir)
+
+    # 时长检查（与主路径同一上限）
+    if dv.duration_s > 3600:
+        raise RuntimeError(
+            f"视频时长 {dv.duration_s // 60} 分钟，超过 whisper 模式 60 分钟上限。"
+        )
+
+    return _content_from_media(
+        title=dv.title,
+        description=dv.description,
+        owner_name=dv.author,
+        duration_s=dv.duration_s,
+        audio_path=dv.video_path,  # douyin 下载的是完整视频（含音轨），ffmpeg 直接抽
+        video_path=dv.video_path,
+        url=url,
+        client=client,
+        progress_cb=progress_cb,
+        output_dir=output_dir,
+    )
+
+
+def _extract_generic_content(
     url: str,
     *,
     sessdata: str = "",
     cookies_str: str = "",
+    cookies_file: str = "",
     client=None,
     progress_cb=None,
 ) -> VideoContent:
-    """主入口：下载音频 → whisper 转写 → （可选）下载视频提取帧 → 拼 markdown。
-
-    策略：音频优先（小文件、下载可靠），视频可选（CDN 不稳定，失败则跳过帧提取）。
-    不依赖平台字幕系统，直接从音频转写——内容可靠。
-    需要 yt-dlp + ffmpeg + whisper + LLMClient（视觉模型，可选）。
-
-    sessdata 用于 B站（SESSDATA cookie）；cookies_str 用于抖音等需要 cookie 字符串的平台。
-    progress_cb(stage, pct, est_seconds=None)：提取阶段进度回调（worker 写 DB 供前端进度条）。
-    """
+    """通用 yt-dlp 路径（B站/其他平台）：元信息 → 音频 → whisper → 可选帧 → markdown。"""
     import shutil
-
-    # 用户可能粘贴整段分享文本（"8.48 复制打开抖音… https://v.douyin.com/xxx/ 复制此链接"），
-    # 提取出真正的 URL 再交给 yt-dlp
-    url = _extract_url(url)
-
-    # 抖音走 Playwright 专用路径（免 cookie，2026-11-14）
-    from app.service.douyin import detect_douyin
-
-    if detect_douyin(url):
-        return _extract_douyin_content(url, client=client, progress_cb=progress_cb)
 
     output_dir = Path(tempfile.mkdtemp(prefix="video_extract_"))
 
     # ① 获取视频元信息（yt-dlp --dump-json，平台无关）
-    info = _fetch_video_info(url, sessdata=sessdata, cookies_str=cookies_str)
+    info = _fetch_video_info(url, sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file)
     title = info["title"]
     description = info["description"]
     owner_name = info["uploader"]
@@ -566,7 +610,11 @@ def extract_video_content(
         )
 
     # ② 下载音频（总是执行——小文件、可靠）
-    audio_file = download_audio(resolved_url, sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
+    audio_file = download_audio(
+        resolved_url,
+        sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file,
+        output_dir=output_dir,
+    )
     wav_path = extract_audio(audio_file, output_dir)
 
     # ③ whisper 转写（est=时长为保守上限，实际 GPU 上通常数倍于实时）
@@ -580,7 +628,11 @@ def extract_video_content(
     frame_descriptions: list[FrameDescription] = []
     if client is not None:
         try:
-            video_path = download_video(resolved_url, sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
+            video_path = download_video(
+                resolved_url,
+                sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file,
+                output_dir=output_dir,
+            )
             frames = extract_key_frames(video_path, output_dir, interval=_frame_interval(duration))
             if frames:
                 frame_descriptions = describe_frames(frames, client=client)
@@ -609,6 +661,82 @@ def extract_video_content(
         transcript_segments=transcript_segments,
         frame_descriptions=frame_descriptions,
         markdown=markdown,
+    )
+
+
+def extract_video_content(
+    url: str,
+    *,
+    sessdata: str = "",
+    cookies_str: str = "",
+    client=None,
+    progress_cb=None,
+) -> VideoContent:
+    """主入口：路由平台 → 提取 → whisper 转写 →（可选）帧 → markdown。
+
+    - 抖音：Playwright 拦截详情接口，免 cookie（douyin_extractor.py）
+    - B站/其他：yt-dlp；**B站风控(页面级 412)失败时自动兜底**——
+      Playwright+SESSDATA 过一次挑战收获全套 cookie（bilibili_harvest.py），
+      用收获的 cookie 重试 yt-dlp（wbi 签名 yt-dlp 自己算，管线零改动）
+
+    sessdata 用于 B站（SESSDATA cookie）；cookies_str 用于抖音等需要 cookie 字符串的平台。
+    progress_cb(stage, pct, est_seconds=None)：提取阶段进度回调（worker 写 DB 供前端进度条）。
+    """
+    # 用户可能粘贴整段分享文本（"8.48 复制打开抖音… https://v.douyin.com/xxx/ 复制此链接"），
+    # 提取出真正的 URL 再交给提取器
+    url = _extract_url(url)
+
+    # 抖音走 Playwright 专用路径（免 cookie，2026-11-14）
+    from app.service.douyin import detect_douyin
+
+    if detect_douyin(url):
+        return _extract_douyin_content(url, client=client, progress_cb=progress_cb)
+
+    # B站链接：yt-dlp 失败（典型为页面级 412 风控）时走 cookie 收获兜底
+    from app.service.bilibili import extract_bvid
+
+    is_bilibili = extract_bvid(url) is not None
+
+    first_err_msg: str | None = None
+    try:
+        return _extract_generic_content(
+            url, sessdata=sessdata, cookies_str=cookies_str, client=client, progress_cb=progress_cb,
+        )
+    except Exception as exc:
+        # 非 B站链接不兜底；时长超限是确定性错误，兜底重试也不会变。
+        # ⚠️ except as xxx 的名字在块尾会被 Python 自动删除——要在块内先取出消息
+        if not is_bilibili or "超过 whisper 模式" in str(exc):
+            raise
+        first_err_msg = f"{type(exc).__name__}: {exc}"
+
+    # 风控兜底（2026-11-14 深夜）：Playwright + SESSDATA 过挑战，从页面里直接提取。
+    # cookie 收获重试被否——B站对 TLS 指纹打分，浏览器 cookie 迁给 yt-dlp 仍概率性 412；
+    # 浏览器内提取（INITIAL_STATE + __playinfo__ + CDN 直连）才是确定性的。
+    from app.service.bilibili_extractor import fetch_bilibili_media
+
+    try:
+        media = fetch_bilibili_media(url, sessdata=sessdata)
+    except Exception as browser_err:
+        raise RuntimeError(
+            f"{first_err_msg}；浏览器兜底也失败: {browser_err}"
+        ) from browser_err
+
+    if media.duration_s > 3600:
+        raise RuntimeError(
+            f"视频时长 {media.duration_s // 60} 分钟，超过 whisper 模式 60 分钟上限。"
+        )
+
+    return _content_from_media(
+        title=media.title,
+        description=media.description,
+        owner_name=media.author,
+        duration_s=media.duration_s,
+        audio_path=media.audio_path,
+        video_path=media.video_path,
+        url=url,
+        client=client,
+        progress_cb=progress_cb,
+        output_dir=Path(tempfile.mkdtemp(prefix="bilibili_extract_")),
     )
 
 
