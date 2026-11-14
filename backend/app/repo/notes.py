@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 
 from app.models import Note
 
@@ -10,6 +10,17 @@ from .base import Repo
 
 
 class NotesRepo(Repo):
+    async def count_active(self) -> int:
+        """active 笔记总数(个人中心统计;口径与列表接口的 total 一致,archived 不数)。"""
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(Note)
+                .where(Note.owner_id == self.owner_id, Note.status == "active")
+            )
+            or 0
+        )
+
     async def get(self, note_id: int) -> Note | None:
         return await self.session.scalar(
             select(Note).where(Note.id == note_id, Note.owner_id == self.owner_id)

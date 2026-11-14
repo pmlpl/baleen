@@ -99,6 +99,9 @@ onBeforeUnmount(() => {
             <RouterLink class="nav-link" :to="{ name: 'settings' }" active-class="nav-link--active">
               设置
             </RouterLink>
+            <RouterLink class="nav-link" :to="{ name: 'profile' }" active-class="nav-link--active">
+              个人中心
+            </RouterLink>
           </template>
           <!-- 还没配 key:只能去设置页 -->
           <RouterLink

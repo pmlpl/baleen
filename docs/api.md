@@ -1,4 +1,4 @@
-# API 契约 v25
+# API 契约 v26
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -524,6 +524,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-14 | v26 | **个人中心**:§10 新增 **`GET /api/profile`** 聚合端点——用户信息(id/username/注册时间)+ 使用统计(notes/sources/qa_sessions/qa_messages,owner 隔离,notes 只数 active)+ 章程预览(前 300 字,完整内容仍走 `GET /api/charter`)+ 配置掩码视图(与 `GET /api/settings` 六字段同口径,密钥永不回显全文);纯读聚合,复用现有 repo 与 `resolve_llm_config`,无新表无迁移;前端新增 `/profile` 页(导航加「个人中心」入口),只读展示,编辑动作跳章程/设置页 |
 | 2026-11-14 | v25 | **抖音免 cookie 提取 + 导入进度条**：①抖音模式改走 Playwright（`douyin_extractor.py`，channel=msedge 用系统 Edge）打开视频页拦截详情接口，元信息+播放地址全拿到，CDN 直连下载——**用户零配置**，废除 v24 的 `douyin_cookies` 设置字段（`PUT /api/settings` 移除，DB 列保留标注废弃；实测 ttwid 单值/首页 cookie/蜘蛛页全被抖音反爬封死，手动复制完整 Cookie 头对普通用户不可用）；②`GET /api/sources/{id}` 响应新增 `video_progress`（0-100）与 `video_est_seconds`（转写预计秒数），前端进度条在 whisper 阶段按视频时长插值（base 模型 ~1x 实时）；③worker `deduped=True` 语义收紧为仅 job done（失败重试不再被误报「之前导入过」），入队前清 arq 旧结果键；④organizer prompt：质量评级标准具体化（评整理后的笔记本身，视频/字幕来源不构成降级理由）+ 多并列大主题升多章结构指引（内部行为，无接口变化） |
 | 2026-11-13 | v24 | **抖音视频支持**：`POST /api/sources/url` whisper 模式支持抖音链接（`v.douyin.com` / `www.douyin.com`）；`video_extractor.py` 用 yt-dlp 统一提取元信息（替代 B 站 view API，平台无关）；新增 `douyin.py`（URL 检测 + ID 提取）；抖音 cookies 通过设置页配置（`PUT /api/settings` 的 `douyin_cookies` 字段，粘贴 cookie 字符串即可，无需手动导出文件）；抖音只支持 whisper 模式（subtitle → 400）；前端 VideoView 检测抖音 URL 显示「在抖音中打开」链接 + 强制 whisper；`build_video_markdown` 标签通用化（"UP主"→"作者"、"B站原链接"→"原链接"） |
 | 2026-11-13 | v23 | **whisper 模式异步化**：`POST /api/sources/url` 的 `mode="whisper"` 从 API 同步阻塞改为 worker 后台异步——API 立即返回 201（创建占位 source + job），worker 在后台做 下载音频→whisper 转写→写 markdown→调 `run_import_async(source_id=...)` 入库；`GET /api/sources/{id}` 响应新增 `video_stage` 字段（`"下载音频中…"` / `"whisper 转写中…"` / `"❌ 错误"` / `null`）；whisper 时长上限从 30 分钟提高到 60 分钟（worker `_timeout=7200`）；source.sha256 用占位值 `"video:{bvid}:whisper"`（dedupe 基于 BVID）；subtitle 模式不变（保持同步快速路径） |
@@ -589,3 +590,27 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 - `app_settings` 每用户一行（唯一约束 `owner_id`）：LLM 网关/模型/API Key、Tavily Key、章程各自独立
 - **API Key 不继承 `.env`**：新账号必须自己到设置页配（`api_key_set=false` 时上传会 400）
 - 导入任务（worker）也按 `owner_id` 落库；`jobs` 去重键是 `(owner_id, dedupe_key)`
+
+---
+
+## 10. 个人中心（**已实现**,2026-11-14 v26）
+
+`GET /api/profile` —— 一次聚合个人中心一屏所需的数据:用户信息、使用统计、章程预览、配置掩码视图。纯读端点,复用现有数据访问,无新表无迁移;编辑动作仍走原有端点(章程 → §8,配置 → §6)。
+
+```json
+{
+  "user": { "id": 1, "username": "alice", "created_at": "2026-10-30T12:57:59+08:00" },
+  "stats": { "notes": 15, "sources": 20, "qa_sessions": 8, "qa_messages": 96 },
+  "charter": { "has_charter": true, "preview": "## 这是谁的库\n我是一名……(超长截断加「…」)" },
+  "settings": {
+    "llm_base_url": "http://…", "llm_model": "deepseek-flash",
+    "api_key_set": true, "api_key_tail": "abcd",
+    "tavily_set": false, "tavily_tail": ""
+  }
+}
+```
+
+- `stats.notes` 只数 `active` 笔记(口径同 `GET /api/notes` 的 total,archived 不数);`sources` 是导入来源总数;统计全部按 `owner_id` 隔离
+- `charter.preview` 是章程**前 300 字**(超长截断加「…」);完整章程走 `GET /api/charter`,编辑走问卷/`PUT /api/charter`
+- `settings` 六字段与 `GET /api/settings` 完全同口径:掩码视图,密钥只回「是否已设置 + 末 4 位」,**永不回显全文**
+- 需要token,401 行为同 §9;响应固定四块 `user / stats / charter / settings`,不夹带其他字段

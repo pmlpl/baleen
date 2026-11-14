@@ -11,6 +11,7 @@ import CharterWizard from '../views/CharterWizard.vue'
 import LibraryView from '../views/LibraryView.vue'
 import LoginView from '../views/LoginView.vue'
 import NoteView from '../views/NoteView.vue'
+import ProfileView from '../views/ProfileView.vue'
 import QaView from '../views/QaView.vue'
 import SettingsView from '../views/SettingsView.vue'
 import VideoView from '../views/VideoView.vue'
@@ -27,6 +28,8 @@ const router = createRouter({
     // 首次强制填(无「稍后再填」);填过后只能从设置页进,是编辑模式
     { path: '/charter', name: 'charter', component: CharterWizard },
     { path: '/settings', name: 'settings', component: SettingsView },
+    // 个人中心:聚合只读展示(用户信息/统计/章程预览/配置掩码),编辑跳章程/设置页
+    { path: '/profile', name: 'profile', component: ProfileView },
     // 兜底:路径写错也回导入页,别让人看到空白
     { path: '/:pathMatch(.*)*', redirect: { name: 'qa' } },
   ],

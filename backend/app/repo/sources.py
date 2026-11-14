@@ -10,6 +10,17 @@ from .base import Repo
 
 
 class SourcesRepo(Repo):
+    async def count(self) -> int:
+        """该用户的导入来源总数(个人中心统计)。"""
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(Source)
+                .where(Source.owner_id == self.owner_id)
+            )
+            or 0
+        )
+
     async def get(self, source_id: int) -> Source | None:
         return await self.session.scalar(
             select(Source).where(Source.id == source_id, Source.owner_id == self.owner_id)

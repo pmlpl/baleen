@@ -91,7 +91,14 @@ def test_invalid_token_401(env: SimpleNamespace) -> None:
 def test_protected_endpoints_require_auth(env: SimpleNamespace) -> None:
     """业务接口没 token 一律 401(healthz 除外,由别处保证)。"""
     _noauth(env)
-    for path in ["/api/notes", "/api/sources", "/api/qa/sessions", "/api/settings", "/api/charter"]:
+    for path in [
+        "/api/notes",
+        "/api/sources",
+        "/api/qa/sessions",
+        "/api/settings",
+        "/api/charter",
+        "/api/profile",
+    ]:
         resp = env.client.get(path)
         assert resp.status_code == 401, f"{path} 未拦截:{resp.status_code}"
 

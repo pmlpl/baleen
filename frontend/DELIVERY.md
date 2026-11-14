@@ -280,3 +280,20 @@ uvicorn.exe：(空)
 - 想真看到 G0/G1/G2 全绿：起 arq worker 再传一次文件（我这次没起，避免拉 1.2 GB 模型占时间）。
 - 建议下一批：① 后端把 `markdown` 写进去（或文档改成允许 null）；② 检索加分数阈值；③ favicon；
   ④ 问答生成页（下一批功能）；⑤ 决定 HomeView.vue 去留。
+
+## 2026-11-14 · 个人中心页 /profile · 执行者：ZCode
+
+配套 GET /api/profile(v26,见 backend/delivery/2026-11.md 同日块)。主人 2026-11-12 提出。
+
+### 改动
+- **新增 `src/api/profile.ts`**:getProfile() 封装,类型 Profile(user/stats/charter/settings 四块)
+- **新增 `src/views/ProfileView.vue`**:只读展示页——头像+用户名+账号 ID+注册时间、使用统计四格(笔记/导入来源/问答会话/问答消息)、章程预览卡(300 字截断,「…」结尾提示看完整)、配置掩码卡(网关/模型/API Key/Tavily,密钥只显末四位);两个按钮分别跳章程页/设置页,**不复制编辑逻辑**
+- `router/index.ts` 加 `/profile` 路由(静态 import,与现有 5 视图同款);`App.vue` 导航加「个人中心」入口(仅 onboarding 完成后显示,与其它 nav-link 同条件)
+
+### 自测
+- `pnpm type-check`(vue-tsc) 通过
+- 浏览器实测(5174 dev + 真后端):渲染/数据/高亮/截断提示全对,截图确认;测试用 token 已清
+- 明确不做:改密码/邮箱/第三方登录入口(STATUS §7 划定)
+
+### 已知限制
+- 统计实时拉取:onActivated 初次挂载与每次重新进入都触发 load(),keep-alive 下切回个人中心统计也是新的,无缓存陈旧问题

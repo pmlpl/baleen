@@ -12,7 +12,7 @@
 
 ## 契约与决策
 
-- [API 契约 v22](docs/api.md) — 前后端接口（版本以「变更记录」为准）
+- [API 契约 v26](docs/api.md) — 前后端接口（版本以「变更记录」为准）
 - ADR（技术决策，答辩素材）：
   - [0001 架构基线](docs/adr/0001-architecture-baseline.md)
   - [0002 解析栈](docs/adr/0002-parsing-stack.md)

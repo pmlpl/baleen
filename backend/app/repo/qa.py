@@ -13,6 +13,28 @@ from app.repo.base import Repo
 
 
 class QaRepo(Repo):
+    async def count_sessions(self) -> int:
+        """该用户的会话总数(个人中心统计)。"""
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(QaSession)
+                .where(QaSession.owner_id == self.owner_id)
+            )
+            or 0
+        )
+
+    async def count_messages(self) -> int:
+        """该用户的问答消息总数(user + assistant,个人中心统计)。"""
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(QaMessage)
+                .where(QaMessage.owner_id == self.owner_id)
+            )
+            or 0
+        )
+
     async def create_session(self, title: str) -> QaSession:
         row = QaSession(owner_id=self.owner_id, title=title)
         self.session.add(row)

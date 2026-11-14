@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-14 · 视频转写换 faster-whisper small(实测 3.1x 提速)+帧间隔自适应(v26);基线 **461 passed**
+**最后更新**：2026-11-14 · 个人中心页上线(GET /api/profile 聚合 + /profile 前端页,v26);基线 **467 passed**
 
 ### 已完成模块
 
@@ -29,8 +29,8 @@
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
 | **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
 | **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效 |
-| **API 端点总览** | `app/main.py` | ✅ 27 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 7 · 问答/会话/导出 8 · 设置 2（数字由 `scripts/doc_lint.py` 守门） |
-| **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页 + 登录注册 + 书架 + 笔记两栏阅读 |
+| **API 端点总览** | `app/main.py` | ✅ 28 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 7 · 问答/会话/导出 8 · 设置 2 · 个人中心 1（数字由 `scripts/doc_lint.py` 守门） |
+| **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页/个人中心 + 登录注册 + 书架 + 笔记两栏阅读 |
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
 | **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷 → LLM 生成章程 → 存 DB → G2 热生效；每用户一份 |
 | **标题结构整理** | `app/service/rewrite/` | ✅ 导入时 LLM 出语义标题、代码算编号；超长文档分段；**需非推理模型** |
@@ -60,11 +60,12 @@
 | **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
 | **视频笔记页 + whisper（v22→v26）** | `app/service/video_extractor.py` + `douyin_extractor.py` + `VideoView.vue` | ✅ whisper 异步（API 立即 201，worker 2h 超时，video_stage/progress 进度）；**faster-whisper small**（GPU float16 实测 15x 实时，构造失败/推理失败双重退 CPU int8；benchmark 见 2026-11.md）；帧间隔按时长自适应（目标 ~8 帧，60s 短视频 1→6 帧）；B 站 yt-dlp 路径；**抖音 Playwright 免 cookie**（系统 Edge 拦截详情接口，实测 177MB 下载，用户零配置）；前端进度条（whisper 阶段按视频时长插值）；461 passed |
+| **个人中心** | `app/api/profile.py` + `frontend/src/views/ProfileView.vue` | ✅ GET /api/profile 聚合（用户信息/使用统计/章程预览前 300 字/配置掩码,六字段同设置页口径）；前端 /profile 页导航入口,只读展示,编辑跳章程/设置页;6 测试;真后端+浏览器双冒烟通过 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  461 passed
+cd backend && uv run pytest -q     →  467 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -87,6 +88,7 @@ cd backend && uv run pytest -q     →  461 passed
 → **455**（抖音实战排障:dedupe语义+cookies分级校验;2026-11-14）
 → **460**（抖音免cookie提取+进度条+评级/多章指引;2026-11-14）
 → **461**（faster-whisper 迁移+small 模型+帧间隔自适应;2026-11-14）
+→ **467**（个人中心聚合端点 6 测:统计口径/owner 隔离/章程截断/密钥不泄漏;2026-11-14）
 
 **任何新任务都不许把这个数降下来。**
 

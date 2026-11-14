@@ -12,6 +12,7 @@ from app.api.auth import router as auth_router
 from app.api.charter import router as charter_router
 from app.api.health import router as health_router
 from app.api.library import router as library_router
+from app.api.profile import router as profile_router
 from app.api.qa import router as qa_router
 from app.api.settings import router as settings_router
 from app.api.upload import router as upload_router
@@ -68,6 +69,7 @@ def create_app() -> FastAPI:
     app.include_router(qa_router)
     app.include_router(settings_router)
     app.include_router(charter_router)
+    app.include_router(profile_router)
     app.include_router(upload_router)
     return app
 
