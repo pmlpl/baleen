@@ -289,6 +289,20 @@ def test_write_cookie_string_strips_cookie_prefix(tmp_path: Path) -> None:
     assert "Cookie:" not in text.split("# Netscape HTTP Cookie File")[1]
 
 
+# ---------- 帧间隔自适应 ----------
+
+
+def test_frame_interval_adaptive() -> None:
+    """按时长自适应帧间隔：目标 ~8 帧，下限 10s（60s 短视频旧逻辑只有 1 帧）。"""
+    from app.service.video_extractor import _frame_interval
+
+    assert _frame_interval(10) == 10  # 10s → 下限 10 → 1 帧
+    assert _frame_interval(60) == 10  # 60s → 60//8=7 → 下限 10 → 6 帧
+    assert _frame_interval(100) == 12  # 100s → ~8 帧
+    assert _frame_interval(1500) == 187  # 25 分钟 → ~8 帧
+    assert _frame_interval(3600) == 450  # 60 分钟 → 8 帧（MAX_FRAMES 兜底）
+
+
 # ---------- 抖音 Playwright 路径（mock，不弹浏览器）----------
 
 
@@ -308,6 +322,7 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
     )()
 
     calls: dict[str, Any] = {}
+    frame_kwargs: list[dict] = []
 
     def fake_fetch(url, *, output_dir=None):
         calls["url"] = url
@@ -315,11 +330,14 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
 
     monkeypatch.setattr(ve, "extract_audio", lambda vp, od: od / "audio.wav")
     monkeypatch.setattr(ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "内容"}])
-    monkeypatch.setattr(ve, "extract_key_frames", lambda vp, od: [])
+    monkeypatch.setattr(ve, "extract_key_frames", lambda vp, od, **kw: frame_kwargs.append(kw) or [])
     monkeypatch.setattr("app.service.douyin_extractor.fetch_douyin_video", fake_fetch)
 
-    vc = ve.extract_video_content("https://v.douyin.com/UMeLLjAlXa8/")
+    # 传 dummy client 才会走帧提取分支（无 client 时帧提取整个跳过）
+    vc = ve.extract_video_content("https://v.douyin.com/UMeLLjAlXa8/", client=object())
     assert "v.douyin.com" in calls["url"]
+    # 帧间隔按视频时长自适应传入（25 分钟 → ~8 帧），不再是固定 60s
+    assert frame_kwargs and frame_kwargs[0]["interval"] == ve._frame_interval(1500)
     assert vc.title == "博弈论深度解读"
     assert vc.owner_name == "向不惑"
     assert vc.duration == 1500

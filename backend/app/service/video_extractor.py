@@ -2,7 +2,7 @@
 
 不依赖 B 站 AI 字幕系统（已证实不可靠），直接从视频本身提取内容。
 - yt-dlp 下载视频（B 站需要 SESSDATA cookie）
-- ffmpeg 提取音频（16kHz mono WAV，whisper 要求）+ 关键帧（每 60 秒一帧）
+- ffmpeg 提取音频（16kHz mono WAV，whisper 要求）+ 关键帧（间隔按时长自适应，目标 ~8 帧）
 - faster-whisper（ctranslate2）转写音频 → 带时间戳的文字段（GPU float16，失败退 CPU int8）
 - LLMClient 视觉能力描述每帧画面 → 补充字幕无法获取的视觉信息
 - 合并：whisper 转写（文字）+ 帧描述（画面）→ 富 markdown
@@ -38,10 +38,19 @@ def _extract_url(text: str) -> str:
 _whisper_model = None
 _whisper_device = ""  # 当前模型所在设备（"cuda"/"cpu"），GPU 推理失败退 CPU 后据此跳过重试
 
-# 关键帧提取间隔（秒）：每 60 秒取一帧，10 分钟视频 → 10 帧 → 10 次视觉调用
+# 关键帧默认提取间隔（秒）：调用方按视频时长自适应计算后显式传参覆盖（见 _frame_interval）
 FRAME_INTERVAL = 60
 # 帧图片上限（防止超长视频烧太多视觉调用）
 MAX_FRAMES = 20
+
+
+def _frame_interval(duration_s: int) -> int:
+    """按视频时长自适应帧间隔：目标 ~8 帧，下限 10s（60s 的短视频至少给 6 帧）。
+
+    10s 视频 → 1 帧；60s → 6 帧；8 分钟 → 8 帧；25 分钟 → 8 帧。
+    MAX_FRAMES 仍作为超长视频的兜底上限。
+    """
+    return max(10, duration_s // 8)
 # faster-whisper 模型名（small：benchmark 实测比 base 正确率高——base 把「一致性」错写成
 # 「移植性」且输出繁体，small 正确且简体；GPU 上 15x 实时，速度不是瓶颈。
 # 中文需要多语言模型不是 .en）
@@ -478,7 +487,7 @@ def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> Video
         frame_descriptions: list[FrameDescription] = []
         if client is not None:
             try:
-                frames = extract_key_frames(dv.video_path, output_dir)
+                frames = extract_key_frames(dv.video_path, output_dir, interval=_frame_interval(dv.duration_s))
                 if frames:
                     frame_descriptions = describe_frames(frames, client=client)
             except Exception:  # noqa: BLE001 —— 帧描述失败不影响转写
@@ -572,7 +581,7 @@ def extract_video_content(
     if client is not None:
         try:
             video_path = download_video(resolved_url, sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
-            frames = extract_key_frames(video_path, output_dir)
+            frames = extract_key_frames(video_path, output_dir, interval=_frame_interval(duration))
             if frames:
                 frame_descriptions = describe_frames(frames, client=client)
         except Exception:
