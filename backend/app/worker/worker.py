@@ -186,8 +186,15 @@ async def enqueue_import(
         await pool.aclose()
 
 
-async def _update_video_stage(source_id: int, stage: str, owner_id: int) -> None:
-    """更新 source.parse_meta["video_stage"]，供前端轮询显示提取进度。
+async def _update_video_stage(
+    source_id: int,
+    stage: str,
+    owner_id: int,
+    *,
+    progress: int | None = None,
+    est_seconds: int | None = None,
+) -> None:
+    """更新 source.parse_meta 的视频进度字段，供前端轮询显示进度条。
 
     独立 DB session，不影响 pipeline 的 session。
     """
@@ -198,8 +205,23 @@ async def _update_video_stage(source_id: int, stage: str, owner_id: int) -> None
             return
         meta = dict(source.parse_meta or {})
         meta["video_stage"] = stage
+        if progress is not None:
+            meta["video_progress"] = max(0, min(100, int(progress)))
+        if est_seconds is not None:
+            meta["video_est_seconds"] = int(est_seconds)
         await repos.sources.update_parse_meta(source_id, meta)
         await session.commit()
+
+
+def _make_progress_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEventLoop):
+    """线程安全进度回调：extract_video_content 在 to_thread 线程里同步调 cb，
+    通过 run_coroutine_threadsafe 调度回 worker 事件循环写 DB。"""
+    def cb(stage: str, pct: int, est_seconds: int | None = None) -> None:
+        asyncio.run_coroutine_threadsafe(
+            _update_video_stage(source_id, stage, owner_id, progress=pct, est_seconds=est_seconds),
+            loop,
+        )
+    return cb
 
 
 async def _fail_video_job(source_id: int, owner_id: int, exc: Exception) -> None:
@@ -247,14 +269,11 @@ async def extract_and_import_video(
 
     from app.service.imports import run_import_async
     from app.service.llm.resolve import resolve_charter, resolve_llm_config
-    from app.repo.settings import SettingsRepo
 
-    # 解析 LLM 配置 + 抖音 cookies（同 import_file 模式，从 DB 读）
+    # 解析 LLM 配置（同 import_file）
     async with session_factory() as session:
         charter = await resolve_charter(session, owner_id)
         base_url, api_key, model = await resolve_llm_config(session, owner_id)
-        settings_row = await SettingsRepo(session, owner_id).get()
-        douyin_cookies = (settings_row.douyin_cookies if settings_row else None) or ""
     client = (
         LLMClient(
             base_url=base_url,
@@ -267,15 +286,17 @@ async def extract_and_import_video(
     )
 
     # ---- Phase 1: 提取（下载音频 → whisper / 拉字幕）----
-    # 抖音走 video_extractor 内部的 Playwright 免 cookie 路径（2026-11-14），
-    # 不再需要用户配置 cookies；douyin_cookies 仅作将来其他平台的保留字段。
+    # 抖音走 video_extractor 内部的 Playwright 免 cookie 路径（2026-11-14）。
+    # progress_cb 把阶段/百分比回写 parse_meta，前端画进度条（whisper 阶段前端按 est 插值）。
+    loop = asyncio.get_running_loop()
+    progress_cb = _make_progress_cb(source_id, owner_id, loop)
     try:
         if mode == "whisper":
             from app.service.video_extractor import extract_video_content
 
-            await _update_video_stage(source_id, "下载音频中…", owner_id)
+            await _update_video_stage(source_id, "获取视频中…", owner_id, progress=8)
             vc = await asyncio.to_thread(
-                extract_video_content, url, sessdata=sessdata, cookies_str=douyin_cookies, client=client,
+                extract_video_content, url, sessdata=sessdata, client=client, progress_cb=progress_cb,
             )
             markdown_content = vc.markdown
             video_title = vc.title

@@ -26,7 +26,8 @@ class AppSettings(Base):
     llm_model: Mapped[str | None] = mapped_column(Text)
     # 工具链:库外问题的联网搜索(Tavily 免费档,1000 次/月)
     tavily_api_key: Mapped[str | None] = mapped_column(Text)
-    # 抖音 cookie 字符串（设置页粘贴，yt-dlp 下载抖音视频需要）
+    # 抖音 cookie 字符串——已废弃：抖音改走 Playwright 免 cookie 提取（douyin_extractor.py）。
+    # 列保留不删（避免迁移），此字段不再读写。
     douyin_cookies: Mapped[str | None] = mapped_column(Text)
     # 知识库章程(问卷生成的自然语言,DB 优先于内置默认;NULL = 回退内置默认章程)
     charter: Mapped[str | None] = mapped_column(Text)

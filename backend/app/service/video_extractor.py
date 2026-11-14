@@ -401,10 +401,11 @@ def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "") ->
     }
 
 
-def _extract_douyin_content(url: str, *, client=None) -> VideoContent:
+def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> VideoContent:
     """抖音专用路径：Playwright 拦截详情接口拿元信息+视频，免 cookie（2026-11-14）。
 
     视频文件在手 → 帧提取必定可用（比 yt-dlp 路径的「视频下载经常失败」更稳）。
+    progress_cb(stage, pct, est_seconds)：阶段回调节 worker 写 DB（前端进度条用）。
     """
     import shutil
 
@@ -421,7 +422,12 @@ def _extract_douyin_content(url: str, *, client=None) -> VideoContent:
             )
 
         wav_path = extract_audio(dv.video_path, output_dir)
+        if progress_cb:
+            # whisper base ~1x 实时：按视频时长估算转写耗时，前端据此插值画进度条
+            progress_cb("whisper 转写中…", 30, est_seconds=dv.duration_s)
         transcript_segments = transcribe_audio(wav_path)
+        if progress_cb:
+            progress_cb("识别画面中…", 72)
 
         frame_descriptions: list[FrameDescription] = []
         if client is not None:
@@ -461,6 +467,7 @@ def extract_video_content(
     sessdata: str = "",
     cookies_str: str = "",
     client=None,
+    progress_cb=None,
 ) -> VideoContent:
     """主入口：下载音频 → whisper 转写 → （可选）下载视频提取帧 → 拼 markdown。
 
@@ -469,6 +476,7 @@ def extract_video_content(
     需要 yt-dlp + ffmpeg + whisper + LLMClient（视觉模型，可选）。
 
     sessdata 用于 B站（SESSDATA cookie）；cookies_str 用于抖音等需要 cookie 字符串的平台。
+    progress_cb(stage, pct, est_seconds=None)：提取阶段进度回调（worker 写 DB 供前端进度条）。
     """
     import shutil
 
@@ -480,7 +488,7 @@ def extract_video_content(
     from app.service.douyin import detect_douyin
 
     if detect_douyin(url):
-        return _extract_douyin_content(url, client=client)
+        return _extract_douyin_content(url, client=client, progress_cb=progress_cb)
 
     output_dir = Path(tempfile.mkdtemp(prefix="video_extract_"))
 
@@ -506,8 +514,12 @@ def extract_video_content(
     audio_file = download_audio(resolved_url, sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
     wav_path = extract_audio(audio_file, output_dir)
 
-    # ③ whisper 转写
+    # ③ whisper 转写（base ~1x 实时，按视频时长估算供前端画进度条）
+    if progress_cb:
+        progress_cb("whisper 转写中…", 30, est_seconds=duration)
     transcript_segments = transcribe_audio(wav_path)
+    if progress_cb:
+        progress_cb("识别画面中…", 72)
 
     # ④ 尝试下载视频 → 提取帧 → 视觉描述（可选，失败跳过）
     frame_descriptions: list[FrameDescription] = []

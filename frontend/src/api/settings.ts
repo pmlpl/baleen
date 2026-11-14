@@ -11,8 +11,6 @@ export interface AppSettingsView {
   api_key_tail: string
   tavily_set: boolean
   tavily_tail: string
-  douyin_set: boolean
-  douyin_tail: string
 }
 
 export interface SettingsUpdate {
@@ -21,7 +19,6 @@ export interface SettingsUpdate {
   llm_api_key?: string | null
   llm_model?: string | null
   tavily_api_key?: string | null
-  douyin_cookies?: string | null
 }
 
 export function getSettings(): Promise<AppSettingsView> {

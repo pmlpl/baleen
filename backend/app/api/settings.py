@@ -24,8 +24,6 @@ class SettingsOut(BaseModel):
     api_key_tail: str  # 末 4 位,便于确认是哪把 key
     tavily_set: bool
     tavily_tail: str  # 联网搜索(Tavily)key,同样只回末 4 位
-    douyin_set: bool  # 抖音 cookies 是否已设置
-    douyin_tail: str  # 末 4 位
 
 
 class SettingsUpdate(BaseModel):
@@ -35,7 +33,6 @@ class SettingsUpdate(BaseModel):
     llm_api_key: str | None = Field(default=None, max_length=200)
     llm_model: str | None = Field(default=None, max_length=100)
     tavily_api_key: str | None = Field(default=None, max_length=200)
-    douyin_cookies: str | None = Field(default=None, max_length=4000)
 
 
 def _tail(secret: str | None) -> tuple[bool, str]:
@@ -48,8 +45,6 @@ async def read_settings(session: SessionDep, owner_id: CurrentOwnerDep) -> Setti
     row = await SettingsRepo(session, owner_id).get()
     tavily = (row.tavily_api_key if row else None) or ""
     tavily_set, tavily_tail = _tail(tavily)
-    douyin = (row.douyin_cookies if row else None) or ""
-    douyin_set, douyin_tail = _tail(douyin)
     api_set, api_tail = _tail(api_key)
     return SettingsOut(
         llm_base_url=base_url,
@@ -58,8 +53,6 @@ async def read_settings(session: SessionDep, owner_id: CurrentOwnerDep) -> Setti
         api_key_tail=api_tail,
         tavily_set=tavily_set,
         tavily_tail=tavily_tail,
-        douyin_set=douyin_set,
-        douyin_tail=douyin_tail,
     )
 
 
@@ -72,7 +65,6 @@ async def update_settings(
         llm_api_key=payload.llm_api_key,
         llm_model=payload.llm_model,
         tavily_api_key=payload.tavily_api_key,
-        douyin_cookies=payload.douyin_cookies,
     )
     await session.commit()
     return await read_settings(session, owner_id)

@@ -21,9 +21,6 @@ const keySet = ref(false)
 const tavilyKey = ref('')
 const tavilyTail = ref('')
 const tavilySet = ref(false)
-const douyinCookies = ref('')
-const douyinTail = ref('')
-const douyinSet = ref(false)
 const loading = ref(false)
 const saving = ref(false)
 const errorText = ref('')
@@ -40,8 +37,6 @@ async function load(): Promise<void> {
     keySet.value = s.api_key_set
     tavilyTail.value = s.tavily_tail
     tavilySet.value = s.tavily_set
-    douyinTail.value = s.douyin_tail
-    douyinSet.value = s.douyin_set
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {
@@ -60,17 +55,13 @@ async function save(): Promise<void> {
       llm_api_key: apiKey.value.trim() || null,
       llm_model: model.value.trim() || null,
       tavily_api_key: tavilyKey.value.trim() || null,
-      douyin_cookies: douyinCookies.value.trim() || null,
     })
     keyTail.value = s.api_key_tail
     keySet.value = s.api_key_set
     tavilyTail.value = s.tavily_tail
     tavilySet.value = s.tavily_set
-    douyinTail.value = s.douyin_tail
-    douyinSet.value = s.douyin_set
     apiKey.value = ''
     tavilyKey.value = ''
-    douyinCookies.value = ''
     saved.value = true
     // 通知闸门:配好 key 后可以进入下一步(章程)
     markKeyConfigured(s.api_key_set)
@@ -130,21 +121,6 @@ onMounted(() => {
         />
         <span v-if="tavilySet" class="muted key-hint">已设置(末四位 {{ tavilyTail }})</span>
       </label>
-      <label class="field">
-        <span class="field-label">抖音 Cookies(一般无需配置)</span>
-        <textarea
-          v-model="douyinCookies"
-          class="input textarea-cookies"
-          placeholder="一般留空即可——抖音导入会自动用浏览器提取，无需手动配置"
-          rows="3"
-          autocomplete="off"
-        />
-        <span v-if="douyinSet" class="muted key-hint">已设置(末四位 {{ douyinTail }})</span>
-        <span class="muted key-hint">
-          仅当抖音导入报「获取视频信息失败」时才需要手动配置：打开 douyin.com → F12 → Network →
-          刷新 → 点一个 douyin.com 请求 → Request Headers → 复制整个 Cookie 的值粘贴到这里
-        </span>
-      </label>
       <button class="btn btn--primary" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : '保存' }}
       </button>
@@ -184,13 +160,6 @@ onMounted(() => {
 .key-hint {
   margin-left: 8px;
   font-size: 12.5px;
-}
-
-.textarea-cookies {
-  font-family: monospace;
-  font-size: 12.5px;
-  resize: vertical;
-  min-height: 60px;
 }
 
 .save-ok {

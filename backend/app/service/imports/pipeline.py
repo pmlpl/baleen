@@ -309,10 +309,19 @@ async def run_import_async(
                 # client 随路下发:图片文件会走视觉转写(ADR 0006);no_llm 时不烧视觉。
                 # md 里的本地图片经 media_sink 存字节(内容寻址),doc 只留 key(v16)
                 pr = parse_file(path, client=None if no_llm else client, media_sink=store_media)
+                # 视频导入的进度字段在 worker 阶段写进 parse_meta，
+                # G0 落盘时保留它们（否则 video_progress 等会被整体覆写丢失）
+                prev_meta = dict(source.parse_meta or {})
+                video_keep = {
+                    k: prev_meta[k]
+                    for k in ("video_url", "video_mode", "video_progress", "video_est_seconds", "content_sha256")
+                    if k in prev_meta
+                }
                 await repos.sources.update_parse(
                     source_id,
                     parse_status=pr.parse_status.value,
                     parse_meta={
+                        **video_keep,
                         **(pr.meta or {}),
                         "warnings": pr.warnings,
                         "message": pr.message,

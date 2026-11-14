@@ -67,6 +67,7 @@ watch(isDouyin, (douyin) => {
 interface ImportItem {
   stage: string
   status: 'pending' | 'done' | 'failed'
+  progress: number
   noteId: number | null
 }
 
@@ -85,6 +86,33 @@ function importStageText(detail: SourceDetail): string {
     return detail.parse_status === 'ok' ? 'AI 整理笔记中' : '解析中'
   }
   return '收尾中'
+}
+
+// whisper 阶段的插值基准：首次看到 video_est_seconds 时记下本地时间，
+// 两次轮询之间进度条也能按「已转写时长 / 预计时长」平滑推进（转写 ~1x 实时）
+let whisperStart: { at: number; est: number } | null = null
+
+function computeProgress(detail: SourceDetail): number {
+  if (detail.job.status === 'done') return 100
+  if (detail.video_progress !== null) {
+    // whisper 阶段（30 起、带预计耗时）：按本地时钟插值到 70
+    if (
+      detail.video_est_seconds !== null &&
+      detail.video_progress >= 30 &&
+      detail.video_progress < 70
+    ) {
+      if (whisperStart === null) {
+        whisperStart = { at: Date.now(), est: detail.video_est_seconds }
+      }
+      const elapsed = (Date.now() - whisperStart.at) / 1000
+      return Math.min(70, Math.round(30 + (40 * elapsed) / whisperStart.est))
+    }
+    whisperStart = null
+    return detail.video_progress
+  }
+  // 无视频进度字段（字幕模式/管线阶段）：粗映射
+  if (detail.job.status === 'running') return detail.parse_status === 'ok' ? 88 : 80
+  return 5
 }
 
 async function waitImportDone(
@@ -106,10 +134,12 @@ async function importVideo(): Promise<void> {
 
   importing.value = true
   imports.value = []
+  whisperStart = null
 
   const item: ImportItem = {
     stage: mode.value === 'whisper' ? '提交中…' : '拉取字幕中',
     status: 'pending',
+    progress: 2,
     noteId: null,
   }
   imports.value.push(item)
@@ -121,11 +151,15 @@ async function importVideo(): Promise<void> {
     if (upload.deduped) {
       item.stage = '↩️ 之前导入过,直接复用已有记录'
       item.status = 'done'
+      item.progress = 100
       item.noteId = null
     } else {
-      item.stage = importStageText(await getSource(upload.source_id))
+      const first = await getSource(upload.source_id)
+      item.stage = importStageText(first)
+      item.progress = computeProgress(first)
       const detail = await waitImportDone(upload.source_id, (d) => {
         item.stage = importStageText(d)
+        item.progress = computeProgress(d)
       })
 
       if (detail.job.status === 'failed') {
@@ -134,10 +168,12 @@ async function importVideo(): Promise<void> {
       } else if (detail.note_id !== null) {
         item.stage = `✅ 已入库,生成笔记 #${detail.note_id}`
         item.status = 'done'
+        item.progress = 100
         item.noteId = detail.note_id
       } else {
         item.stage = `✅ 处理完成(状态:${detail.parse_status},没有生成笔记)`
         item.status = 'done'
+        item.progress = 100
       }
     }
   } catch (error) {
@@ -233,14 +269,24 @@ async function importVideo(): Promise<void> {
           <p class="card-title">导入进度</p>
           <ul class="progress-list">
             <li v-for="(it, i) in imports" :key="i" class="progress-row">
-              <span class="progress-stage" :class="`progress-stage--${it.status}`">{{ it.stage }}</span>
-              <RouterLink
-                v-if="it.noteId !== null"
-                class="progress-link"
-                :to="`/notes/${it.noteId}`"
-              >
-                查看笔记 →
-              </RouterLink>
+              <div class="progress-track">
+                <div
+                  class="progress-fill"
+                  :class="{ 'progress-fill--failed': it.status === 'failed', 'progress-fill--done': it.status === 'done' }"
+                  :style="{ width: it.progress + '%' }"
+                />
+              </div>
+              <div class="progress-meta">
+                <span class="progress-stage" :class="`progress-stage--${it.status}`">{{ it.stage }}</span>
+                <span v-if="it.status === 'pending'" class="muted progress-pct">{{ it.progress }}%</span>
+                <RouterLink
+                  v-if="it.noteId !== null"
+                  class="progress-link"
+                  :to="`/notes/${it.noteId}`"
+                >
+                  查看笔记 →
+                </RouterLink>
+              </div>
             </li>
           </ul>
         </div>
@@ -295,6 +341,41 @@ async function importVideo(): Promise<void> {
   border-radius: 8px;
   font-size: 14px;
   line-height: 1.8;
+}
+
+.progress-track {
+  height: 6px;
+  margin-bottom: 8px;
+  background: var(--line, #e5e7eb);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  border-radius: 3px;
+  transition: width 0.8s ease;
+}
+
+.progress-fill--done {
+  background: #22c55e;
+}
+
+.progress-fill--failed {
+  background: #e5484d;
+}
+
+.progress-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.progress-pct {
+  font-size: 12.5px;
+  min-width: 36px;
+  text-align: right;
 }
 
 .douyin-preview {

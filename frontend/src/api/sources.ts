@@ -64,6 +64,10 @@ export interface SourceDetail {
   headings_rewritten: boolean
   /** 视频异步提取进度（下载音频中/whisper转写中/❌错误），非视频导入为 null */
   video_stage: string | null
+  /** 提取进度 0-100（前端画进度条），非视频导入为 null */
+  video_progress: number | null
+  /** whisper 阶段预计耗时秒数（前端据此插值推进度条），非转写阶段为 null */
+  video_est_seconds: number | null
   note_id: number | null
   created_at: string
   job: JobInfo
@@ -101,6 +105,10 @@ function asNullableText(value: unknown): string | null {
 
 function asNumber(value: unknown, fallback = 0): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback
+}
+
+function asNullableNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function asTextArray(value: unknown): string[] {
@@ -159,6 +167,8 @@ function toSourceDetail(raw: unknown): SourceDetail {
     g2_skipped: data.g2_skipped === true,
     headings_rewritten: data.headings_rewritten === true,
     video_stage: asNullableText(data.video_stage),
+    video_progress: asNullableNumber(data.video_progress),
+    video_est_seconds: asNullableNumber(data.video_est_seconds),
     note_id: typeof data.note_id === 'number' ? data.note_id : null,
     created_at: asText(data.created_at),
     job: toJobInfo(data.job),

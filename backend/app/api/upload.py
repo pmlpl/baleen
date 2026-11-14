@@ -123,6 +123,8 @@ class SourceStatus(BaseModel):
     headings_rewritten: bool
     # 视频异步提取进度（下载音频中/whisper转写中/❌错误），非视频导入为 None
     video_stage: str | None = None
+    video_progress: int | None = None  # 0-100，前端画进度条
+    video_est_seconds: int | None = None  # whisper 阶段预计耗时（前端据此插值）
     note_id: int | None
     created_at: datetime
     job: JobOut | None
@@ -326,8 +328,13 @@ async def import_from_url(
             mime="text/markdown",
             parse_status="pending",
         )
-        # 设置视频元信息 + 进度（前端轮询读 video_stage）
-        meta = {"video_url": body.url, "video_mode": "whisper", "video_stage": "排队中"}
+        # 设置视频元信息 + 进度（前端轮询读 video_stage/video_progress 画进度条）
+        meta = {
+            "video_url": body.url,
+            "video_mode": "whisper",
+            "video_stage": "排队中",
+            "video_progress": 2,
+        }
         await repos.sources.update_parse_meta(source.id, meta)
         job, job_created = await repos.jobs.create_or_get(
             dedupe_key=DEDUPE_PREFIX + placeholder_sha,
@@ -491,6 +498,8 @@ async def get_source_status(
         g2_skipped=bool(meta.get("g2_skipped")),
         headings_rewritten=bool(meta.get("headings_rewritten")),
         video_stage=meta.get("video_stage"),
+        video_progress=meta.get("video_progress"),
+        video_est_seconds=meta.get("video_est_seconds"),
         note_id=note.id if note else None,
         created_at=source.created_at,
         job=(
