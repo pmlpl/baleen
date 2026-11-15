@@ -5,18 +5,6 @@
 > 名字取自鲸须（baleen）——鲸鱼靠它过滤海水、留下食物。
 > 这个项目做的就是同一件事：过滤掉没有价值的内容，留下知识。
 
-## 现在是什么状态
-
-**状态只在两处维护，本 README 不重复数字：**
-
-- 工程状态（模块表 / 测试基线 / 已知限制）→ `STATUS.md` 顶部「系统状态速览」
-- 时间线（哪天做了什么、为什么）→ `../日志/YYYY-MM-DD.md`
-
-最近一次收口：2026-11-15，导入自动建会话撤回（ADR 0005 阶段3）+ 导航收口，基线 **468 passed**。
-架构决策见 `docs/adr/0001`–`0009`，接口契约见 `docs/api.md`（v26）。
-
-**这是本科毕业设计**，目标是本地多用户可用的完整闭环，不是多用户 SaaS。
-
 ## 核心流程
 
 ```
@@ -65,7 +53,7 @@ accept / partial / reject  ── reject 可申诉，partial 只抽有价值部�
 |---|---|
 | `backend/` | Python / FastAPI（API + arq worker） |
 | `frontend/` | Vue 3 + TypeScript |
-| `docs/` | `api.md`（前后端契约 v18）+ `adr/`（0001–0006 技术决策记录） |
+| `docs/` | `api.md`（前后端接口契约）+ `adr/`（技术决策记录） |
 | `eval/` | 评测脚本 + 标注 + 报告（含 bootstrap CI） |
 
 ## 快速开始
@@ -116,7 +104,6 @@ pnpm dev                          # http://localhost:5173
 cd backend
 # 需 Docker 容器运行（docker compose up -d）
 uv run pytest
-# 基线 468 passed
 ```
 
 ## 文档一致性
