@@ -137,34 +137,6 @@ ol {
   font-weight: 600;
 }
 
-.health {
-  display: inline-flex;
-  margin-left: auto;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  color: var(--ink-3);
-}
-
-.health-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--ink-3);
-}
-
-.health--ok .health-dot {
-  background: var(--ok);
-}
-
-.health--bad {
-  color: var(--warn);
-}
-
-.health--bad .health-dot {
-  background: var(--warn);
-}
-
 .container {
   width: 100%;
   max-width: 1060px;
@@ -322,29 +294,6 @@ ol {
   color: var(--ink-2);
   text-align: center;
   font-size: 14px;
-}
-
-/* 提示条:黄 = 后端没就绪,红 = 真错误 */
-.banner {
-  display: flex;
-  max-width: 1060px;
-  margin: 0 auto;
-  padding: 9px 20px;
-  align-items: center;
-  gap: 10px;
-  font-size: 13.5px;
-}
-
-.banner--warn {
-  border-bottom: 1px solid #f0dcb4;
-  background: var(--warn-soft);
-  color: var(--warn);
-}
-
-.banner-hint {
-  color: #8a6a2d;
-  font-family: 'JetBrains Mono', Consolas, monospace;
-  font-size: 12.5px;
 }
 
 .note {

@@ -1,8 +1,7 @@
-"""导入后主动总结(阶段3,D1=A):导入完成 → LLM 摘要 → 自动建「新导入:xxx」会话。
+"""问答存笔记的 LLM 组装函数(会话 → 结构化笔记 / 拆分计划 / 引用编号)。
 
-失败向上抛,由 worker **静默吞掉**(摘要失败不影响导入成功)——刻意口径,
-与 answer 的「异常向上抛不降级」不同:摘要是锦上添花,不是核心链路。
-LLM client 由调用方注入或按设置页(DB 优先,回退 .env)现读。
+历史上这里还有「导入后自动建摘要会话」(ADR 0005),2026-11-14 已撤回——
+自动会话污染问答侧栏(主人判定为设计漏洞),导入链路不再建任何会话。
 """
 
 from __future__ import annotations
@@ -12,73 +11,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from app.core.db import session_factory
-from app.models.qa import QaSession
-from app.repo.library import LibraryRepo
-from app.repo.qa import QaRepo
-from app.service.llm import LLMClient, LLMError
-from app.service.llm.resolve import resolve_llm_config
-
-SUMMARY_MAX_CHARS = 8000  # 喂给摘要的笔记正文上限(父块拼接后)
-DEFAULT_SUMMARY_TOKENS = 2000
-SESSION_TITLE_PREFIX = "新导入:"
-SESSION_TITLE_CHARS = 40
-
-
-def _summary_messages(title: str, text: str) -> list[dict[str, str]]:
-    system = (
-        "你是个人笔记库的摘要助手。读一篇刚导入的笔记,输出:\n"
-        "① 一段 200-400 字的要点摘要(这篇笔记讲什么、核心结论/方法是什么);\n"
-        "② 以「建议你问:」开头,列 3 个基于这篇笔记内容、适合继续追问的具体问题。\n\n"
-        "规则:只用笔记里的内容;中文;直接输出摘要正文,不要客套开头、不要解释你在做什么。"
-    )
-    user = f"《{title}》\n\n{text}"
-    return [
-        {"role": "system", "content": system},
-        {"role": "user", "content": user},
-    ]
-
-
-async def summarize_import(
-    note_id: int, filename: str, *, owner_id: int = 1, client: LLMClient | None = None
-) -> QaSession | None:
-    """摘要 + 自动建「新导入:xxx」会话。
-
-    - note 不存在 / 正文为空 → 返回 None(不建会话,不抛)
-    - LLM 失败向上抛(worker 静默吞)
-    - 测试可注入 client 与 monkeypatch session_factory / LibraryRepo 方法
-    """
-    async with session_factory() as session:
-        repo = LibraryRepo(session, owner_id)
-        note = await repo.get_active_note(note_id)
-        if note is None:
-            return None
-        parents = await repo.list_parent_chunks(note_id)
-        text = "\n\n".join(p.text for p in parents)[:SUMMARY_MAX_CHARS]
-        base_url, api_key, model = await resolve_llm_config(session, owner_id)
-
-    if not text.strip():
-        return None
-    cli = client or LLMClient(base_url=base_url, api_key=api_key, model=model)
-    messages = _summary_messages(note.title, text)
-    chat = await asyncio.to_thread(lambda: cli.chat(messages, max_tokens=DEFAULT_SUMMARY_TOKENS))
-    summary = chat.content.strip()
-    if not summary:
-        return None  # reasoning 模型偶发空 content → 视为失败,不建会话
-
-    title = f"{SESSION_TITLE_PREFIX}{filename}"[:SESSION_TITLE_CHARS]
-    async with session_factory() as session:
-        qa_repo = QaRepo(session, owner_id)
-        qa_session = await qa_repo.create_session(title)
-        await qa_repo.add_message(
-            qa_session.id,
-            role="assistant",
-            content=summary,
-            model=cli.model,
-            cost_tokens=chat.total_tokens or 0,
-        )
-        await session.commit()
-        return qa_session
+from app.service.llm import LLMError
 
 
 def organize_conversation_messages(title: str, dialogue: str) -> list[dict[str, str]]:

@@ -1,24 +1,12 @@
 <script setup lang="ts">
 /**
- * 应用外壳:顶部导航(三页) + 后端健康状态 + 路由出口。
- * 健康检查走 GET /healthz(docs/api.md §1);status != ok 就给黄条,不是 ok 也不挡页面。
+ * 应用外壳:顶部导航 + 路由出口。
  */
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
-import { getHealth } from './api/health'
-import { describeApiError } from './api/http'
 import { ensureGateChecked, gateState, onboardingDone, resetGate } from './onboardingGate'
 import { useAuthStore } from './stores/auth'
-
-const HEALTH_INTERVAL_MS = 10_000
-
-/** 首帧先当作正常,别一进页面就闪一下黄条 */
-const backendOk = ref(true)
-const backendHint = ref('')
-let timer: ReturnType<typeof setTimeout> | undefined
-/** 卸载后别再排下一次探测,避免遗留定时器 */
-let stopped = false
 
 const auth = useAuthStore()
 const router = useRouter()
@@ -45,37 +33,12 @@ function logout(): void {
   void router.push({ name: 'login' })
 }
 
-async function probe(): Promise<void> {
-  try {
-    const health = await getHealth()
-    backendOk.value = health.status === 'ok'
-    backendHint.value = backendOk.value
-      ? ''
-      : `status=${health.status} · db=${health.db} · redis=${health.redis}`
-  } catch (error) {
-    backendOk.value = false
-    backendHint.value = describeApiError(error)
-  } finally {
-    if (!stopped) {
-      timer = setTimeout(() => {
-        void probe()
-      }, HEALTH_INTERVAL_MS)
-    }
-  }
-}
-
 onMounted(() => {
-  void probe()
   // 首次挂载补一次(路由守卫通常已查过,这里是兜底 + 同步导航显示)
   void ensureGateChecked().then(() => {
     ready.value = onboardingDone()
     gateHasKey.value = gateState().hasKey
   })
-})
-
-onBeforeUnmount(() => {
-  stopped = true
-  if (timer !== undefined) clearTimeout(timer)
 })
 </script>
 <template>
@@ -99,9 +62,6 @@ onBeforeUnmount(() => {
             <RouterLink class="nav-link" :to="{ name: 'settings' }" active-class="nav-link--active">
               设置
             </RouterLink>
-            <RouterLink class="nav-link" :to="{ name: 'profile' }" active-class="nav-link--active">
-              个人中心
-            </RouterLink>
           </template>
           <!-- 还没配 key:只能去设置页 -->
           <RouterLink
@@ -123,20 +83,14 @@ onBeforeUnmount(() => {
           </RouterLink>
         </nav>
         <span class="user-box">
+          <RouterLink class="nav-link" :to="{ name: 'profile' }" active-class="nav-link--active">
+            个人中心
+          </RouterLink>
           <span class="user-name">{{ auth.username }}</span>
           <a class="logout" @click="logout">退出</a>
         </span>
-        <span class="health" :class="backendOk ? 'health--ok' : 'health--bad'">
-          <i class="health-dot" />
-          {{ backendOk ? '后端正常' : '后端未就绪' }}
-        </span>
       </div>
     </header>
-
-    <div v-if="!backendOk" class="banner banner--warn" role="status">
-      <strong>后端未就绪</strong>
-      <span v-if="backendHint !== ''" class="banner-hint">{{ backendHint }}</span>
-    </div>
 
     <main class="container">
       <RouterView v-slot="{ Component }">
