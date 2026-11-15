@@ -58,7 +58,7 @@
 | **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
 | **对话附件（v17）** | `qa.py` `attachments`/`images` + QaView 📎 | ✅ 文本入 `<reference_files>` 不入库；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级；无视觉模型也能用 |
 | **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底 |
-| **数学公式渲染** | `frontend/src/utils/math.ts` + `markdown.ts` | ✅ KaTeX 行内 `$...$`/块级 `$$...$$`,NoteView/QaView 共用;原文级占位保护(公式里 `[1]`/`**` 不被行内替换吃);pandoc 式启发式防美元价签误判;真实笔记 190 `$`→91 公式 0 残留,14 边界用例探针(`scripts/probe_math_render.mjs`)全过 |
+| **数学公式渲染** | `frontend/src/utils/math.ts` + `markdown.ts` | ✅ KaTeX 行内 `$...$`/块级 `$$...$$`,NoteView/QaView 共用;原文级占位保护(公式里 `[1]`/`**` 不被行内替换吃);pandoc 式启发式防美元价签误判;块级收集不越空行/标题/自闭合行(防吞正文成烂公式报红);20 边界用例探针(`scripts/probe_math_render.mjs`,含 QA 真实消息回归)全过 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
 | **视频笔记页 + whisper（v22→v26）** | `app/service/video_extractor.py` + `douyin_extractor.py` + `VideoView.vue` | ✅ whisper 异步（API 立即 201，worker 2h 超时，video_stage/progress 进度）；**faster-whisper small**（GPU float16 实测 15x 实时，构造失败/推理失败双重退 CPU int8；benchmark 见 2026-11.md）；帧间隔按时长自适应（目标 ~8 帧，60s 短视频 1→6 帧）；B 站 yt-dlp 路径；**抖音 Playwright 免 cookie**（系统 Edge 拦截详情接口，实测 177MB 下载，用户零配置）；前端进度条（whisper 阶段按视频时长插值）；461 passed |
 | **个人中心** | `app/api/profile.py` + `frontend/src/views/ProfileView.vue` | ✅ GET /api/profile 聚合（用户信息/使用统计/章程预览前 300 字/配置掩码,六字段同设置页口径）；前端 /profile 页导航入口,只读展示,编辑跳章程/设置页;6 测试;真后端+浏览器双冒烟通过 |

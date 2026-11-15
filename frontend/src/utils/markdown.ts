@@ -33,8 +33,10 @@ function takeBlockMath(lines: string[], i: number): { html: string; nextIndex: n
   if (single !== null && single[1]!.trim() !== '') {
     return { html: mathBlockHtml(single[1]!.trim()), nextIndex: i }
   }
-  // $$x$$ 后面还跟了别的怪行,不当块处理(交给行内扫描器)
+  // $$x$$ 后面还跟了别的(如 LLM 写的 `$$..$$ [W4]`)——不是独占块,交给行内扫描器:
+  // 它会把行内的 $$..$$ 配成 display 公式,尾巴当普通文字
   if (first.length > 4 && first.endsWith('$$')) return null
+  if (first.indexOf('$$', 2) !== -1) return null
 
   const buf: string[] = []
   if (first.length > 2) buf.push(first.slice(2))
@@ -46,7 +48,9 @@ function takeBlockMath(lines: string[], i: number): { html: string; nextIndex: n
       if (inner.trim() !== '') buf.push(inner)
       return { html: mathBlockHtml(buf.join('\n').trim()), nextIndex: j }
     }
-    if (t.startsWith('$$')) return null // 又一个开头 = 上一块没闭合,不吞行
+    // 真块不会跨越空行/标题/又一个开头;跨过去说明上一块没闭合,不吞行
+    // (否则会把后文的标题、正文扫进一个烂公式,KaTeX 报错渲染成一片红)
+    if (t === '' || /^#{1,6}\s/.test(t) || t.startsWith('$$')) return null
     buf.push(t)
     j += 1
   }

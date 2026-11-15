@@ -73,6 +73,35 @@ check('粗体公式混排', (() => {
 })())
 check('转义后原文 <script> 仍转义', !renderMarkdown('$x$ <script>alert(1)</script>').includes('<script>alert'))
 
+// ---- QA 真实场景(会话 2579 msg 5675:曾把标题/正文扫进烂公式,KaTeX 报错渲染成一片红) ----
+check('自闭合拖尾巴 $$..$$ [W4]:行内 display+徽章,不吞行', (() => {
+  const h = renderMarkdown('$$k_{AB} \\cdot k_{OC} = -\\frac{b^2}{a^2}$$ [W4]')
+  return (
+    !h.includes('math-block') &&
+    (h.match(/katex-display/g) || []).length === 1 &&
+    (h.match(/<span class="cite-ref/g) || []).length === 1 &&
+    !h.includes('katex-error')
+  )
+})())
+check('整行 $$x$$ 仍是块级', renderMarkdown('$$|AF| = |a \\pm e x_0|$$').includes('math-block'))
+check('未闭合 $$ 不吞空行/标题/正文', (() => {
+  const h = renderMarkdown('$$oops\nprose line\n\n### H\n\n$$x^2$$')
+  return (
+    h.includes('prose line') &&
+    h.includes('<h3>H</h3>') &&
+    (h.match(/math-block/g) || []).length === 1 &&
+    !h.includes('katex-error')
+  )
+})())
+const qaPath = path.join(tmp, 'qa_5675_content.md')
+if (fs.existsSync(qaPath)) {
+  const qh = renderMarkdown(fs.readFileSync(qaPath, 'utf8'))
+  const plainQa = qh.replace(/<[^>]+>/g, '')
+  check('QA 5675 真实消息:无 katex-error(不再一片红)', !qh.includes('katex-error'))
+  check('QA 5675 真实消息:标题未被吞', qh.includes('<h3>2. 焦半径公式</h3>'))
+  check('QA 5675 真实消息:零裸 $', (plainQa.match(/\$/g) || []).length === 0)
+}
+
 // 视觉验收页面:真实笔记全文渲染
 const katexCss = fs.readFileSync(path.join(ROOT, 'frontend/node_modules/katex/dist/katex.min.css'), 'utf8')
 const fontsDir = path.join(tmp, 'katex_preview', 'fonts')
