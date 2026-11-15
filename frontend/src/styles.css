@@ -717,3 +717,12 @@ a.sec-link {
   border: 0;
   border-top: 1px solid var(--line);
 }
+
+/* 块级数学公式(KaTeX $$...$$):居中展示,超宽横向滚动不撑破版面。
+   行内/块级的具体排版交给 katex.min.css 自带规则,这里只兜超宽。 */
+.md .math-block {
+  margin: 1em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}

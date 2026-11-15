@@ -1,10 +1,14 @@
 /**
- * 极简 markdown 渲染器(手写 —— 表格/嵌套列表也是手写;mermaid 走独立懒加载模块)。
- * 支持:标题/段落/有序无序列表(一级嵌套)/表格/引用/代码块/行内 code 粗体 斜体/水平线/引用标记。
+ * 极简 markdown 渲染器(手写 —— 表格/嵌套列表也是手写;mermaid 走独立懒加载模块,
+ * 数学公式走 math.ts 的 KaTeX)。
+ * 支持:标题/段落/有序无序列表(一级嵌套)/表格/引用/代码块/行内 code 粗体 斜体/水平线/引用标记/行内 $...$ 与块级 $$...$$ 公式。
  *
- * 安全:所有原文先 HTML 转义再拼标记,即便原文含 <script> 也只显示成文字。
+ * 安全:所有原文先 HTML 转义再拼标记,即便原文含 <script> 也只显示成文字;
+ * 公式片段在转义前占位隔离,交给 KaTeX 输出安全 HTML。
  * NoteView(笔记正文)与 QaView(问答答案)共用。
  */
+
+import { renderTex, splitMath, type MathSpan } from './math'
 
 function escapeHtml(raw: string): string {
   return raw
@@ -14,17 +18,64 @@ function escapeHtml(raw: string): string {
     .replace(/"/g, '&quot;')
 }
 
-function renderInline(raw: string): string {
-  const escaped = escapeHtml(raw)
+/** 块级公式 → 居中展示块(渲染失败时 renderTex 内部已退化,不抛错) */
+function mathBlockHtml(tex: string): string {
+  return `<div class="math-block">${renderTex(tex, true)}</div>`
+}
 
-  // 先切出行内代码,受保护不参与后续替换(否则 `arr[1]` 里的 [1] 会被当成引用)
+/**
+ * 从 lines[i] 起收集一个 $$...$$ 块级公式(首行 $$ 开头,直到某行以 $$ 结尾)。
+ * 找不到闭合返回 null —— 不吞行,原行落回普通段落逻辑。
+ */
+function takeBlockMath(lines: string[], i: number): { html: string; nextIndex: number } | null {
+  const first = lines[i]!.trim()
+  const single = /^\$\$(.+)\$\$$/.exec(first)
+  if (single !== null && single[1]!.trim() !== '') {
+    return { html: mathBlockHtml(single[1]!.trim()), nextIndex: i }
+  }
+  // $$x$$ 后面还跟了别的怪行,不当块处理(交给行内扫描器)
+  if (first.length > 4 && first.endsWith('$$')) return null
+
+  const buf: string[] = []
+  if (first.length > 2) buf.push(first.slice(2))
+  let j = i + 1
+  while (j < lines.length) {
+    const t = lines[j]!.trim()
+    if (t.endsWith('$$')) {
+      const inner = t.slice(0, -2)
+      if (inner.trim() !== '') buf.push(inner)
+      return { html: mathBlockHtml(buf.join('\n').trim()), nextIndex: j }
+    }
+    if (t.startsWith('$$')) return null // 又一个开头 = 上一块没闭合,不吞行
+    buf.push(t)
+    j += 1
+  }
+  return null
+}
+
+function renderInline(raw: string): string {
+  // 先切出行内代码,受保护不参与后续替换(否则 `arr[1]` 里的 [1] 会被当成引用)。
+  // 注意在原文级切(而非转义后),体内在建占位时单独转义。
   const codes: string[] = []
-  const withPlaceholders = escaped.replace(/`([^`]+)`/g, (_m, body: string) => {
-    codes.push(`<code>${body}</code>`)
+  let working = raw.replace(/`([^`]+)`/g, (_m, body: string) => {
+    codes.push(`<code>${escapeHtml(body)}</code>`)
     return `\u0000CODE${codes.length - 1}\u0000`
   })
 
-  const withRefs = withPlaceholders
+  // 再切数学片段(原文级 —— KaTeX 要原生反斜杠),占位保护:
+  // 公式里的 [1] ** \| 不会被下面的粗体/引用替换吃掉
+  const math: string[] = []
+  working = splitMath(working)
+    .map((part: string | MathSpan) => {
+      if (typeof part === 'string') return part
+      math.push(renderTex(part.tex, part.display))
+      return `\u0000MATH${math.length - 1}\u0000`
+    })
+    .join('')
+
+  const escaped = escapeHtml(working)
+
+  const withRefs = escaped
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em>$1</em>')
     // 引用标记:[1] [12] 库内出处,[W1] [W2] 联网来源 → 上标小徽章。
@@ -37,8 +88,10 @@ function renderInline(raw: string): string {
           : `<span class="cite-ref">${ref}</span>`,
     )
 
-  // 还原行内代码
-  return withRefs.replace(/\u0000CODE(\d+)\u0000/g, (_m, i: string) => codes[Number(i)] ?? '')
+  // 还原行内代码与公式
+  return withRefs
+    .replace(/\u0000CODE(\d+)\u0000/g, (_m, i: string) => codes[Number(i)] ?? '')
+    .replace(/\u0000MATH(\d+)\u0000/g, (_m, i: string) => math[Number(i)] ?? '')
 }
 
 // ---------------- 表格 ----------------
@@ -143,6 +196,18 @@ export function renderMarkdown(markdown: string): string {
       flushParagraph()
       closeAllLists()
       continue
+    }
+
+    // ---- 块级数学:$$ 独占(收集到闭合行,渲染成居中展示块;没闭合不吞行) ----
+    if (line.trimStart().startsWith('$$')) {
+      const block = takeBlockMath(lines, i)
+      if (block !== null) {
+        flushParagraph()
+        closeAllLists()
+        out.push(block.html)
+        i = block.nextIndex // for 的 i++ 会把它指回闭合行的下一行
+        continue
+      }
     }
 
     // ---- 表格:本行是表格行 且 下一行是分隔行 ----

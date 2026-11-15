@@ -7,6 +7,7 @@ import { resetGate } from './onboardingGate'
 import router from './router'
 import { useAuthStore } from './stores/auth'
 import './styles.css'
+import 'katex/dist/katex.min.css'
 
 const pinia = createPinia()
 const app = createApp(App).use(pinia).use(router)

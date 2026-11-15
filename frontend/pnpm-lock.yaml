@@ -8,6 +8,9 @@ importers:
 
   .:
     dependencies:
+      katex:
+        specifier: ^0.19.1
+        version: 0.19.1
       mermaid:
         specifier: ^12.2.0
         version: 12.2.0
@@ -809,6 +812,10 @@ packages:
 
   katex@0.18.11:
     resolution: {integrity: sha512-yvyz/2VMKqoho/35Hat5w37wIEdWJ5ElVMidTAlWrxr5uW4aBGsEpveTmKh18/zw08v/7lGswCPon4OhqmqrTA==}
+    hasBin: true
+
+  katex@0.19.1:
+    resolution: {integrity: sha512-jG8uKntjSEcm2EpQOh0XturpPuuC9r3Sq5HLHdsFdWZT27E672SF19QEi+of0/YeOy15lDgRhKvr5614uRrEfA==}
     hasBin: true
 
   khroma@2.1.0:
@@ -1725,6 +1732,10 @@ snapshots:
   internmap@2.0.3: {}
 
   katex@0.18.11:
+    dependencies:
+      commander: 15.0.0
+
+  katex@0.19.1:
     dependencies:
       commander: 15.0.0
 
