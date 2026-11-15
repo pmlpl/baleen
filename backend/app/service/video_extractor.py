@@ -366,8 +366,16 @@ def describe_frames(
     frames: list[tuple[float, Path]],
     *,
     client,
+    deadline_s: float = 600,
 ) -> list[FrameDescription]:
-    """用视觉模型描述每帧画面，返回 FrameDescription 列表。"""
+    """用视觉模型描述每帧画面，返回 FrameDescription 列表。
+
+    ⚠️ 带总时限（deadline_s，默认 10 分钟）：LLM 网关挂起时单帧调用最多
+    等满 client 超时（300s），8 帧 × 300s = 40 分钟假死（2026-11-15 实测）。
+    超过总时限就放弃剩余帧——帧描述是锦上添花，不能拖死整条导入。
+    """
+    import time as _time
+
     from app.service.llm.client import LLMError
 
     prompt = (
@@ -380,7 +388,10 @@ def describe_frames(
     )
 
     descriptions: list[FrameDescription] = []
+    started = _time.monotonic()
     for timestamp, frame_path in frames:
+        if _time.monotonic() - started > deadline_s:
+            break  # 总时限到，放弃剩余帧
         try:
             raw = frame_path.read_bytes()
             if len(raw) > 10 * 1024 * 1024:  # 超过 10MB 跳过
@@ -555,13 +566,9 @@ def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> Video
     from app.service.douyin_extractor import fetch_douyin_video
 
     output_dir = Path(tempfile.mkdtemp(prefix="douyin_extract_"))
-    dv = fetch_douyin_video(url, output_dir=output_dir)
-
-    # 时长检查（与主路径同一上限）
-    if dv.duration_s > 3600:
-        raise RuntimeError(
-            f"视频时长 {dv.duration_s // 60} 分钟，超过 whisper 模式 60 分钟上限。"
-        )
+    dv = fetch_douyin_video(
+        url, output_dir=output_dir, max_duration_s=5400, progress_cb=progress_cb,
+    )
 
     return _content_from_media(
         title=dv.title,
@@ -599,9 +606,9 @@ def _extract_generic_content(
     duration = info["duration"]
     resolved_url = info["webpage_url"]
 
-    # 时长检查：60 分钟上限保留（GPU 上 faster-whisper 转写远快于实时，
-    # 瓶颈主要是音频/视频下载），worker 的 timeout=7200（2 小时）够用。
-    MAX_WHISPER_DURATION = 3600  # 60 分钟
+    # 时长检查：faster-whisper small GPU ~15x 实时后，瓶颈在下载——
+    # 上限提到 90 分钟（worker 的 timeout=7200（2 小时）够 90 分钟视频全程）。
+    MAX_WHISPER_DURATION = 5400  # 90 分钟
     if duration > MAX_WHISPER_DURATION:
         minutes = duration // 60
         raise RuntimeError(

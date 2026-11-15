@@ -96,8 +96,17 @@ def _launch_browser(p):
     )
 
 
-def fetch_douyin_video(url: str, *, output_dir: Path | None = None) -> DouyinVideo:
-    """打开视频页 → 拦截详情接口 → 下载视频到临时目录。同步（worker 在线程里调）。"""
+def fetch_douyin_video(
+    url: str,
+    *,
+    output_dir: Path | None = None,
+    max_duration_s: int = 5400,
+    progress_cb=None,
+) -> DouyinVideo:
+    """打开视频页 → 拦截详情接口 → 下载视频到临时目录。同步（worker 在线程里调）。
+
+    max_duration_s：时长上限，**在下载之前检查**（否则 1 小时视频会先白下几百 MB 才报错）。
+    progress_cb：下载阶段回调（"下载视频中"），供前端进度条。"""
     from playwright.sync_api import sync_playwright
 
     out_dir = output_dir or Path(tempfile.mkdtemp(prefix="douyin_dl_"))
@@ -123,11 +132,20 @@ def fetch_douyin_video(url: str, *, output_dir: Path | None = None) -> DouyinVid
                         pass
 
             page.on("response", on_response)
-            page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
-            for _ in range(30):  # 最多等 15s 让页面自己调详情接口
+            # 两次机会：抖音偶发返回无 aweme_detail 的页面变体（风控插页/布局变体），
+            # reload 一次通常就正常了（2026-11-15 实测 SpaceX 课程链接复现）
+            for attempt in range(2):
+                page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
+                for _ in range(30):  # 最多等 15s 让页面自己调详情接口
+                    if "data" in captured:
+                        break
+                    page.wait_for_timeout(500)
                 if "data" in captured:
                     break
-                page.wait_for_timeout(500)
+                try:
+                    page.reload(wait_until="domcontentloaded", timeout=30000)
+                except Exception:  # noqa: BLE001 —— 重载被导航打断也算一次尝试
+                    break
             cookies_note = ctx.cookies()
         finally:
             browser.close()
@@ -135,6 +153,13 @@ def fetch_douyin_video(url: str, *, output_dir: Path | None = None) -> DouyinVid
     if "data" not in captured:
         raise RuntimeError(
             "没能从抖音页面获取视频信息（页面结构可能变了，或视频不可见）。请把链接发给开发者核查。"
+        )
+
+    # 时长检查提前：1 小时的视频先白下几百 MB 才报错，谁也受不了
+    pre_dur = int(((captured["data"].get("aweme_detail") or {}).get("video") or {}).get("duration") or 0) // 1000
+    if pre_dur > max_duration_s:
+        raise RuntimeError(
+            f"视频时长 {pre_dur // 60} 分钟，超过 whisper 模式 {max_duration_s // 60} 分钟上限。"
         )
 
     aweme = captured["data"].get("aweme_detail")
@@ -151,6 +176,9 @@ def fetch_douyin_video(url: str, *, output_dir: Path | None = None) -> DouyinVid
 
     play_url = _pick_play_url(aweme)
     video_path = out_dir / f"douyin_{video_id}.mp4"
+    if progress_cb:
+        # 大视频（1 小时课 ≈ 几百 MB）下载要几分钟，给个阶段提示免得像卡死
+        progress_cb("下载视频中（大视频需要几分钟）…", 15)
     _download(play_url, video_path)
 
     return DouyinVideo(

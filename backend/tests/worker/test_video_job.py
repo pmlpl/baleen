@@ -413,7 +413,7 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
     calls: dict[str, Any] = {}
     frame_kwargs: list[dict] = []
 
-    def fake_fetch(url, *, output_dir=None):
+    def fake_fetch(url, *, output_dir=None, max_duration_s=5400, progress_cb=None):
         calls["url"] = url
         return fake_dv
 
