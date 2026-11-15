@@ -5,7 +5,7 @@
  * GET /api/notes?q=&limit=&offset= —— 搜索框输入防抖 300ms 才发请求;
  * 翻页/搜索都通过 reload() 重拉,失败给人话提示不白屏。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
@@ -76,6 +76,13 @@ async function load(): Promise<void> {
 }
 
 watch([appliedKeyword, page], () => void load(), { immediate: true })
+
+// 窗口获得焦点 → 自动重拉书架：其他标签页（视频笔记导入等）产生的新笔记不用手动刷新
+function refreshOnFocus(): void {
+  if (!importing.value) void load()
+}
+onMounted(() => window.addEventListener('focus', refreshOnFocus))
+onBeforeUnmount(() => window.removeEventListener('focus', refreshOnFocus))
 
 function goPage(next: number): void {
   const clamped = Math.min(Math.max(1, next), pageCount.value)

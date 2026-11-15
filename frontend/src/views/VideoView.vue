@@ -7,7 +7,7 @@
  * - 两种模式：字幕快速（秒级，仅 B 站） / whisper 深度（分钟级，下载音频+whisper转写）
  * - 导入进度面板复用 LibraryView 的模式
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
@@ -88,8 +88,8 @@ function importStageText(detail: SourceDetail): string {
   return '收尾中'
 }
 
-// whisper 阶段的插值基准：首次看到 video_est_seconds 时记下本地时间，
-// 两次轮询之间进度条也能按「已转写时长 / 预计时长」平滑推进（转写 ~1x 实时）
+// whisper 阶段的插值基准：首次看到 video_est_seconds 时按已上报进度反推起点时间，
+// 两次轮询之间、甚至刷新页面之后，进度条都能按「已转写时长 / 预计时长」平滑推进
 let whisperStart: { at: number; est: number } | null = null
 
 function computeProgress(detail: SourceDetail): number {
@@ -102,7 +102,10 @@ function computeProgress(detail: SourceDetail): number {
       detail.video_progress < 70
     ) {
       if (whisperStart === null) {
-        whisperStart = { at: Date.now(), est: detail.video_est_seconds }
+        // 反推起点：进度 55% 恢复时 → 等效已转写 (55-30)/40 × est 秒
+        const elapsedEq =
+          ((detail.video_progress - 30) / 40) * detail.video_est_seconds
+        whisperStart = { at: Date.now() - elapsedEq * 1000, est: detail.video_est_seconds }
       }
       const elapsed = (Date.now() - whisperStart.at) / 1000
       return Math.min(70, Math.round(30 + (40 * elapsed) / whisperStart.est))
@@ -113,6 +116,14 @@ function computeProgress(detail: SourceDetail): number {
   // 无视频进度字段（字幕模式/管线阶段）：粗映射
   if (detail.job.status === 'running') return detail.parse_status === 'ok' ? 88 : 80
   return 5
+}
+
+// 进行中的导入持久化到 localStorage：刷新页面后进度面板自动恢复（不再凭空消失）
+const ACTIVE_KEY = 'baleen-active-video-import'
+
+function rememberActive(sourceId: number | null): void {
+  if (sourceId === null) localStorage.removeItem(ACTIVE_KEY)
+  else localStorage.setItem(ACTIVE_KEY, String(sourceId))
 }
 
 async function waitImportDone(
@@ -126,6 +137,32 @@ async function waitImportDone(
     await sleep(IMPORT_POLL_MS)
   }
   return getSource(sourceId)
+}
+
+/** 跟踪一次导入直到终态（新导入和刷新恢复共用）。 */
+async function trackImport(sourceId: number, item: ImportItem): Promise<void> {
+  const first = await getSource(sourceId)
+  item.stage = importStageText(first)
+  item.progress = computeProgress(first)
+  const detail = await waitImportDone(sourceId, (d) => {
+    item.stage = importStageText(d)
+    item.progress = computeProgress(d)
+  })
+
+  if (detail.job.status === 'failed') {
+    item.stage = `❌ 导入失败:${detail.job.last_error ?? '处理失败'}`
+    item.status = 'failed'
+  } else if (detail.note_id !== null) {
+    item.stage = `✅ 已入库,生成笔记 #${detail.note_id}`
+    item.status = 'done'
+    item.progress = 100
+    item.noteId = detail.note_id
+  } else {
+    item.stage = `✅ 处理完成(状态:${detail.parse_status},没有生成笔记)`
+    item.status = 'done'
+    item.progress = 100
+  }
+  rememberActive(null)
 }
 
 async function importVideo(): Promise<void> {
@@ -154,27 +191,8 @@ async function importVideo(): Promise<void> {
       item.progress = 100
       item.noteId = null
     } else {
-      const first = await getSource(upload.source_id)
-      item.stage = importStageText(first)
-      item.progress = computeProgress(first)
-      const detail = await waitImportDone(upload.source_id, (d) => {
-        item.stage = importStageText(d)
-        item.progress = computeProgress(d)
-      })
-
-      if (detail.job.status === 'failed') {
-        item.stage = `❌ 导入失败:${detail.job.last_error ?? '处理失败'}`
-        item.status = 'failed'
-      } else if (detail.note_id !== null) {
-        item.stage = `✅ 已入库,生成笔记 #${detail.note_id}`
-        item.status = 'done'
-        item.progress = 100
-        item.noteId = detail.note_id
-      } else {
-        item.stage = `✅ 处理完成(状态:${detail.parse_status},没有生成笔记)`
-        item.status = 'done'
-        item.progress = 100
-      }
+      rememberActive(upload.source_id)
+      await trackImport(upload.source_id, item)
     }
   } catch (error) {
     item.stage = `❌ 导入失败:${describeApiError(error)}`
@@ -183,6 +201,36 @@ async function importVideo(): Promise<void> {
     importing.value = false
   }
 }
+
+// 刷新/重开页面 → 恢复进行中的导入（进度面板不再凭空消失）
+onMounted(async () => {
+  const saved = localStorage.getItem(ACTIVE_KEY)
+  if (saved === null) return
+  const sourceId = Number(saved)
+  if (!Number.isFinite(sourceId) || sourceId <= 0) {
+    localStorage.removeItem(ACTIVE_KEY)
+    return
+  }
+  try {
+    const detail = await getSource(sourceId)
+    if (detail.job.status === 'done' || detail.job.status === 'failed') {
+      // 已结束：笔记在笔记库里，无需恢复面板
+      localStorage.removeItem(ACTIVE_KEY)
+      return
+    }
+    whisperStart = null
+    const item: ImportItem = {
+      stage: importStageText(detail),
+      status: 'pending',
+      progress: computeProgress(detail),
+      noteId: null,
+    }
+    imports.value.push(item)
+    await trackImport(sourceId, item)
+  } catch {
+    localStorage.removeItem(ACTIVE_KEY)
+  }
+})
 </script>
 
 <template>
