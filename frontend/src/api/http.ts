@@ -144,6 +144,24 @@ export const http = {
 }
 
 /**
+ * 错误文案净化(SSE 错误帧等上游透传文案的兜底):
+ * 网关/反代(Privoxy、Nginx)挂掉时回整页 HTML,原文显示会在横幅里刷屏。
+ * 只认 <html/<!doctype/<head 这类「整页」特征(< 50MB 这类正文里的尖括号不误伤):
+ * 有就换成 <title> 或占位文案;再把空白压平、超长截断。
+ */
+export function sanitizeErrorText(raw: string, fallback = '上游服务返回了无法解析的错误'): string {
+  const text = raw.trim()
+  if (text === '') return fallback
+  if (/<html[\s>]|<!doctype\s|<head[\s>]/i.test(text)) {
+    const m = text.match(/<title>([^<]{1,200})<\/title>/i)
+    const title = m?.[1]?.trim()
+    return title !== undefined && title !== '' ? `${fallback}(${title})` : fallback
+  }
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > 240 ? `${flat.slice(0, 240)}…` : flat
+}
+
+/**
  * 把任意错误翻成人话。
  * 4 个待实现接口(线 M)此刻可能还 404 —— 这种情况必须给可读提示,不能让页面白屏。
  */

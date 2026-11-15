@@ -41,11 +41,24 @@ const route = useRoute()
 
 const sessions = ref<QaSessionItem[]>([])
 const currentSessionId = ref<number | null>(null)
+/** 本地展示:这条消息发出时带走的引用/附件/图片(仅当轮显示,不落库 → 重开会话不回放) */
+interface SentExtras {
+  notes: { id: number; title: string }[]
+  files: string[]
+  images: { name: string; data_url: string }[]
+}
+
 /** 本地消息 = 后端消息 + 检索词(当轮响应才有,不落库 → 重开历史会话不回放) */
-type ChatMessage = QaMessage & { search_query?: string }
+type ChatMessage = QaMessage & { search_query?: string; sent_extras?: SentExtras }
 const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const sending = ref(false)
+/** 引用/附件 chips 嵌进输入框后,真输入框藏在壳里;点壳的空白处要把它聚焦回来 */
+const qaInputEl = ref<HTMLInputElement | null>(null)
+
+function focusQaInput(): void {
+  qaInputEl.value?.focus()
+}
 const loadingSession = ref(false)
 /** 交互式存笔记:主题计划(非 null 时输入框区域变成选项卡) */
 const notePlan = ref<NotePlanResponse | null>(null)
@@ -621,6 +634,23 @@ async function send(): Promise<void> {
   errorText.value = ''
   streamingStarted.value = false
   startThinkingTimer()
+  // 引用/附件随问题一起出发:捕获进当轮消息(随气泡上屏)、输入框立刻清空,不等 AI 回完。
+  // 流没建立起来时(catch 分支)再原样还回来。
+  const sentExtras: SentExtras = {
+    notes: referencedNotes.value.map((r) => ({ id: r.id, title: r.title })),
+    files: attachments.value.map((a) => a.name),
+    images: imageAttachments.value.map((i) => ({ name: i.name, data_url: i.data_url })),
+  }
+  const refNoteIds = referencedNotes.value.map((r) => r.id)
+  const attachmentsPayload = attachments.value.map((a) => ({ name: a.name, text: a.text }))
+  const imagesPayload = imageAttachments.value.map((i) => ({
+    name: i.name,
+    mime: i.mime,
+    data_url: i.data_url,
+  }))
+  referencedNotes.value = [] // 引用随问题消耗掉
+  attachments.value = [] // 附件随问题消耗掉
+  imageAttachments.value = [] // 图片附件随问题消耗掉
   // 乐观显示:你的消息立刻上屏;回答经 SSE 流式增量打进一条助手气泡(打字机效果)
   const tempId = -Date.now()
   messages.value.push({
@@ -631,6 +661,7 @@ async function send(): Promise<void> {
     model: null,
     cost_tokens: 0,
     cache_hit_rate: null,
+    sent_extras: sentExtras,
   })
   input.value = ''
   scrollBottom()
@@ -638,13 +669,6 @@ async function send(): Promise<void> {
   let usedSearchQuery = ''
   pendingModel.value = null
   try {
-    const refNoteIds = referencedNotes.value.map((r) => r.id)
-    const attachmentsPayload = attachments.value.map((a) => ({ name: a.name, text: a.text }))
-    const imagesPayload = imageAttachments.value.map((i) => ({
-      name: i.name,
-      mime: i.mime,
-      data_url: i.data_url,
-    }))
     await streamChat(
       currentSessionId.value,
       text,
@@ -657,7 +681,9 @@ async function send(): Promise<void> {
             syncSessionUrl(meta.session_id)
           }
           const idx = messages.value.findIndex((m) => m.id === tempId)
-          if (idx !== -1) messages.value.splice(idx, 1, meta.user_message)
+          // 后端的 user_message 没有 chips 信息,把本地捕获的带上,气泡里继续显示
+          if (idx !== -1)
+            messages.value.splice(idx, 1, { ...meta.user_message, sent_extras: sentExtras })
           messages.value.push({
             id: -1,
             role: 'assistant',
@@ -710,17 +736,17 @@ async function send(): Promise<void> {
       attachmentsPayload,
       imagesPayload,
     )
-    referencedNotes.value = [] // 引用随问题消耗掉
-    attachments.value = [] // 附件随问题消耗掉
-    imageAttachments.value = [] // 图片附件随问题消耗掉
   } catch (error) {
-    // 流没建立起来(网络/后端未起):撤下乐观消息与空气泡,还原文输入
+    // 流没建立起来(网络/后端未起):撤下乐观消息与空气泡,还原文输入和 chips
     const idx = messages.value.findIndex((m) => m.id === tempId)
     if (idx !== -1) messages.value.splice(idx, 1)
     if (streamingIdx !== null && messages.value[streamingIdx]?.content === '') {
       messages.value.splice(streamingIdx, 1)
     }
     input.value = text
+    referencedNotes.value = sentExtras.notes.map((n) => ({ ...n }))
+    attachments.value = attachmentsPayload.map((a) => ({ ...a }))
+    imageAttachments.value = imagesPayload.map((im) => ({ ...im }))
     errorText.value = describeApiError(error)
   } finally {
     stopThinkingTimer()
@@ -884,7 +910,40 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
             :class="m.role === 'user' ? 'msg-row--user' : 'msg-row--assistant'"
           >
             <div class="bubble" :class="m.role === 'user' ? 'bubble--user' : 'bubble--assistant'">
-              <p v-if="m.role === 'user'" class="user-text">{{ m.content }}</p>
+              <template v-if="m.role === 'user'">
+                <p class="user-text">{{ m.content }}</p>
+                <!-- 发出时带走的引用/附件/图片:跟消息一起「飞出去」(仅当轮显示,重开会话不回放) -->
+                <div
+                  v-if="m.sent_extras !== undefined && (m.sent_extras.notes.length > 0 || m.sent_extras.files.length > 0 || m.sent_extras.images.length > 0)"
+                  class="bubble-extras"
+                >
+                  <span
+                    v-for="n in m.sent_extras.notes"
+                    :key="`n${n.id}`"
+                    class="bubble-chip"
+                    :title="`引用了《${n.title}》`"
+                  >
+                    《{{ n.title }}》
+                  </span>
+                  <span
+                    v-for="f in m.sent_extras.files"
+                    :key="`f${f}`"
+                    class="bubble-chip"
+                    :title="`附带了文件 ${f}`"
+                  >
+                    {{ f }}
+                  </span>
+                  <span
+                    v-for="im in m.sent_extras.images"
+                    :key="`i${im.name}`"
+                    class="bubble-chip bubble-chip--image"
+                    :title="`附带了图片 ${im.name}`"
+                  >
+                    <img class="bubble-chip-thumb" :src="im.data_url" alt="" />
+                    {{ im.name }}
+                  </span>
+                </div>
+              </template>
               <p v-else-if="m.content === ''" class="muted">…</p>
               <!-- 渲染器内部已先 HTML 转义,输出只含自己拼的标签,不是原文直接插进 DOM -->
               <article v-else class="md answer-md" v-html="rendered[i]" />
@@ -1068,59 +1127,64 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
               {{ input.trim() === '' ? '输入标题关键词筛选' : '没有匹配的笔记' }}
             </p>
           </div>
-          <!-- 已引用的笔记 chips -->
-          <div v-if="referencedNotes.length > 0" class="ref-chips">
-            <span
-              v-for="r in referencedNotes"
-              :key="r.id"
-              class="ref-chip"
-              :title="`取消引用《${r.title}》`"
-            >
-              引用:《{{ r.title }}》
-              <button class="ref-chip-x" type="button" aria-label="取消引用" @click="removeNoteRef(r.id)">
-                ×
-              </button>
-            </span>
+          <!-- 输入壳:chips 和文字同框(用户视角 = 文件圆角框嵌在句子里);
+               壳本身长得像 input,真输入框无边框透明藏在里面 -->
+          <div class="input-shell" @click="focusQaInput">
+            <!-- 已引用的笔记 chips(黛青 = 库内笔记) -->
+            <div v-if="referencedNotes.length > 0" class="ref-chips">
+              <span
+                v-for="r in referencedNotes"
+                :key="r.id"
+                class="ref-chip"
+                :title="`取消引用《${r.title}》`"
+              >
+                《{{ r.title }}》
+                <button class="ref-chip-x" type="button" aria-label="取消引用" @click="removeNoteRef(r.id)">
+                  ×
+                </button>
+              </span>
+            </div>
+            <!-- 已挂的附件 chips(灰 = 临时参考文件,不入库;随提问消耗) -->
+            <div v-if="attachments.length > 0" class="ref-chips">
+              <span
+                v-for="(a, idx) in attachments"
+                :key="a.name"
+                class="ref-chip ref-chip--attach"
+                :title="`取消附件《${a.name}》`"
+              >
+                {{ a.name }}
+                <button class="ref-chip-x" type="button" aria-label="取消附件" @click="removeAttachment(idx)">
+                  ×
+                </button>
+              </span>
+            </div>
+            <!-- 已挂的图片附件 chips(走视觉通道,不入库;随提问消耗) -->
+            <div v-if="imageAttachments.length > 0" class="ref-chips">
+              <span
+                v-for="(im, idx) in imageAttachments"
+                :key="im.name"
+                class="ref-chip ref-chip--attach ref-chip--image"
+                :title="`取消图片《${im.name}》`"
+              >
+                <img class="ref-chip-thumb" :src="im.data_url" alt="" />
+                {{ im.name }}
+                <button class="ref-chip-x" type="button" aria-label="取消图片" @click="removeImageAttachment(idx)">
+                  ×
+                </button>
+              </span>
+            </div>
+            <input
+              ref="qaInputEl"
+              v-model="input"
+              class="qa-input"
+              type="text"
+              :placeholder="notePicker ? '输入标题筛选,点击上方笔记引用(Esc 退出)' : '问点什么…(输入 / 唤起命令)'"
+              aria-label="问题"
+              :disabled="sending"
+              @input="updateSlash(); onPickerInput()"
+              @keydown="onInputKeydown"
+            />
           </div>
-          <!-- 已挂的附件 chips(参考文件给 AI 看,不入库;随提问消耗) -->
-          <div v-if="attachments.length > 0" class="ref-chips">
-            <span
-              v-for="(a, idx) in attachments"
-              :key="a.name"
-              class="ref-chip ref-chip--attach"
-              :title="`取消附件《${a.name}》`"
-            >
-              附件:{{ a.name }}
-              <button class="ref-chip-x" type="button" aria-label="取消附件" @click="removeAttachment(idx)">
-                ×
-              </button>
-            </span>
-          </div>
-          <!-- 已挂的图片附件 chips(走视觉通道,不入库;随提问消耗) -->
-          <div v-if="imageAttachments.length > 0" class="ref-chips">
-            <span
-              v-for="(im, idx) in imageAttachments"
-              :key="im.name"
-              class="ref-chip ref-chip--attach ref-chip--image"
-              :title="`取消图片《${im.name}》`"
-            >
-              <img class="ref-chip-thumb" :src="im.data_url" alt="" />
-              {{ im.name }}
-              <button class="ref-chip-x" type="button" aria-label="取消图片" @click="removeImageAttachment(idx)">
-                ×
-              </button>
-            </span>
-          </div>
-          <input
-            v-model="input"
-            class="input"
-            type="text"
-            :placeholder="notePicker ? '输入标题筛选,点击上方笔记引用(Esc 退出)' : '问点什么…(输入 / 唤起命令)'"
-            aria-label="问题"
-            :disabled="sending"
-            @input="updateSlash(); onPickerInput()"
-            @keydown="onInputKeydown"
-          />
           <button
             class="btn attach-btn"
             type="button"
@@ -1185,11 +1249,17 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   gap: 4px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fff;
+  background: var(--panel);
 }
 
+/* 当前会话:左侧一锭墨标记(inset 不挤布局) */
 .session-item--active {
-  border-color: var(--accent);
+  border-color: var(--line-strong);
+  box-shadow: inset 3px 0 0 var(--ink);
+}
+
+.session-item--active .session-open {
+  font-weight: 600;
 }
 
 .session-open {
@@ -1289,11 +1359,12 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   max-width: 86%;
 }
 
+/* 用户气泡 = 一锭墨:墨底纸白字,和主按钮同语言 */
 .bubble--user {
   padding: 9px 14px;
-  border-radius: 12px 12px 3px 12px;
-  background: var(--accent);
-  color: #fff;
+  border-radius: 14px 14px 4px 14px;
+  background: var(--ink);
+  color: var(--panel);
 }
 
 .user-text {
@@ -1302,11 +1373,44 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   word-break: break-word;
 }
 
+/* 用户气泡里随行 chips:墨底上的半透明纸牌,像消息里嵌的小卡片 */
+.bubble-extras {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.bubble-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 260px;
+  padding: 2px 8px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 253, 248, 0.3);
+  border-radius: 8px;
+  background: rgba(255, 253, 248, 0.14);
+  color: var(--panel);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bubble-chip-thumb {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 4px;
+}
+
 .bubble--assistant {
   padding: 14px 18px;
   border: 1px solid var(--line);
-  border-radius: 12px 12px 12px 3px;
-  background: #fff;
+  border-radius: 14px 14px 14px 4px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
 }
 
 .bubble--pending {
@@ -1348,13 +1452,13 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   gap: 6px;
   padding: 6px 8px;
   border-radius: 6px;
-  background: #f7f9fc;
+  background: var(--bg-soft);
   cursor: pointer;
   font-size: 13px;
 }
 
 .cite-item:hover {
-  background: #eef4fa;
+  background: var(--line);
 }
 
 .cite-n {
@@ -1396,6 +1500,52 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 .chat-input .btn {
   flex-shrink: 0;
   white-space: nowrap;
+}
+
+/* 输入壳:长得像 .input 的假壳,引用/附件 chips 与文字同框。
+   chips 用 display:contents 直接成为壳的 flex 项,和输入文字一起换行 */
+.input-shell {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  cursor: text;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.input-shell:focus-within {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(61, 90, 115, 0.12);
+}
+
+/* 壳里的真输入框:无边框透明,flex 占满剩余宽度 */
+.qa-input {
+  flex: 1 1 140px;
+  min-width: 140px;
+  padding: 6px 4px;
+  border: none;
+  background: transparent;
+  color: var(--ink);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+}
+
+.qa-input::placeholder {
+  color: var(--ink-3);
+}
+
+.qa-input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 /* 📎 附件按钮:低调图标键,与发送键区分 */
@@ -1610,34 +1760,31 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   font-size: 12.5px;
 }
 
-/* ---- 引用笔记 chips ---- */
+/* ---- 引用笔记 / 附件 chips(嵌在输入壳里) ---- */
 .ref-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  width: 100%;
+  display: contents;
 }
 
 .ref-chip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  max-width: 260px;
-  padding: 3px 8px;
-  border: 1px solid var(--accent);
-  border-radius: 7px;
+  max-width: 240px;
+  padding: 2px 8px;
+  overflow: hidden;
+  border: 1px solid rgba(61, 90, 115, 0.38);
+  border-radius: 8px;
   background: var(--accent-soft);
   color: var(--accent-ink);
   font-size: 12.5px;
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* 附件 chip:用中性色调与「引用笔记」区分(它是临时参考,不是库内笔记) */
 .ref-chip--attach {
-  border-color: var(--line);
-  background: var(--panel);
+  border-color: var(--line-strong);
+  background: var(--bg-soft);
   color: var(--ink-2);
 }
 

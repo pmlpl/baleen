@@ -4,7 +4,7 @@
  * 字段名逐字照后端 app/api/qa.py,不许改名。
  */
 import { getToken } from '../auth/token'
-import { BASE_URL, http } from './http'
+import { BASE_URL, http, sanitizeErrorText } from './http'
 
 export interface QaCitation {
   /** 出处编号,对应答案里的 [n](联网来源为 [W n]) */
@@ -214,7 +214,7 @@ export async function streamChat(
     } catch {
       /* 非 JSON 响应体 → 兜底文案 */
     }
-    throw new Error(detail)
+    throw new Error(sanitizeErrorText(detail))
   }
   const reader = resp.body.getReader()
   const decoder = new TextDecoder()
@@ -233,7 +233,8 @@ export async function streamChat(
     else if (event === 'delta') handlers.onDelta?.(String(parsed.text))
     else if (event === 'done')
       handlers.onDone?.(parsed as unknown as { assistant_message: QaMessage; took_ms: number })
-    else if (event === 'error') handlers.onError?.(String(parsed.detail ?? '流式回答失败'))
+    else if (event === 'error')
+      handlers.onError?.(sanitizeErrorText(String(parsed.detail ?? ''), '流式回答失败'))
   }
 
   while (true) {

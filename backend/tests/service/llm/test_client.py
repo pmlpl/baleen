@@ -20,6 +20,7 @@ from app.service.llm import (
     LLMResponseError,
     LLMTimeoutError,
 )
+from app.service.llm.client import _short
 
 
 class FakeTransport:
@@ -277,3 +278,25 @@ class TestConstruction:
         client = LLMClient.from_settings(settings)
         assert client.base_url == "https://api.other.test/v1/"
         assert client.model == "other-model"
+
+
+class TestShortErrorBody:
+    """_short:网关/反代的 HTML 错误页只留 <title>,别把整页标记塞进 detail。"""
+
+    def test_html_page_extracts_title(self):
+        raw = (
+            b"<html> <head> <title>500 Internal Privoxy Error</title>"
+            b" <link rel='shortcut icon' href='http://config.privoxy.org/error-favicon.ico'>"
+            b" </head> <body> <h1>500 Internal Privoxy Error</h1> </body> </html>"
+        )
+        assert _short(raw) == "500 Internal Privoxy Error"
+
+    def test_html_page_without_title_falls_back(self):
+        assert _short(b"<html><body>boom</body></html>") == "(HTML 错误页,无标题)"
+
+    def test_plain_text_still_truncated(self):
+        assert _short(b"plain upstream error", limit=5) == "plain"
+
+    def test_angle_brackets_in_plain_body_not_treated_as_html(self):
+        # 正文里带尖括号(如 <reference_files> 块说明)不算 HTML 页,原样保留
+        assert _short("用 <reference_files> 块传附件".encode("utf-8")) == "用 <reference_files> 块传附件"

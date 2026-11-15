@@ -119,6 +119,7 @@ async function submit(): Promise<void> {
 
 <style scoped>
 .login-page {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -127,16 +128,49 @@ async function submit(): Promise<void> {
   gap: 14px;
 }
 
+/* 页脚一抹淡墨山影:blur + 极低不透明度,当远景雾山,不抢卡片。
+   fixed 挂视口底部(section 底边会硬裁 SVG);顶部蒙版渐隐防生硬横线 */
+.login-page::after {
+  content: '';
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 42vh;
+  pointer-events: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1200 420' preserveAspectRatio='xMidYMax slice'%3E%3Cfilter id='b'%3E%3CfeGaussianBlur stdDeviation='7'/%3E%3C/filter%3E%3Cg filter='url(%23b)'%3E%3Cpath d='M0 420 L0 302 Q150 176 320 258 T680 240 T1050 282 L1200 238 L1200 420 Z' fill='%23211f1c' fill-opacity='0.045'/%3E%3Cpath d='M0 420 L0 362 Q220 244 460 330 T900 302 L1200 342 L1200 420 Z' fill='%23211f1c' fill-opacity='0.06'/%3E%3C/g%3E%3C/svg%3E")
+    bottom / cover no-repeat;
+  -webkit-mask-image: linear-gradient(180deg, transparent 0%, #000 55%);
+  mask-image: linear-gradient(180deg, transparent 0%, #000 55%);
+}
+
 .login-card {
+  position: relative;
+  z-index: 1;
   width: 100%;
   max-width: 400px;
-  padding: 28px 30px;
+  padding: 30px 32px;
+  border-radius: 16px;
 }
 
 .login-title {
   margin: 0 0 6px;
-  font-size: 24px;
-  letter-spacing: 1px;
+  font-family: var(--font-serif);
+  font-size: 30px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+/* 字标后面的朱砂圆点,和顶栏 brand 同款 */
+.login-title::after {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: 9px;
+  border-radius: 50%;
+  background: var(--seal);
+  vertical-align: 5px;
 }
 
 .login-sub {
@@ -170,7 +204,7 @@ async function submit(): Promise<void> {
   background: var(--panel);
   color: var(--ink);
   font-weight: 500;
-  box-shadow: 0 1px 3px rgba(17, 34, 51, 0.08);
+  box-shadow: 0 1px 3px rgba(45, 40, 32, 0.1);
 }
 
 .form {

@@ -145,6 +145,7 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
   gap: 16px;
 }
 
+/* 印章式头像:墨底纸白字,外面一圈细朱砂环 */
 .avatar {
   display: flex;
   align-items: center;
@@ -152,10 +153,11 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
   width: 52px;
   height: 52px;
   border-radius: 50%;
-  background: var(--accent);
-  color: #fff;
+  background: var(--ink);
+  color: var(--panel);
   font-size: 24px;
   font-weight: 600;
+  box-shadow: 0 0 0 2px var(--panel), 0 0 0 3.5px var(--seal);
   flex-shrink: 0;
 }
 
@@ -177,19 +179,20 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
 
 .stat {
   padding: 14px 8px;
-  border: 1px solid var(--line, #e2e2e2);
+  border: 1px solid var(--line);
   border-radius: 10px;
   text-align: center;
 }
 
 .stat-num {
-  font-size: 24px;
+  font-family: var(--font-serif);
+  font-size: 26px;
   font-weight: 700;
 }
 
 .stat-label {
   margin-top: 4px;
-  color: var(--ink-3, #888);
+  color: var(--ink-3);
   font-size: 13px;
 }
 
@@ -197,7 +200,7 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
   margin: 0;
   padding: 12px 14px;
   border-radius: 8px;
-  background: rgba(127, 127, 127, 0.08);
+  background: var(--bg-soft);
   font-size: 13.5px;
   line-height: 1.7;
   white-space: pre-wrap;
@@ -219,7 +222,7 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
   display: flex;
   gap: 12px;
   padding: 8px 0;
-  border-bottom: 1px solid rgba(127, 127, 127, 0.15);
+  border-bottom: 1px solid var(--line);
   font-size: 14px;
 }
 

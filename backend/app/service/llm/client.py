@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import json
+import re
 import time
 import urllib.error
 import urllib.request
@@ -426,5 +427,12 @@ def _cache_fields(usage: dict[str, Any]) -> tuple[int | None, int | None]:
 
 
 def _short(raw: bytes, limit: int = 200) -> str:
+    """错误响应体压成一行人话。网关/反代(Privoxy、Nginx)挂掉时回的是整页 HTML,
+    原文截断塞进 detail 会在前端错误横幅里刷屏 —— HTML 页只留 <title>。"""
     text = raw.decode("utf-8", errors="replace")
+    if re.search(r"<html[\s>]|<!doctype\s|<head[\s>]", text, re.IGNORECASE):
+        m = re.search(r"<title>([^<]{1,200})</title>", text, re.IGNORECASE)
+        if m is not None:
+            return m.group(1).strip()
+        return "(HTML 错误页,无标题)"
     return text[:limit]

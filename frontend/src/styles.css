@@ -2,28 +2,45 @@
  * baleen 全局样式(手写 CSS,不引 UI 库 —— AGENTS.md §4 前端栈里没有 UI 库)
  * 只放:重置、设计变量、通用排版、跨页面复用的原子类(卡片/徽章/按钮/空态/横幅)。
  * 单个页面独有的样式写在各自 SFC 的 <style scoped> 里。
+ *
+ * 设计语言「纸墨」:简约苹果骨架(大标题/毛玻璃/柔阴影)+ 宣纸暖底 + 浓墨字 +
+ * 黛青链接 + 朱砂点睛;标题用思源宋体(index.html CDN,断网回退系统宋体),
+ * 正文保持黑体屏读。变量名与类名是全站契约,换肤只改值、不改名。
  */
 
 :root {
-  --bg: #f5f8fb;
-  --panel: #ffffff;
-  --ink: #1b2733;
-  --ink-2: #56677a;
-  --ink-3: #8797a8;
-  --line: #e3e9f0;
-  --accent: #1a73a7;
-  --accent-ink: #12547a;
-  --accent-soft: #e8f2fa;
-  --ok: #17794f;
-  --ok-soft: #e3f6ec;
-  --warn: #9a5b00;
-  --warn-soft: #fdf1dc;
-  --err: #b42318;
-  --err-soft: #fdeceb;
-  --neutral: #5b6b7c;
-  --neutral-soft: #eef2f6;
-  --radius: 10px;
-  --shadow: 0 1px 2px rgba(17, 34, 51, 0.06), 0 10px 26px rgba(17, 34, 51, 0.05);
+  /* 纸 */
+  --bg: #f4f2ec; /* 宣纸底 */
+  --bg-soft: #ece9e0; /* 深一度的纸(hover / 分区) */
+  --panel: #fffdf8; /* 卡片纸面 */
+  /* 墨 */
+  --ink: #211f1c; /* 浓墨(正文/主按钮) */
+  --ink-2: #5f594e; /* 淡墨(次级文字) */
+  --ink-3: #9c9484; /* 灰墨(弱文字/占位) */
+  --line: #e6e1d3; /* 纸纹 hairline */
+  --line-strong: #d8d2c2;
+  /* 黛青:链接/焦点/激活 */
+  --accent: #3d5a73;
+  --accent-ink: #2e4559;
+  --accent-soft: #e8eef2;
+  /* 朱砂:印章/品牌点/联网引用,只做小面积点睛 */
+  --seal: #b03a2e;
+  --seal-soft: #f7ebe8;
+  /* 语义色(压灰调,不抢纸墨) */
+  --ok: #47714f;
+  --ok-soft: #e6efe3;
+  --warn: #96691e;
+  --warn-soft: #f6ecda;
+  --err: #a33b2f;
+  --err-soft: #f7e9e6;
+  --neutral: #6f695e;
+  --neutral-soft: #efece4;
+  /* 形 */
+  --radius: 12px;
+  --shadow: 0 1px 2px rgba(45, 40, 32, 0.04), 0 12px 32px rgba(45, 40, 32, 0.07);
+  --shadow-lift: 0 2px 6px rgba(45, 40, 32, 0.06), 0 18px 44px rgba(45, 40, 32, 0.13);
+  /* 字 */
+  --font-serif: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
 }
 
 * {
@@ -40,11 +57,34 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--ink);
-  font-family: 'Segoe UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB', system-ui,
+  font-family:
+    -apple-system, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui,
     sans-serif;
   font-size: 15px;
   line-height: 1.65;
   -webkit-font-smoothing: antialiased;
+}
+
+/* 宣纸纹理:极淡噪点铺满全屏,给纸的颗粒感(比贴图省一个请求,断网也成立) */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='260' height='260'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  opacity: 0.045;
+}
+
+/* 文本选中:淡黛青,别让系统蓝破坏纸墨 */
+::selection {
+  background: rgba(61, 90, 115, 0.16);
+}
+
+/* 细滚动条(Chromium 121+/Firefox),暖灰墨色 */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #c9c2b0 transparent;
 }
 
 a {
@@ -88,29 +128,44 @@ ol {
   top: 0;
   z-index: 10;
   border-bottom: 1px solid var(--line);
-  background: rgba(255, 255, 255, 0.92);
-  backdrop-filter: blur(8px);
+  background: rgba(255, 253, 248, 0.82);
+  backdrop-filter: blur(16px) saturate(1.3);
+  -webkit-backdrop-filter: blur(16px) saturate(1.3);
 }
 
 .topbar-inner {
   display: flex;
   max-width: 1060px;
   margin: 0 auto;
-  padding: 10px 20px;
+  padding: 12px 20px;
   align-items: center;
   gap: 22px;
 }
 
+/* 字标:衬线 baleen + 朱砂圆点(印章落款的感觉) */
 .brand {
   color: var(--ink);
-  font-size: 18px;
+  font-family: var(--font-serif);
+  font-size: 19px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.06em;
+}
+
+.brand::after {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--seal);
+  vertical-align: 3px;
 }
 
 .brand:hover {
   text-decoration: none;
-  color: var(--accent);
+  color: var(--ink);
+  opacity: 0.75;
 }
 
 .nav {
@@ -119,39 +174,48 @@ ol {
 }
 
 .nav-link {
-  padding: 6px 12px;
+  padding: 6px 13px;
   border-radius: 999px;
   color: var(--ink-2);
   font-size: 14px;
+  transition: background 0.15s ease, color 0.15s ease;
 }
 
 .nav-link:hover {
-  background: var(--neutral-soft);
+  background: var(--bg-soft);
   color: var(--ink);
   text-decoration: none;
 }
 
+/* 激活项 = 一锭墨:墨底纸字,和主按钮同语言 */
 .nav-link--active {
-  background: var(--accent-soft);
-  color: var(--accent-ink);
+  background: var(--ink);
+  color: var(--panel);
   font-weight: 600;
+}
+
+.nav-link--active:hover {
+  background: var(--ink);
+  color: var(--panel);
 }
 
 .container {
   width: 100%;
   max-width: 1060px;
   margin: 0 auto;
-  padding: 26px 20px 64px;
+  padding: 30px 20px 64px;
   flex: 1;
 }
 
 .page-head {
-  margin-bottom: 20px;
+  margin-bottom: 22px;
 }
 
 .page-title {
-  font-size: 24px;
-  letter-spacing: 0.01em;
+  font-family: var(--font-serif);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .page-desc {
@@ -216,38 +280,51 @@ ol {
   color: var(--neutral);
 }
 
+/* 普通按钮:纸面 hairline,hover 纸色加深 */
 .btn {
   padding: 7px 15px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
   background: var(--panel);
   color: var(--ink);
   font-family: inherit;
   font-size: 14px;
   cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
 }
 
 .btn:hover:not(:disabled) {
-  border-color: #cbd6e2;
-  background: #f8fafc;
+  border-color: var(--ink-3);
+  background: var(--bg-soft);
 }
 
 .btn:disabled {
-  opacity: 0.6;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 
+/* 主按钮 = 一锭墨:墨底纸白字,hover 微亮 + 轻浮起(苹果黑按钮) */
 .btn--primary {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--panel);
   font-weight: 600;
 }
 
 .btn--primary:hover:not(:disabled) {
-  border-color: var(--accent-ink);
-  background: var(--accent-ink);
+  border-color: #3a3733;
+  background: #3a3733;
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-lift);
+}
+
+.btn--primary:active:not(:disabled) {
+  transform: translateY(0);
+  box-shadow: none;
 }
 
 .btn--ghost {
@@ -257,40 +334,47 @@ ol {
 
 /* 危险动作(删除笔记等):描边红,悬停填充 */
 .btn--danger {
-  border-color: #e3b4b8;
-  color: #b8474d;
+  border-color: #dcb4ac;
+  color: #a33b2f;
 }
 
 .btn--danger:hover:not(:disabled) {
-  border-color: #b8474d;
-  background: #fbeeef;
-  color: #9c3038;
+  border-color: #a33b2f;
+  background: var(--err-soft);
+  color: #8c2e24;
 }
 
 .input {
   width: 100%;
   padding: 8px 12px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
   background: var(--panel);
   color: var(--ink);
   font-family: inherit;
   font-size: 14px;
   outline: none;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease,
+    background 0.15s ease;
+}
+
+.input::placeholder {
+  color: var(--ink-3);
 }
 
 .input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px var(--accent-soft);
+  box-shadow: 0 0 0 3px rgba(61, 90, 115, 0.12);
 }
 
 /* 空态:正常结果,不许画成错误 */
 .empty {
   padding: 34px 20px;
-  border: 1px dashed #d7e0ea;
+  border: 1px dashed var(--line-strong);
   border-radius: var(--radius);
-  background: #fbfcfe;
+  background: rgba(255, 253, 248, 0.6);
   color: var(--ink-2);
   text-align: center;
   font-size: 14px;
@@ -299,7 +383,7 @@ ol {
 .note {
   margin-top: 8px;
   padding: 7px 11px;
-  border-radius: 8px;
+  border-radius: 10px;
   font-size: 13px;
   list-style: none;
 }
@@ -334,7 +418,7 @@ ol {
 .md {
   color: var(--ink);
   font-size: 15px;
-  line-height: 1.8;
+  line-height: 1.85;
 }
 
 /* markdown 表格(GFM pipe table) */
@@ -359,7 +443,7 @@ ol {
 }
 
 .md tbody tr:nth-child(even) {
-  background: #f9fbfd;
+  background: #f8f5ee;
 }
 
 /* 嵌套列表缩进 */
@@ -399,7 +483,7 @@ ol {
   display: flex;
   flex-direction: column;
   padding: 20px;
-  background: rgba(15, 23, 32, 0.78);
+  background: rgba(28, 26, 22, 0.78);
 }
 
 .mermaid-lightbox-toolbar {
@@ -507,11 +591,11 @@ pre.svg-error {
   vertical-align: baseline;
 }
 
-/* 联网来源 [W1]:暖色底,和库内出处一眼区分 */
+/* 联网来源 [W1]:朱砂底(印泥色),和库内出处一眼区分 */
 .md .cite-ref--web,
 .sec .cite-ref--web {
-  background: var(--warn-soft);
-  color: var(--warn);
+  background: var(--seal-soft);
+  color: var(--seal);
 }
 
 /* 有真实地址的引用徽章 → 可点链接(地址来自整理笔记时写的文末出处清单)。
@@ -522,7 +606,7 @@ a.cite-ref--link {
 }
 
 a.cite-ref--link:hover {
-  filter: brightness(0.92);
+  filter: brightness(0.94);
   text-decoration: underline;
 }
 
@@ -541,7 +625,7 @@ a.sec-link {
   padding: 12px 16px 12px 30px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #f9fbfd;
+  background: #f8f5ee;
   font-size: 13.5px;
   line-height: 1.9;
 }
@@ -558,6 +642,13 @@ a.sec-link {
 .md h6 {
   margin: 1.3em 0 0.5em;
   line-height: 1.35;
+}
+
+/* 一二级标题衬线:阅读页的书卷气主要靠这里 */
+.md h1,
+.md h2 {
+  font-family: var(--font-serif);
+  letter-spacing: 0.02em;
 }
 
 .md h1 {
@@ -592,10 +683,11 @@ a.sec-link {
   margin: 0.25em 0;
 }
 
+/* 引文:墨色竖线,像旧书批注 */
 .md blockquote {
   margin: 0.8em 0;
   padding: 2px 0 2px 14px;
-  border-left: 3px solid var(--accent-soft);
+  border-left: 3px solid rgba(33, 31, 28, 0.28);
   color: var(--ink-2);
 }
 
@@ -612,7 +704,7 @@ a.sec-link {
   padding: 12px 14px;
   overflow-x: auto;
   border-radius: 8px;
-  background: #f3f6fa;
+  background: #efece3;
 }
 
 .md pre code {

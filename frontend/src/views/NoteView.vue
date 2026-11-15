@@ -563,10 +563,10 @@ async function removeNote(): Promise<void> {
   margin: 0 0 8px;
   padding: 0 6px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-family: var(--font-serif);
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
+  letter-spacing: 0.5em;
 }
 
 .toc-list {
@@ -636,8 +636,10 @@ async function removeNote(): Promise<void> {
 .sec-heading {
   margin: 0 0 14px;
   color: var(--ink);
+  font-family: var(--font-serif);
   font-size: 18px;
-  font-weight: 700;
+  font-weight: 600;
+  letter-spacing: 0.02em;
   line-height: 1.4;
 }
 
@@ -657,9 +659,8 @@ async function removeNote(): Promise<void> {
 
 .sec {
   color: var(--ink);
-  font-family: 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  font-size: 14.5px;
-  line-height: 1.85;
+  font-size: 15px;
+  line-height: 1.9;
   word-break: break-word;
 }
 
@@ -677,8 +678,8 @@ async function removeNote(): Promise<void> {
   overflow-x: auto;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #f7f9fc;
-  color: #22303f;
+  background: var(--neutral-soft);
+  color: var(--ink);
   font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
   font-size: 13px;
   line-height: 1.7;
@@ -711,8 +712,11 @@ async function removeNote(): Promise<void> {
 
 .sec-end {
   margin-top: 8px;
-  text-align: center;
+  color: var(--ink-3);
+  font-family: var(--font-serif);
   font-size: 12.5px;
+  letter-spacing: 0.25em;
+  text-align: center;
 }
 
 /* 窄屏:目录折到上方 */

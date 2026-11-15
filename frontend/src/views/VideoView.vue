@@ -346,24 +346,24 @@ async function importVideo(): Promise<void> {
 .progress-track {
   height: 6px;
   margin-bottom: 8px;
-  background: var(--line, #e5e7eb);
+  background: var(--line);
   border-radius: 3px;
   overflow: hidden;
 }
 
 .progress-fill {
   height: 100%;
-  background: linear-gradient(90deg, #3b82f6, #2563eb);
+  background: linear-gradient(90deg, var(--accent), var(--accent-ink));
   border-radius: 3px;
   transition: width 0.8s ease;
 }
 
 .progress-fill--done {
-  background: #22c55e;
+  background: var(--ok);
 }
 
 .progress-fill--failed {
-  background: #e5484d;
+  background: var(--err);
 }
 
 .progress-meta {
@@ -392,17 +392,17 @@ async function importVideo(): Promise<void> {
 
 .douyin-link {
   display: inline-block;
-  color: var(--accent, #6c5ce7);
+  color: var(--accent);
   text-decoration: none;
   font-weight: 600;
   padding: 8px 20px;
-  border: 1px solid var(--accent, #6c5ce7);
+  border: 1px solid var(--accent);
   border-radius: 6px;
   margin-bottom: 8px;
 }
 
 .douyin-link:hover {
-  background: var(--accent, #6c5ce7);
+  background: var(--accent);
   color: #fff;
 }
 
@@ -488,11 +488,11 @@ async function importVideo(): Promise<void> {
 }
 
 .progress-stage--done {
-  color: var(--ok, #2f855a);
+  color: var(--ok);
 }
 
 .progress-stage--failed {
-  color: var(--danger, #b8474d);
+  color: var(--err);
 }
 
 .progress-link {

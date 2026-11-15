@@ -535,8 +535,9 @@ onMounted(async () => {
 .step-indicator {
   margin: 0 0 18px;
   color: var(--ink-3);
+  font-family: var(--font-serif);
   font-size: 13px;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.12em;
 }
 
 .field {

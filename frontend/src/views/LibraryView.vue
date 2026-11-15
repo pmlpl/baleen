@@ -124,8 +124,18 @@ function qualityTone(quality: string | null): string {
   return 'neutral'
 }
 
-/** 书脊配色:按 note.id 稳定取色,同一本书每次进来颜色一致 */
-const SPINES = ['#1a73a7', '#2f855a', '#9a5b00', '#7c5cb0', '#b8474d', '#38618c', '#4c7a34']
+/** 书脊配色:按 note.id 稳定取色,同一本书每次进来颜色一致。
+ *  国画颜料八色(压灰低饱和,水墨书卷气):墨/藏青/黛绿/赭石/朱砂/紫棠/苔绿/灰梅 */
+const SPINES = [
+  '#2f2c28', // 墨
+  '#33506b', // 藏青
+  '#3e5c50', // 黛绿
+  '#8c5a3c', // 赭石
+  '#a8432f', // 朱砂
+  '#5d4a66', // 紫棠
+  '#6b7a4d', // 苔绿
+  '#75655e', // 灰梅
+]
 
 function spineColor(id: number): string {
   return SPINES[id % SPINES.length] as string
@@ -357,7 +367,7 @@ function onShelfDrop(event: DragEvent): void {
         <RouterLink class="book-link" :to="`/notes/${note.id}`">
           <span class="book-cover" :style="{ '--spine': spineColor(note.id) }">
             <span class="book-spine" />
-            <span class="book-title">{{ note.title }}</span>
+            <span class="book-title" :title="note.title">{{ note.title }}</span>
             <span class="book-foot">
               <span class="book-chunks">{{ note.chunk_count }} 段</span>
               <span v-if="note.tags.length > 0" class="book-tags">
@@ -495,7 +505,7 @@ function onShelfDrop(event: DragEvent): void {
 }
 
 .import-stage--done {
-  color: var(--ok, #2f855a);
+  color: var(--ok);
 }
 
 .import-stage--deduped {
@@ -503,12 +513,12 @@ function onShelfDrop(event: DragEvent): void {
 }
 
 .import-stage--failed {
-  color: var(--danger, #b8474d);
+  color: var(--err);
 }
 
 /* 空书架可拖放:虚线框暗示放置区 */
 .empty--droppable {
-  border: 1.5px dashed var(--line);
+  border: 1.5px dashed var(--line-strong);
   border-radius: 10px;
   padding: 28px 16px;
 }
@@ -545,23 +555,23 @@ function onShelfDrop(event: DragEvent): void {
   text-decoration: none;
 }
 
-/* 书的封面:圆角矩形 + 左侧书脊 + 竖排标题区 */
+/* 书的封面:布面装帧(纵向微渐变)+ 左侧颜料书脊 + 右侧题签竖排书名 */
 .book-cover {
   position: relative;
-  display: flex;
+  display: block;
   height: 186px;
-  flex-direction: column;
-  justify-content: space-between;
-  padding: 16px 14px 14px 22px;
   border: 1px solid var(--line);
   border-radius: 4px 10px 10px 4px;
-  background: var(--panel);
-  box-shadow: 0 1px 2px rgba(17, 34, 51, 0.05);
+  background: linear-gradient(180deg, #fffdf8, #f8f4ea);
+  box-shadow: 0 1px 2px rgba(45, 40, 32, 0.06);
   overflow: hidden;
-  transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+  transition:
+    transform 0.16s ease,
+    box-shadow 0.16s ease,
+    border-color 0.16s ease;
 }
 
-/* 书脊:左侧一条彩色窄条 */
+/* 书脊:左侧一条颜料色窄条 */
 .book-spine {
   position: absolute;
   top: 0;
@@ -569,35 +579,50 @@ function onShelfDrop(event: DragEvent): void {
   left: 0;
   width: 6px;
   background: var(--spine);
-  opacity: 0.85;
+  opacity: 0.9;
 }
 
 .book-link:hover .book-cover {
-  border-color: #c9d8e6;
-  box-shadow: 0 6px 18px rgba(17, 34, 51, 0.1);
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow-lift);
   transform: translateY(-3px);
 }
 
+/* 题签:古籍封面上贴的那条白签,竖排书名自上而下读;
+   长标题在竖排下截断出省略号,完整名靠 :title 悬停 */
 .book-title {
-  display: -webkit-box;
+  position: absolute;
+  top: 12px;
+  right: 10px;
+  max-height: calc(100% - 24px);
+  padding: 10px 4px;
   overflow: hidden;
+  border: 1px solid rgba(33, 31, 28, 0.12);
+  border-radius: 3px;
+  background: rgba(255, 253, 248, 0.92);
   color: var(--ink);
+  font-family: var(--font-serif);
   font-size: 14px;
-  font-weight: 650;
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 4;
-  line-clamp: 4;
-  word-break: break-word;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  line-height: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  writing-mode: vertical-rl;
+  text-orientation: upright;
 }
 
 .book-foot {
+  position: absolute;
+  right: 10px;
+  bottom: 9px;
+  left: 18px;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
   color: var(--ink-3);
-  font-size: 12px;
+  font-size: 11.5px;
 }
 
 .book-tags {
@@ -639,8 +664,8 @@ function onShelfDrop(event: DragEvent): void {
 }
 
 .book-del:hover:not(:disabled) {
-  background: #fbeeef;
-  color: #b8474d;
+  background: var(--err-soft);
+  color: var(--err);
 }
 
 .book-del:disabled {
@@ -686,9 +711,9 @@ function onShelfDrop(event: DragEvent): void {
 }
 
 .pager-num--active {
-  border-color: var(--accent);
-  background: var(--accent);
-  color: #fff;
+  border-color: var(--ink);
+  background: var(--ink);
+  color: var(--panel);
   font-weight: 600;
 }
 
