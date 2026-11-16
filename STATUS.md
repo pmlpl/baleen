@@ -47,7 +47,7 @@
 | **图片视觉理解(ADR 0006)** | `app/service/parse/vision.py` + `parse_file(client=)` + qa.py `_load_hit_images` | ✅ 导入时视觉模型转写 Markdown 进流水线(降级 no_text_expected);问答命中图片来源笔记回传原图(≤2 张),流式 meta 加 `images_attached`;e2e 全通:识别→G1/G2 accept→检索→看着答 |
 | **NoteView mermaid** | `frontend/src/views/NoteView.vue` | ✅ 阅读页 mermaid 代码块渲染成图(mermaid 感知启发式 + renderMermaidIn,失败退化代码块);截图实证 |
 | ~~worker LLM 配置统一~~ | — | ✅ 核实早已实现(import_file/summarize 都走 resolve_llm_config),悬账销账 |
-| **笔记删除** | `DELETE /api/notes/{id}` + `NotesRepo.delete_active` + 书架/详情删除入口 | ✅ 真删除:chunks/embeddings DB 级联清;孤儿 source 连行带 blob 删(1:N 防护);确认弹窗;7 测试 |
+| **笔记删除** | `DELETE /api/notes/{id}` + `NotesRepo.delete_active` + 书架/详情删除入口 | ✅ 真删除:chunks/embeddings DB 级联清(ON DELETE CASCADE,实测孤儿向量/切块=0);孤儿 source 连行带 blob 删(1:N 防护);确认弹窗;7 测试;**书架删除乐观移除(API 成功后本地 filter+total-1,不重 load,瞬时生效不闪);LibraryView keep-alive 加 onActivated 兜底(详情页删完跳回不再 stale)** |
 | **CSV 导入** | `app/service/parse/csv_parser.py` + PARSERS | ✅ 整篇表格、首行表头、分隔符嗅探(逗号/分号/制表符/竖线)、GB18030 兼容、>200 行分表;9 测试;xlsx 提示话术成真 |
 | **评测候选自动归档(C 路线)** | `app/service/eval_capture.py` + pipeline 接线 | ✅ 真实导入(非 dedupe)完成→原文件副本进 `eval/candidates/`(gitignore)+登记 `eval/candidates_log.csv`;best-effort 不影响导入;`EVAL_CAPTURE_ENABLED` 开关;主人复核后挪 samples 转正 |
 | **bootstrap 置信区间(D 路线)** | `eval/scripts/bootstrap.py` + `ci_g12_*.md`/`ci_retrieval.md` | ✅ B=2000/seed=42/百分位法;误拒率 10% CI [0%,33.3%](test)、R@5 94.4% CI [83.3%,100%]——n 小的诚实表述;test/dev 交叉视角;⚠️ q10 语料漂移(rank 12,回填改标题所致,待主人复核) |

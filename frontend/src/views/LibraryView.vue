@@ -5,7 +5,7 @@
  * GET /api/notes?q=&limit=&offset= —— 搜索框输入防抖 300ms 才发请求;
  * 翻页/搜索都通过 reload() 重拉,失败给人话提示不白屏。
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
@@ -83,6 +83,13 @@ function refreshOnFocus(): void {
 }
 onMounted(() => window.addEventListener('focus', refreshOnFocus))
 onBeforeUnmount(() => window.removeEventListener('focus', refreshOnFocus))
+// keep-alive 缓存下,从详情页删完/改完跳回书架时 onMounted 不再触发 → 列表会 stale。
+// onActivated 兜底:切回书架时自动校准(首次激活跳过,避免与 watch immediate 重复加载)。
+let activatedOnce = false
+onActivated(() => {
+  if (activatedOnce) void load()
+  activatedOnce = true
+})
 
 function goPage(next: number): void {
   const clamped = Math.min(Math.max(1, next), pageCount.value)
@@ -160,7 +167,10 @@ async function removeNote(note: NoteListItem): Promise<void> {
   errorText.value = ''
   try {
     await deleteNote(note.id)
-    await load()
+    // 乐观移除:API 成功后直接从本地列表滤掉,不重新 load —— 瞬时生效、不闪烁。
+    // total 同步减一保持计数/分页一致;窗口聚焦时的 load() 会兜底校准。
+    notes.value = notes.value.filter((n) => n.id !== note.id)
+    total.value = Math.max(0, total.value - 1)
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {
