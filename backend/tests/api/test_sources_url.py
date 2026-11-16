@@ -398,6 +398,12 @@ def test_source_status_includes_video_stage(env) -> None:
     detail = status.json()
     assert "video_stage" in detail
     assert detail["video_stage"] == "排队中"
+    # 白盒日志：初始有一条「排队中」
+    assert "video_log" in detail
+    assert isinstance(detail["video_log"], list)
+    assert len(detail["video_log"]) == 1
+    assert detail["video_log"][0]["stage"] == "排队中"
+    assert detail["video_log"][0]["pct"] == 2
 
 
 # ==================== 抖音视频测试 ====================

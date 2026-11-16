@@ -12,7 +12,7 @@ import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { createSourceFromUrl, getSource } from '../api/sources'
-import type { SourceDetail } from '../api/sources'
+import type { SourceDetail, VideoLogEntry } from '../api/sources'
 
 const BV_RE = /BV[a-zA-Z0-9]{10}/
 const PAGE_RE = /[?&]p=(\d+)/
@@ -69,6 +69,8 @@ interface ImportItem {
   status: 'pending' | 'done' | 'failed'
   progress: number
   noteId: number | null
+  /** 白盒日志：worker/pipeline 各阶段条目，轮询时整体替换触发重渲染 */
+  log: VideoLogEntry[]
 }
 
 const imports = ref<ImportItem[]>([])
@@ -118,6 +120,13 @@ function computeProgress(detail: SourceDetail): number {
   return 5
 }
 
+/** epoch 秒 → HH:MM:SS（本地时区），日志区时间戳显示用 */
+function formatLogTime(ts: number): string {
+  const d = new Date(ts * 1000)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
+
 // 进行中的导入持久化到 localStorage（sourceId + 原始链接）：
 // 刷新页面后进度面板【和左侧视频/链接预览】全部自动恢复（不再凭空消失）
 const ACTIVE_KEY = 'baleen-active-video-import'
@@ -159,9 +168,11 @@ async function trackImport(sourceId: number, item: ImportItem): Promise<void> {
   const first = await getSource(sourceId)
   item.stage = importStageText(first)
   item.progress = computeProgress(first)
+  item.log = first.video_log
   const detail = await waitImportDone(sourceId, (d) => {
     item.stage = importStageText(d)
     item.progress = computeProgress(d)
+    item.log = d.video_log
   })
 
   if (detail.job.status === 'failed') {
@@ -195,6 +206,7 @@ async function importVideo(): Promise<void> {
     status: 'pending',
     progress: 2,
     noteId: null,
+    log: [],
   })
   imports.value.push(item)
 
@@ -237,6 +249,7 @@ onMounted(async () => {
       status: 'pending',
       progress: computeProgress(detail),
       noteId: null,
+      log: detail.video_log,
     })
     imports.value.push(item)
     await trackImport(saved.sourceId, item)
@@ -348,6 +361,17 @@ onMounted(async () => {
                   查看笔记 →
                 </RouterLink>
               </div>
+              <ul v-if="it.log.length > 0" class="progress-log">
+                <li
+                  v-for="(entry, j) in it.log"
+                  :key="j"
+                  class="progress-log-item"
+                >
+                  <span class="progress-log-ts muted">{{ formatLogTime(entry.ts) }}</span>
+                  <span class="progress-log-stage">{{ entry.stage }}</span>
+                  <span v-if="entry.pct !== null" class="progress-log-pct muted">{{ entry.pct }}%</span>
+                </li>
+              </ul>
             </li>
           </ul>
         </div>
@@ -554,6 +578,32 @@ onMounted(async () => {
 
 .progress-stage--failed {
   color: var(--err);
+}
+
+.progress-log {
+  max-height: 96px;
+  overflow-y: auto;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+  border-left: 2px solid var(--line);
+  font-size: 12px;
+}
+
+.progress-log-item {
+  display: flex;
+  gap: 6px;
+  padding: 1px 0 1px 8px;
+}
+
+.progress-log-ts {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.progress-log-stage {
+  flex: 1;
+  min-width: 0;
 }
 
 .progress-link {

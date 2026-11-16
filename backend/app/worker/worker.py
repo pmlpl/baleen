@@ -184,8 +184,11 @@ async def _update_video_stage(
 ) -> None:
     """更新 source.parse_meta 的视频进度字段，供前端轮询显示进度条。
 
-    独立 DB session，不影响 pipeline 的 session。
+    独立 DB session，不影响 pipeline 的 session。每次埋点同时往 video_log 追加
+    一条白盒日志(stage+progress)，前端渲染滚动日志区。
     """
+    from app.service.imports.pipeline import _append_video_log
+
     async with session_factory() as session:
         repos = Repos(session, owner_id=owner_id)
         source = await repos.sources.get(source_id)
@@ -197,6 +200,7 @@ async def _update_video_stage(
             meta["video_progress"] = max(0, min(100, int(progress)))
         if est_seconds is not None:
             meta["video_est_seconds"] = int(est_seconds)
+        meta = _append_video_log(meta, stage, progress)
         await repos.sources.update_parse_meta(source_id, meta)
         await session.commit()
 
@@ -214,7 +218,7 @@ def _make_progress_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEvent
 
 async def _fail_video_job(source_id: int, owner_id: int, exc: Exception) -> None:
     """提取阶段失败：标记 job failed + source.parse_meta 显示错误。"""
-    from app.service.imports.pipeline import DEDUPE_PREFIX
+    from app.service.imports.pipeline import DEDUPE_PREFIX, _append_video_log
 
     async with session_factory() as session:
         repos = Repos(session, owner_id=owner_id)
@@ -227,7 +231,9 @@ async def _fail_video_job(source_id: int, owner_id: int, exc: Exception) -> None
                     last_error=f"{type(exc).__name__}: {exc}"[:1000],
                 )
             meta = dict(source.parse_meta or {})
-            meta["video_stage"] = f"❌ {type(exc).__name__}: {str(exc)[:80]}"
+            err_stage = f"❌ {type(exc).__name__}: {str(exc)[:80]}"
+            meta["video_stage"] = err_stage
+            meta = _append_video_log(meta, err_stage)
             await repos.sources.update_parse_meta(source_id, meta)
         await session.commit()
 

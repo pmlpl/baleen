@@ -41,6 +41,56 @@ def test_worker_settings_registers_video_task() -> None:
     assert WorkerSettings.job_timeout == 900  # 文件导入保持 15 分钟
 
 
+# ---------- _append_video_log 纯函数 ----------
+
+
+def test_append_video_log_appends_new_stage() -> None:
+    """不同 stage 文本 → 追加新条目（带 ts/stage/pct）。"""
+    from app.service.imports.pipeline import _append_video_log
+
+    meta = _append_video_log({}, "排队中", pct=2)
+    assert len(meta["video_log"]) == 1
+    assert meta["video_log"][0]["stage"] == "排队中"
+    assert meta["video_log"][0]["pct"] == 2
+    assert isinstance(meta["video_log"][0]["ts"], int)
+
+    meta = _append_video_log(meta, "获取视频中…", pct=8)
+    assert len(meta["video_log"]) == 2
+    assert meta["video_log"][-1]["stage"] == "获取视频中…"
+
+
+def test_append_video_log_dedup_same_stage_only_updates_pct() -> None:
+    """同 stage 连续调用 → 只刷新末条 pct，不新增条目（防未来 whisper 刷屏）。"""
+    from app.service.imports.pipeline import _append_video_log
+
+    meta = _append_video_log({}, "whisper 转写中…", pct=30)
+    meta = _append_video_log(meta, "whisper 转写中…", pct=45)
+    meta = _append_video_log(meta, "whisper 转写中…", pct=60)
+    assert len(meta["video_log"]) == 1  # 仍只有一条
+    assert meta["video_log"][0]["pct"] == 60  # pct 被刷新到最新
+
+
+def test_append_video_log_truncates_to_50() -> None:
+    """超过 50 条 → 只保留最近 50 条。"""
+    from app.service.imports.pipeline import _append_video_log
+
+    meta: dict = {}
+    for i in range(60):
+        meta = _append_video_log(meta, f"阶段{i}", pct=i)
+    assert len(meta["video_log"]) == 50
+    assert meta["video_log"][0]["stage"] == "阶段10"  # 最早保留的是第 10 条
+    assert meta["video_log"][-1]["stage"] == "阶段59"
+
+
+def test_append_video_log_does_not_mutate_input() -> None:
+    """纯函数：不修改传入的 meta（worker/pipeline 各自 session 落库的契约）。"""
+    from app.service.imports.pipeline import _append_video_log
+
+    original = {"video_log": [{"ts": 1, "stage": "排队中", "pct": 2}]}
+    _append_video_log(original, "获取视频中…", pct=8)
+    assert len(original["video_log"]) == 1  # 原字典未被改动
+
+
 # ---------- stub session（不需要 DB 的编排测试）----------
 
 
@@ -211,6 +261,9 @@ def test_extract_video_failure_marks_job_failed(
             assert src is not None
             assert "video_stage" in src.parse_meta
             assert "❌" in src.parse_meta["video_stage"]
+            # 失败也追加一条白盒日志（末条含 ❌）
+            assert "video_log" in src.parse_meta
+            assert "❌" in src.parse_meta["video_log"][-1]["stage"]
             job = await repos.jobs.get(job_id)
             assert job is not None
             assert job.status == "failed"

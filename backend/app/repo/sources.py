@@ -117,6 +117,19 @@ class SourcesRepo(Repo):
             .values(parse_meta=meta)
         )
 
+    async def get_parse_meta(self, source_id: int) -> dict | None:
+        """读 parse_meta 列(绕过 ORM 对象缓存,拿 session/DB 最新值)。
+
+        ``update_parse``/``update_parse_meta`` 是裸 SQL UPDATE,不刷新 identity map
+        里的 source 对象属性;在共享 session 里(如 pipeline 整理块)追加 video_log
+        前用它读最新值,避免基于过时缓存覆写丢失进度日志。
+        """
+        return await self.session.scalar(
+            select(Source.parse_meta).where(
+                Source.id == source_id, Source.owner_id == self.owner_id
+            )
+        )
+
     async def count_notes_for(self, source_id: int) -> int:
         """还挂着这个 source 的笔记行数(含 archived——软删的行也还占着引用)。"""
         return int(

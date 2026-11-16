@@ -123,6 +123,26 @@ def _from_source(source) -> ParseResult:
 VIDEO_FRAMES_SUFFIX = ".frames.json"
 
 
+def _append_video_log(meta: dict, msg: str, pct: int | None = None) -> dict:
+    """往 meta 追加一条视频进度日志(纯函数,不碰 DB)。
+
+    条目结构 ``{ts, stage, pct}`` —— 时间戳(epoch 秒)+阶段文本+百分比。
+    去重守卫:末条 stage 与 msg 相同则只刷新其 pct(防御未来同阶段连续调用刷屏);
+    截断保留最近 50 条。worker 与 pipeline 各自调用、各自 session 落库,
+    前端 2s 轮询读 ``parse_meta.video_log`` 渲染白盒日志区。
+    """
+    out = dict(meta)
+    entries = list(out.get("video_log") or [])
+    if entries and entries[-1].get("stage") == msg:
+        # 同阶段连续调用:只刷新百分比,不新增条目(避免未来 whisper 之类刷屏)
+        if pct is not None:
+            entries[-1] = {**entries[-1], "pct": pct}
+    else:
+        entries.append({"ts": int(time.time()), "stage": msg, "pct": pct})
+    out["video_log"] = entries[-50:]
+    return out
+
+
 def _load_video_frames(path: Path) -> list[dict] | None:
     """读视频关键帧 sidecar(与暂存 md 同目录);没有返回 None(普通文件导入路径)。"""
     import json
@@ -388,19 +408,28 @@ async def run_import_async(
                 prev_meta = dict(source.parse_meta or {})
                 video_keep = {
                     k: prev_meta[k]
-                    for k in ("video_url", "video_mode", "video_progress", "video_est_seconds", "content_sha256")
+                    for k in (
+                        "video_url", "video_mode", "video_progress",
+                        "video_est_seconds", "content_sha256", "video_log",
+                    )
                     if k in prev_meta
                 }
+                g0_meta = {
+                    **video_keep,
+                    **(pr.meta or {}),
+                    "warnings": pr.warnings,
+                    "message": pr.message,
+                    **({"video_frame_count": len(video_images)} if video_images else {}),
+                }
+                if video_keep.get("video_mode"):
+                    # 视频导入:G0 解析完成,追加一条白盒日志(进度沿用 worker 末态)
+                    g0_meta = _append_video_log(
+                        g0_meta, "解析完成", pct=video_keep.get("video_progress")
+                    )
                 await repos.sources.update_parse(
                     source_id,
                     parse_status=pr.parse_status.value,
-                    parse_meta={
-                        **video_keep,
-                        **(pr.meta or {}),
-                        "warnings": pr.warnings,
-                        "message": pr.message,
-                        **({"video_frame_count": len(video_images)} if video_images else {}),
-                    },
+                    parse_meta=g0_meta,
                     doc=pr.blocks,
                 )
                 if g0_run is None:
@@ -477,6 +506,14 @@ async def run_import_async(
                         g2_run.action,
                     )
                 else:
+                    # 视频导入:organizer 跑几十秒~几分钟,先落「AI 整理笔记中」并提交,
+                    # 让前端轮询立刻看到(基于 DB 最新 parse_meta,绕过 ORM 缓存)
+                    vmeta = await repos.sources.get_parse_meta(source_id)
+                    if vmeta and vmeta.get("video_mode"):
+                        await repos.sources.update_parse_meta(
+                            source_id, _append_video_log(vmeta, "AI 整理笔记中")
+                        )
+                        await session.commit()
                     try:
                         org = await asyncio.to_thread(
                             organize_note,
@@ -512,6 +549,12 @@ async def run_import_async(
                     result.g2_verdict = "accept" if org.organizable else "reject"
                     result.quality = org.quality
                     result.action = "index" if org.organizable else "drop"
+                    # 视频导入:organizer 完成,追加「AI 整理完成」(随下方 commit 落库)
+                    vmeta = await repos.sources.get_parse_meta(source_id)
+                    if vmeta and vmeta.get("video_mode"):
+                        await repos.sources.update_parse_meta(
+                            source_id, _append_video_log(vmeta, "AI 整理完成")
+                        )
                 await session.commit()
                 mark("G2", t)
                 if result.g2_verdict == "reject":
@@ -524,7 +567,8 @@ async def run_import_async(
                     pr.blocks = org.blocks
                     note_title = _title(pr.blocks, path.name)  # 重写后的首 H1 当标题(去编号)
                     result.headings_rewritten = True
-                    meta = dict(source.parse_meta or {})
+                    # 基于 DB 最新 parse_meta(绕过 ORM 缓存),避免覆盖刚写的 video_log
+                    meta = await repos.sources.get_parse_meta(source_id) or {}
                     meta["headings_rewritten"] = True
                     source.parse_meta = meta
                     log.info("AI 笔记整理完成: %s → %s", original_title, note_title)

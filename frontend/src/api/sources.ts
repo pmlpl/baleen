@@ -50,6 +50,15 @@ export interface ReviewRun {
   latency_ms: number
 }
 
+export interface VideoLogEntry {
+  /** 时间戳（epoch 秒，worker 写入时 int(time.time())） */
+  ts: number
+  /** 阶段文本（排队中/获取视频中…/whisper 转写中…/解析完成/AI 整理笔记中…） */
+  stage: string
+  /** 该阶段进度百分比 0-100，无对应百分比时为 null */
+  pct: number | null
+}
+
 export interface SourceDetail {
   id: number
   filename: string
@@ -68,6 +77,8 @@ export interface SourceDetail {
   video_progress: number | null
   /** whisper 阶段预计耗时秒数（前端据此插值推进度条），非转写阶段为 null */
   video_est_seconds: number | null
+  /** 白盒日志：提取+整理全程的阶段性条目，非视频导入为空数组 */
+  video_log: VideoLogEntry[]
   note_id: number | null
   created_at: string
   job: JobInfo
@@ -115,6 +126,19 @@ function asTextArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((entry): entry is string => typeof entry === 'string')
     : []
+}
+
+function toVideoLogEntry(raw: unknown): VideoLogEntry {
+  const entry = asRecord(raw)
+  return {
+    ts: asNumber(entry.ts),
+    stage: asText(entry.stage),
+    pct: asNullableNumber(entry.pct),
+  }
+}
+
+function asVideoLogArray(value: unknown): VideoLogEntry[] {
+  return Array.isArray(value) ? value.map(toVideoLogEntry) : []
 }
 
 /** 认不出来的 job 状态当成 queued(宁可继续轮询,也不要错报成失败) */
@@ -169,6 +193,7 @@ function toSourceDetail(raw: unknown): SourceDetail {
     video_stage: asNullableText(data.video_stage),
     video_progress: asNullableNumber(data.video_progress),
     video_est_seconds: asNullableNumber(data.video_est_seconds),
+    video_log: asVideoLogArray(data.video_log),
     note_id: typeof data.note_id === 'number' ? data.note_id : null,
     created_at: asText(data.created_at),
     job: toJobInfo(data.job),

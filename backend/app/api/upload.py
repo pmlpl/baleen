@@ -17,6 +17,7 @@ import asyncio
 import hashlib
 import mimetypes
 import shutil
+import time
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -109,6 +110,13 @@ class ReviewRunOut(BaseModel):
     latency_ms: int
 
 
+class VideoLogEntry(BaseModel):
+    """视频导入白盒日志条目：时间戳(epoch 秒)+阶段文本+百分比。"""
+    ts: int
+    stage: str
+    pct: int | None = None
+
+
 class SourceStatus(BaseModel):
     id: int
     filename: str
@@ -125,6 +133,8 @@ class SourceStatus(BaseModel):
     video_stage: str | None = None
     video_progress: int | None = None  # 0-100，前端画进度条
     video_est_seconds: int | None = None  # whisper 阶段预计耗时（前端据此插值）
+    # 白盒日志：提取+整理全程的阶段性条目（排队→下载→whisper→识别画面→解析完成→AI整理）
+    video_log: list[VideoLogEntry] | None = None
     note_id: int | None
     created_at: datetime
     job: JobOut | None
@@ -334,6 +344,7 @@ async def import_from_url(
             "video_mode": "whisper",
             "video_stage": "排队中",
             "video_progress": 2,
+            "video_log": [{"ts": int(time.time()), "stage": "排队中", "pct": 2}],
         }
         await repos.sources.update_parse_meta(source.id, meta)
         job, job_created = await repos.jobs.create_or_get(
@@ -500,6 +511,7 @@ async def get_source_status(
         video_stage=meta.get("video_stage"),
         video_progress=meta.get("video_progress"),
         video_est_seconds=meta.get("video_est_seconds"),
+        video_log=meta.get("video_log"),
         note_id=note.id if note else None,
         created_at=source.created_at,
         job=(

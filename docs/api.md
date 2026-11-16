@@ -1,4 +1,4 @@
-# API 契约 v26
+# API 契约 v27
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -113,7 +113,7 @@ B 站 / 抖音视频链接导入。两种模式：
 | `mode` | string | ❌ | `"subtitle"`（默认，秒级，同步） \| `"whisper"`（分钟级，异步，内容可靠） |
 
 响应与 `POST /api/sources` 完全一致（`{ source_id, job_id, job_status, deduped }`）。
-轮询 `GET /api/sources/{source_id}` 拿全链路状态。whisper 模式通过 `video_stage`（阶段文案）+ `video_progress`（0-100 进度）+ `video_est_seconds`（转写阶段预计秒数，前端据此插值）三个字段驱动进度条。抖音模式**免 cookie**：worker 用系统浏览器（Playwright，channel=msedge）打开视频页拦截详情接口获取元信息和播放地址，用户零配置。
+轮询 `GET /api/sources/{source_id}` 拿全链路状态。whisper 模式通过 `video_stage`（阶段文案）+ `video_progress`（0-100 进度）+ `video_est_seconds`（转写阶段预计秒数，前端据此插值）三个字段驱动进度条；另有 `video_log`（v27 新增）——提取+整理全程的白盒日志数组，每条 `{ts, stage, pct}`（时间戳/阶段文本/百分比），前端渲染滚动日志区，让用户看到「排队→下载→whisper→识别画面→解析完成→AI 整理」每一步走到哪了。抖音模式**免 cookie**：worker 用系统浏览器（Playwright，channel=msedge）打开视频页拦截详情接口获取元信息和播放地址，用户零配置。
 
 - `mode="whisper"` 时 API 立即返回 201，不阻塞；worker 后台提取（最多 2 小时，支持 ≤60 分钟视频）。
 - whisper 模式的 source.sha256 是占位值（`"video:{bvid}:whisper"`），真实 sha 存在 `parse_meta.content_sha256`；dedupe 基于 BVID。
@@ -152,6 +152,7 @@ B 站 / 抖音视频链接导入。两种模式：
   "video_stage": null,
   "video_progress": null,
   "video_est_seconds": null,
+  "video_log": null,
   "note_id": 7,
   "created_at": "2026-10-29T01:20:00+08:00",
   "job": { "id": 34, "status": "done", "attempts": 1, "last_error": null },
@@ -524,6 +525,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-16 | v27 | **视频导入白盒进度日志**：`GET /api/sources/{id}` 响应新增 `video_log`——提取+整理全程的阶段性日志数组，条目 `{ts, stage, pct}`（时间戳 epoch 秒/阶段文本/百分比，非视频导入为 `null`）。worker `_update_video_stage`/`_fail_video_job` 每次埋点追加一条（去重守卫：同 stage 连续调用只刷新 pct；截断保留最近 50 条）；pipeline 在 G0 落盘后追加「解析完成」、organizer 前后追加「AI 整理笔记中」/「AI 整理完成」（基于 `SourcesRepo.get_parse_meta` 绕过 ORM 缓存读最新值，顺带修 `pipeline.py` headings_rewritten 覆盖过时 parse_meta 的隐患）；前端 VideoView `.progress-card` 内新增滚动日志区渲染时间戳+阶段+百分比。复用现有 2s 轮询与 `parse_meta` 持久化，刷新页面日志仍在；不上 SSE/WebSocket |
 | 2026-11-14 | v26 | **个人中心**:§10 新增 **`GET /api/profile`** 聚合端点——用户信息(id/username/注册时间)+ 使用统计(notes/sources/qa_sessions/qa_messages,owner 隔离,notes 只数 active)+ 章程预览(前 300 字,完整内容仍走 `GET /api/charter`)+ 配置掩码视图(与 `GET /api/settings` 六字段同口径,密钥永不回显全文);纯读聚合,复用现有 repo 与 `resolve_llm_config`,无新表无迁移;前端新增 `/profile` 页(导航加「个人中心」入口),只读展示,编辑动作跳章程/设置页 |
 | 2026-11-14 | v25 | **抖音免 cookie 提取 + 导入进度条**：①抖音模式改走 Playwright（`douyin_extractor.py`，channel=msedge 用系统 Edge）打开视频页拦截详情接口，元信息+播放地址全拿到，CDN 直连下载——**用户零配置**，废除 v24 的 `douyin_cookies` 设置字段（`PUT /api/settings` 移除，DB 列保留标注废弃；实测 ttwid 单值/首页 cookie/蜘蛛页全被抖音反爬封死，手动复制完整 Cookie 头对普通用户不可用）；②`GET /api/sources/{id}` 响应新增 `video_progress`（0-100）与 `video_est_seconds`（转写预计秒数），前端进度条在 whisper 阶段按视频时长插值（base 模型 ~1x 实时）；③worker `deduped=True` 语义收紧为仅 job done（失败重试不再被误报「之前导入过」），入队前清 arq 旧结果键；④organizer prompt：质量评级标准具体化（评整理后的笔记本身，视频/字幕来源不构成降级理由）+ 多并列大主题升多章结构指引（内部行为，无接口变化） |
 | 2026-11-13 | v24 | **抖音视频支持**：`POST /api/sources/url` whisper 模式支持抖音链接（`v.douyin.com` / `www.douyin.com`）；`video_extractor.py` 用 yt-dlp 统一提取元信息（替代 B 站 view API，平台无关）；新增 `douyin.py`（URL 检测 + ID 提取）；抖音 cookies 通过设置页配置（`PUT /api/settings` 的 `douyin_cookies` 字段，粘贴 cookie 字符串即可，无需手动导出文件）；抖音只支持 whisper 模式（subtitle → 400）；前端 VideoView 检测抖音 URL 显示「在抖音中打开」链接 + 强制 whisper；`build_video_markdown` 标签通用化（"UP主"→"作者"、"B站原链接"→"原链接"） |
