@@ -125,11 +125,20 @@ def fetch_douyin_video(
             page = ctx.new_page()
 
             def on_response(resp) -> None:  # noqa: ANN001
-                if _DETAIL_API_MARK in resp.url and "data" not in captured:
-                    try:
-                        captured["data"] = resp.json()
-                    except Exception:  # noqa: BLE001
-                        pass
+                if _DETAIL_API_MARK not in resp.url or "data" in captured:
+                    return
+                try:
+                    data = resp.json()
+                except Exception:  # noqa: BLE001
+                    return
+                # 跳过风控空壳响应(aweme_detail=null)：只存真正含视频数据的，
+                # 否则第一个空壳会把后续真响应挡掉 → 拿到 None 报「没有 aweme_detail」
+                # （2026-11-16 复现：抖音会先回一个 aweme_detail=null 的变体）
+                aweme = data.get("aweme_detail")
+                if isinstance(aweme, dict) and (aweme.get("video") or aweme.get("desc")):
+                    captured["data"] = data
+                elif data.get("item_list"):
+                    captured["data"] = data
 
             page.on("response", on_response)
             # 两次机会：抖音偶发返回无 aweme_detail 的页面变体（风控插页/布局变体），

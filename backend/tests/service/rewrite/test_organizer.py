@@ -288,3 +288,109 @@ def test_organize_max_tokens_priority() -> None:
         pr, filename="test.md", ext=".md", client=client, max_tokens=999, output_budget=5000
     )
     assert client.received_max_tokens[0] == 999
+
+
+# ---- 视频多模态模式（阶段2）----
+
+_VIDEO_MD = (
+    "# 视频笔记\n\n"
+    "讲者说了一段话。\n\n"
+    "![[0:40] 讲者画面](baleen-image:0)\n\n"
+    "然后展示了白板。\n\n"
+    "![[1:46] tldraw白板](baleen-image:1)\n"
+)
+
+_VIDEO_SUCCESS_JSON = (
+    '{"organizable": true, "markdown": "# 信任与智能体\\n\\n## 讲者观点\\n\\n'
+    '讲者认为 AI 是结对伙伴。\\n\\n![[0:40] 讲者画面](baleen-image:0)\\n\\n'
+    '## 白板示意\\n\\n白板展示了 trust 曲线。\\n\\n![[1:46] tldraw白板](baleen-image:1)", '
+    '"quality": "core", "note_type": "concept", "reasons": ["融合语音与画面"]}'
+)
+
+
+def _make_video_images(tmp_path, count: int = 2) -> list[dict]:
+    """造真实 media 文件 + 帧清单（走 media_path 真读，不用 mock）。"""
+    import hashlib
+
+    from PIL import Image
+
+    from app.service import media as media_module
+
+    out = []
+    for i in range(count):
+        # 生成一张小图 → 按 store_media 的存储布局直接落到 media_root（测试隔离目录）
+        img = Image.new("RGB", (32, 32), (i * 80, 0, 0))
+        p = tmp_path / f"frame_{i}.jpg"
+        img.save(p)
+        data = p.read_bytes()
+        key = hashlib.sha256(data).hexdigest()
+        target = media_module.MEDIA_ROOT / key[:2] / key
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        out.append(
+            {"index": i, "media_key": key, "alt": f"画面{i}", "text_layer": f"code_{i}()", "timestamp": i * 60.0}
+        )
+    return out
+
+
+def test_organize_video_sends_multimodal_message(tmp_path, monkeypatch) -> None:
+    """视频模式：user 消息是 list（text + image_url），system 带视频专属规则。"""
+    from app.service import media as media_module
+
+    monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
+    video_images = _make_video_images(tmp_path)
+
+    pr = _make_parse_result()
+    client = FakeClient([_VIDEO_SUCCESS_JSON])
+    organize_note(pr, filename="v.md", ext=".md", client=client, video_images=video_images)
+
+    msgs = client.received_messages[0]
+    assert "视频笔记专属规则" in msgs[0]["content"]
+    assert "baleen-image:N" in msgs[0]["content"]  # 视频规则里提到标记格式
+    # user 消息是 list：text + 2 张图
+    user_c = msgs[1]["content"]
+    assert isinstance(user_c, list)
+    assert user_c[0]["type"] == "text"
+    assert "baleen-image:0" in user_c[0]["text"]  # 标记→画面对照表
+    assert "画面0" in user_c[0]["text"]
+    image_parts = [p for p in user_c if p.get("type") == "image_url"]
+    assert len(image_parts) == 2
+    assert image_parts[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+
+
+def test_organize_video_restores_image_blocks(tmp_path, monkeypatch) -> None:
+    """视频模式：organizer 输出里的 baleen-image:N → 还原成带 media key 的 image 块。"""
+    from app.service import media as media_module
+
+    monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
+    video_images = _make_video_images(tmp_path)
+
+    md_with_images = (
+        "# 视频笔记\n\n讲者观点。\n\n![[0:40] 讲者](baleen-image:0)\n\n"
+        "白板内容。\n\n![[1:46] 白板](baleen-image:1)\n"
+    )
+    pr = _make_parse_result(md_with_images)
+    client = FakeClient([_VIDEO_SUCCESS_JSON])
+
+    result = organize_note(
+        pr, filename="v.md", ext=".md", client=client, video_images=video_images
+    )
+    assert result.organizable and result.blocks
+
+    from app.service.notes_edit import doc_has_image_blocks, _iter_images
+
+    assert doc_has_image_blocks(result.blocks)  # 图没丢
+    imgs = _iter_images(result.blocks["content"])
+    assert len(imgs) == 2
+    assert imgs[0]["attrs"]["media"] == video_images[0]["media_key"]
+    assert imgs[1]["attrs"]["media"] == video_images[1]["media_key"]
+
+
+def test_organize_video_prompt_forbids_dropping_markers() -> None:
+    """视频 prompt 必须明确禁止删除/移动图片标记（防模型汇总到文末）。"""
+    from app.service.rewrite.organizer import _video_rules_text
+
+    rules = _video_rules_text()
+    assert "绝对不要删除标记" in rules
+    assert "baleen-image:N" in rules
+    assert "图跟着所属主题走" in rules

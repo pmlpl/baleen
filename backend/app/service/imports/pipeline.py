@@ -118,6 +118,51 @@ def _from_source(source) -> ParseResult:
     )
 
 
+# 视频关键帧 sidecar：worker 把 VideoContent.frame_images 写成「<md 文件名>.frames.json」，
+# pipeline 读到它就知道 baleen-image:N → media_key 的映射（帧字节已在 storage/media/）。
+VIDEO_FRAMES_SUFFIX = ".frames.json"
+
+
+def _load_video_frames(path: Path) -> list[dict] | None:
+    """读视频关键帧 sidecar(与暂存 md 同目录);没有返回 None(普通文件导入路径)。"""
+    import json
+
+    sidecar = path.with_name(path.name + VIDEO_FRAMES_SUFFIX)
+    if not sidecar.is_file():
+        return None
+    try:
+        data = json.loads(sidecar.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return data if isinstance(data, list) else None
+
+
+def _video_image_resolver(video_images: list[dict]):
+    """``baleen-image:N`` → image 块 attrs（media key 来自 sidecar 的帧清单）。"""
+    from app.service.parse.md_parser import IMAGE_SCHEME
+
+    by_index = {int(img.get("index", i)): img for i, img in enumerate(video_images)}
+
+    def resolve(src: str, alt: str) -> dict | None:
+        if not src.startswith(IMAGE_SCHEME):
+            # 非视频帧的普通图片（md 里外链等）：保留 src 引用，交给 media_sink 逻辑不合适，
+            # 这里只在视频 sidecar 场景兜底成「落不了地」——video md 里不该有别的图
+            return None
+        try:
+            index = int(src[len(IMAGE_SCHEME):])
+        except ValueError:
+            return None
+        img = by_index.get(index)
+        if img is None or not img.get("media_key"):
+            return None
+        restored = {"media": img["media_key"], "alt": alt or str(img.get("alt") or "")}
+        if img.get("timestamp") is not None:
+            restored["timestamp"] = img["timestamp"]
+        return restored
+
+    return resolve
+
+
 def _counts(rows: list) -> tuple[int, int, int]:
     parents = sum(1 for r in rows if r.is_parent)
     return len(rows), parents, len(rows) - parents
@@ -311,13 +356,33 @@ async def run_import_async(
             t = time.perf_counter()
             source = await repos.sources.get(source_id)
             g0_run = await repos.review_runs.get(source_id, "G0")
+            # 视频路径:worker 在暂存 md 旁写了帧清单 sidecar(baleen-image:N → media_key)。
+            # G0 解析 md 时用它把嵌图标记还原成 image 块(帧字节早已 store_media 存库)。
+            video_images = _load_video_frames(path)
             if source.doc is not None and g0_run is not None:
                 pr = _from_source(source)
             else:
                 # blob 无扩展名(内容寻址),G0 按扩展名路由 → 解析原始路径(字节完全相同)。
                 # client 随路下发:图片文件会走视觉转写(ADR 0006);no_llm 时不烧视觉。
                 # md 里的本地图片经 media_sink 存字节(内容寻址),doc 只留 key(v16)
-                pr = parse_file(path, client=None if no_llm else client, media_sink=store_media)
+                if video_images:
+                    # 视频 md 是流水线自己产的:图片标记按 sidecar 还原(不走 media_sink)
+                    from app.service.parse.md_parser import parse_md_text
+
+                    try:
+                        raw_text = path.read_text(encoding="utf-8")
+                        blocks, chars = parse_md_text(
+                            raw_text, image_resolver=_video_image_resolver(video_images)
+                        )
+                        pr = ParseResult(
+                            parse_status=ParseStatus.OK,
+                            blocks={"type": "doc", "content": blocks},
+                            meta={"engine": "video-markdown", "chars": chars},
+                        )
+                    except Exception:  # noqa: BLE001 —— 视频 md 解析异常退普通解析
+                        pr = parse_file(path, client=None if no_llm else client, media_sink=store_media)
+                else:
+                    pr = parse_file(path, client=None if no_llm else client, media_sink=store_media)
                 # 视频导入的进度字段在 worker 阶段写进 parse_meta，
                 # G0 落盘时保留它们（否则 video_progress 等会被整体覆写丢失）
                 prev_meta = dict(source.parse_meta or {})
@@ -334,6 +399,7 @@ async def run_import_async(
                         **(pr.meta or {}),
                         "warnings": pr.warnings,
                         "message": pr.message,
+                        **({"video_frame_count": len(video_images)} if video_images else {}),
                     },
                     doc=pr.blocks,
                 )
@@ -421,6 +487,7 @@ async def run_import_async(
                             client=client,
                             prompt_budget=prompt_budget,
                             output_budget=output_budget,
+                            video_images=video_images,  # 视频:多模态喂帧图 + 视频 prompt 约束
                         )
                     except Exception as exc:  # noqa: BLE001 — LLM 网络异常，降级原文入库
                         log.warning("AI 笔记整理异常(降级原文入库): %s", exc)

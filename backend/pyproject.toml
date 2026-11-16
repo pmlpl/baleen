@@ -26,6 +26,7 @@ dependencies = [
     "playwright>=1.65.2",
     "faster-whisper>=1.2.1",
     "av<19",
+    "scenedetect>=0.7.3",
 ]
 
 [dependency-groups]

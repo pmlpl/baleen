@@ -378,18 +378,129 @@ def test_extract_video_content_bilibili_no_fallback_for_duration(tmp_path: Path,
         ve.extract_video_content("https://www.bilibili.com/video/BV1GJ411x7h7/")
 
 
-# ---------- 帧间隔自适应 ----------
+# ---------- dHash 去重 + 嵌图标记（场景检测抽帧） ----------
 
 
-def test_frame_interval_adaptive() -> None:
-    """按时长自适应帧间隔：目标 ~8 帧，下限 10s（60s 短视频旧逻辑只有 1 帧）。"""
-    from app.service.video_extractor import _frame_interval
+def test_dhash_dedup_removes_near_duplicates(tmp_path: Path) -> None:
+    """dHash 去重：同一幻灯片（近重复帧）只留 1 张。
 
-    assert _frame_interval(10) == 10  # 10s → 下限 10 → 1 帧
-    assert _frame_interval(60) == 10  # 60s → 60//8=7 → 下限 10 → 6 帧
-    assert _frame_interval(100) == 12  # 100s → ~8 帧
-    assert _frame_interval(1500) == 187  # 25 分钟 → ~8 帧
-    assert _frame_interval(3600) == 450  # 60 分钟 → 8 帧（MAX_FRAMES 兜底）
+    纯色图 dHash 全 0 无法区分，用「左半色 A 右半色 B」的纹理图测：
+    两张相同纹理 → 同 hash → 去重；左右翻转的纹理 → hash 不同 → 保留。
+    """
+    from PIL import Image, ImageDraw
+
+    from app.service.video_extractor import _dedup_by_dhash, _dhash, _hamming
+
+    def two_color(left, right):
+        img = Image.new("RGB", (64, 64), right)
+        ImageDraw.Draw(img).rectangle([0, 0, 31, 63], fill=left)
+        return img
+
+    a1, a2, b = tmp_path / "a1.jpg", tmp_path / "a2.jpg", tmp_path / "b.jpg"
+    two_color((255, 0, 0), (0, 0, 0)).save(a1)  # 左红右黑
+    two_color((255, 0, 0), (0, 0, 0)).save(a2)  # 同上 → 同 hash
+    two_color((0, 0, 0), (255, 0, 0)).save(b)   # 左黑右红（翻转）→ hash 不同
+    assert _dhash(a1) == _dhash(a2)
+    assert _hamming(_dhash(a1), _dhash(b)) > 5
+
+    # 去重：a2 与 a1 近重复 → 只留 a1 + b
+    frames = [(0.0, a1), (10.0, a2), (20.0, b)]
+    deduped = _dedup_by_dhash(frames)
+    assert len(deduped) == 2
+    assert deduped[0][1] == a1
+    assert deduped[1][1] == b
+
+
+def test_build_video_markdown_embeds_image_markers() -> None:
+    """build_video_markdown 产出 baleen-image:N 嵌图标记 + 文字层，而非旧的文字描述。"""
+    from app.service.video_extractor import FrameContent, build_video_markdown
+
+    md = build_video_markdown(
+        title="测试视频",
+        description="",
+        owner_name="UP",
+        duration=60,
+        transcript_segments=[{"start": 0.0, "end": 5.0, "text": "这是第一段字幕"}],
+        frame_contents=[
+            FrameContent(
+                timestamp=2.0, alt="代码截图", text_layer="```python\nprint('hi')\n```", media_key="abc123"
+            )
+        ],
+        url="https://example.com/v",
+    )
+    # 嵌图标记（不是旧的 "> 📷 画面：文字"）
+    assert "![[0:02] 代码截图](baleen-image:0)" in md
+    assert "📷" not in md  # 旧文字描述标记已移除
+    # 文字层（逐字转录的代码）在图标记前
+    assert md.index("print('hi')") < md.index("baleen-image:0")
+    # 转写正文仍在
+    assert "这是第一段字幕" in md
+
+
+def test_dhash_crop_bottom_ignores_subtitle_changes(tmp_path: Path) -> None:
+    """字幕条差异不该让同一画面判成不同帧（SpaceX 实测：帧1/帧2 距离 8→裁25%后1）。
+
+    构造：上半部分相同白板内容（固定种子噪声，模拟画面纹理）+ 底部字幕带用不同种子的
+    噪声（模拟逐句变化的字幕）。裁掉底部后两帧应判为近重复 → 去重掉后者。
+    dHash 比较相邻像素，纯色块全 0 bit 无区分度，所以用噪声而非纯色。
+    """
+    import random
+
+    from PIL import Image
+
+    from app.service.video_extractor import _dedup_by_dhash, _dhash, _hamming
+
+    def frame_with_subtitle_band(subtitle_seed: int) -> Image.Image:
+        img = Image.new("RGB", (128, 72), (255, 255, 255))
+        px = img.load()
+        rng = random.Random(0)  # 上半「白板内容」固定 → 两帧一致
+        for y in range(0, 54):
+            for x in range(0, 128):
+                v = rng.randint(0, 255)
+                px[x, y] = (v, v, v)
+        rng2 = random.Random(subtitle_seed)  # 底部字幕带 → 逐帧不同
+        for y in range(56, 72):
+            for x in range(0, 128):
+                v = rng2.randint(0, 255)
+                px[x, y] = (v, v, v)
+        return img
+
+    a, b = tmp_path / "sub_a.jpg", tmp_path / "sub_b.jpg"
+    frame_with_subtitle_band(1).save(a)
+    frame_with_subtitle_band(2).save(b)
+
+    # 不裁底部 → 字幕差异让 hash 距离大，不去重
+    d_full = _hamming(_dhash(a), _dhash(b))
+    kept_no_crop = _dedup_by_dhash([(0.0, a), (10.0, b)], crop_bottom=0.0)
+    assert len(kept_no_crop) == 2, f"未裁底部时应保留 2 帧（距离 {d_full}）"
+    # 裁掉底部字幕条 → 判为近重复，只留第一帧
+    d_crop = _hamming(_dhash(a, crop_bottom=0.25), _dhash(b, crop_bottom=0.25))
+    kept_crop = _dedup_by_dhash([(0.0, a), (10.0, b)], crop_bottom=0.25)
+    assert len(kept_crop) == 1, f"裁底部后应去重（距离 {d_crop}）"
+
+
+def test_parse_frame_output_fallback_formats() -> None:
+    """_parse_frame_output：标准格式解析出 text_layer+desc；不守格式时整体当 desc。"""
+    from app.service.video_extractor import _parse_frame_output
+
+    tl, desc = _parse_frame_output("TEXT_LAYER:\nprint('hi')\n\nDESC:\n一个代码编辑器")
+    assert tl == "print('hi')"
+    assert desc == "一个代码编辑器"
+
+    tl2, desc2 = _parse_frame_output("只有一句描述，没有遵守格式")
+    assert tl2 == ""
+    assert desc2 == "只有一句描述，没有遵守格式"
+
+    tl3, desc3 = _parse_frame_output("TEXT_LAYER:\n无\n\nDESC:\n纯人物说话画面")
+    assert tl3 == ""  # 「无」→ 空
+    assert desc3 == "纯人物说话画面"
+
+
+def test_extract_scene_frames_caps_at_max() -> None:
+    """MAX_SCENE_FRAMES 上限值钉死（改它要同步评估成本：每帧一次 DeepSeek-vision 调用）。"""
+    from app.service.video_extractor import MAX_SCENE_FRAMES
+
+    assert MAX_SCENE_FRAMES == 30
 
 
 # ---------- 抖音 Playwright 路径（mock，不弹浏览器）----------
@@ -411,7 +522,7 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
     )()
 
     calls: dict[str, Any] = {}
-    frame_kwargs: list[dict] = []
+    frame_calls: list[dict] = []
 
     def fake_fetch(url, *, output_dir=None, max_duration_s=5400, progress_cb=None):
         calls["url"] = url
@@ -419,14 +530,17 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
 
     monkeypatch.setattr(ve, "extract_audio", lambda vp, od: od / "audio.wav")
     monkeypatch.setattr(ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "内容"}])
-    monkeypatch.setattr(ve, "extract_key_frames", lambda vp, od, **kw: frame_kwargs.append(kw) or [])
+    monkeypatch.setattr(
+        ve, "_extract_frames",
+        lambda vp, od, cli: frame_calls.append({"video_path": vp, "client": cli}) or [],
+    )
     monkeypatch.setattr("app.service.douyin_extractor.fetch_douyin_video", fake_fetch)
 
     # 传 dummy client 才会走帧提取分支（无 client 时帧提取整个跳过）
     vc = ve.extract_video_content("https://v.douyin.com/UMeLLjAlXa8/", client=object())
     assert "v.douyin.com" in calls["url"]
-    # 帧间隔按视频时长自适应传入（25 分钟 → ~8 帧），不再是固定 60s
-    assert frame_kwargs and frame_kwargs[0]["interval"] == ve._frame_interval(1500)
+    # 帧提取走场景检测新逻辑：video_path 透传给 _extract_frames（25 分钟视频）
+    assert frame_calls and frame_calls[0]["video_path"] == tmp_path / "fake.mp4"
     assert vc.title == "博弈论深度解读"
     assert vc.owner_name == "向不惑"
     assert vc.duration == 1500

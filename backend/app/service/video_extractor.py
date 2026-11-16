@@ -1,13 +1,17 @@
-"""视频内容提取：yt-dlp 下载 → ffmpeg 提取音频/帧 → faster-whisper 转写 → 视觉模型描述帧。
+"""视频内容提取：下载 → ffmpeg 提取音频 → faster-whisper 转写
+→ PySceneDetect 场景检测抽帧 → DeepSeek-flash 视觉逐字转录 + 真嵌图。
 
-不依赖 B 站 AI 字幕系统（已证实不可靠），直接从视频本身提取内容。
-- yt-dlp 下载视频（B 站需要 SESSDATA cookie）
-- ffmpeg 提取音频（16kHz mono WAV，whisper 要求）+ 关键帧（间隔按时长自适应，目标 ~8 帧）
-- faster-whisper（ctranslate2）转写音频 → 带时间戳的文字段（GPU float16，失败退 CPU int8）
-- LLMClient 视觉能力描述每帧画面 → 补充字幕无法获取的视觉信息
-- 合并：whisper 转写（文字）+ 帧描述（画面）→ 富 markdown
+不依赖平台 AI 字幕系统（已证实不可靠），直接从视频本身提取内容：
+- 下载视频/音频（抖音 Playwright 免 cookie；B站 yt-dlp + 浏览器兜底）
+- ffmpeg 提取音频（16kHz mono WAV）→ faster-whisper（ctranslate2）转写，带时间戳段
+- **场景检测抽帧**（PySceneDetect ContentDetector threshold=27 HSV）替换固定间隔：
+  每个场景中点抽 1 帧 + dHash 去重（同一幻灯片讲半天只留 1 帧）+ 上限 30 帧
+- **每帧视觉逐字转录**：DeepSeek-flash 逐字转录屏幕代码（保留缩进/符号）+ 描述图/动画
+- 帧字节经 ``store_media`` 内容寻址存库 → markdown 里插 ``![alt](baleen-image:N)`` 真嵌图
+  （按 transcript 时间戳对齐到段；下游 G0/organizer 用 baleen-image:N 往返还原 image 块）
+- 合并：whisper 转写（文字）+ 关键帧（嵌图 + 文字层）→ 富 markdown
 
-⚠️ 整个过程较慢（10 分钟视频约需 1-3 分钟下载+转写），适合异步/后台执行。
+⚠️ 较慢（3-5 分钟视频约需 1-3 分钟；长视频十几分钟可接受），异步后台执行。
 """
 
 from __future__ import annotations
@@ -38,19 +42,16 @@ def _extract_url(text: str) -> str:
 _whisper_model = None
 _whisper_device = ""  # 当前模型所在设备（"cuda"/"cpu"），GPU 推理失败退 CPU 后据此跳过重试
 
-# 关键帧默认提取间隔（秒）：调用方按视频时长自适应计算后显式传参覆盖（见 _frame_interval）
-FRAME_INTERVAL = 60
-# 帧图片上限（防止超长视频烧太多视觉调用）
-MAX_FRAMES = 20
-
-
-def _frame_interval(duration_s: int) -> int:
-    """按视频时长自适应帧间隔：目标 ~8 帧，下限 10s（60s 的短视频至少给 6 帧）。
-
-    10s 视频 → 1 帧；60s → 6 帧；8 分钟 → 8 帧；25 分钟 → 8 帧。
-    MAX_FRAMES 仍作为超长视频的兜底上限。
-    """
-    return max(10, duration_s // 8)
+# 场景检测抽帧参数（替换旧的固定间隔抽帧）
+# ContentDetector threshold=27（HSV 差异，PySceneDetect 默认值）；min_scene_len 防闪烁
+SCENE_THRESHOLD = 27.0
+SCENE_MIN_LEN_S = 2.0  # 最短场景时长（秒）
+# 关键帧上限（防止超长视频烧太多视觉调用；超限均匀采样，后续可换信息量打分 top-N）
+MAX_SCENE_FRAMES = 30
+# dHash 去重阈值（汉明距离 ≤ 此值视为近重复，同一幻灯片只留 1 帧）
+DHASH_DEDUP_THRESHOLD = 5
+# 算 dHash 前裁掉底部比例：视频字幕条常驻底部，字幕逐句变会让同一画面判成不同帧
+DHASH_CROP_BOTTOM = 0.25
 # faster-whisper 模型名（small：benchmark 实测比 base 正确率高——base 把「一致性」错写成
 # 「移植性」且输出繁体，small 正确且简体；GPU 上 15x 实时，速度不是瓶颈。
 # 中文需要多语言模型不是 .en）
@@ -58,11 +59,13 @@ WHISPER_MODEL = "small"
 
 
 @dataclass
-class FrameDescription:
-    """一个关键帧的描述。"""
+class FrameContent:
+    """一个关键帧的提取结果（场景检测 + 视觉转录 + 真嵌图）。"""
 
-    timestamp: float  # 秒
-    description: str
+    timestamp: float  # 秒（场景中点）
+    alt: str  # 画面简短描述（当图片 alt）
+    text_layer: str  # 逐字转录的屏幕代码/文字（保留缩进/符号；无则空）
+    media_key: str  # store_media 存的帧字节 key（内容寻址）
 
 
 @dataclass
@@ -74,9 +77,12 @@ class VideoContent:
     owner_name: str
     duration: int  # 秒
     transcript_segments: list[dict] = field(default_factory=list)  # [{start, end, text}]
-    frame_descriptions: list[FrameDescription] = field(default_factory=list)
+    frame_contents: list[FrameContent] = field(default_factory=list)
     markdown: str = ""
     source: str = "video-extraction"  # 标识来源
+    # 关键帧元信息（供下游 G0/organizer 把 baleen-image:N 还原成 image 块）：
+    # [{"index": N, "media_key": str, "alt": str, "text_layer": str, "timestamp": float}]
+    frame_images: list[dict] = field(default_factory=list)
 
 
 def _load_whisper(device: str):
@@ -328,66 +334,191 @@ def transcribe_audio(audio_path: Path) -> list[dict]:
         return _run(_whisper_model)
 
 
-def extract_key_frames(
+def detect_scenes(
     video_path: Path,
+    *,
+    threshold: float = SCENE_THRESHOLD,
+    min_scene_len_s: float = SCENE_MIN_LEN_S,
+) -> list[tuple[float, float]]:
+    """PySceneDetect ContentDetector 检测场景切换，返回 [(start_s, end_s)]。
+
+    threshold=27（HSV 差异，PySceneDetect 默认）；min_scene_len_s 防闪烁（短于该值的场景并入相邻）。
+    视频无切换（单一场景）→ 返回 [(0, duration)]。
+    """
+    from scenedetect import SceneManager, open_video
+    from scenedetect.detectors import ContentDetector
+
+    video = open_video(str(video_path))
+    sm = SceneManager()
+    min_scene_len = max(1, int(min_scene_len_s * video.frame_rate))
+    sm.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len))
+    sm.detect_scenes(video, show_progress=False)
+    scenes = sm.get_scene_list()
+    if not scenes:
+        duration = video.duration.get_seconds() if video.duration else 0.0
+        return [(0.0, duration)]
+    return [(s[0].get_seconds(), s[1].get_seconds()) for s in scenes]
+
+
+def _dhash(path: Path, size: int = 8, crop_bottom: float = 0.0) -> int:
+    """dHash：图片缩成 (size+1)×size 灰度，比较相邻像素 → size*size bit 感知哈希。
+
+    ``crop_bottom``：裁掉底部比例（视频字幕条常驻底部，字幕逐句变会让同一画面
+    判成不同帧——实测裁 25% 后同一白板帧的汉明距离从 8 降到 1）。
+    比 pHash 简单（无需 DCT），对「同一幻灯片」去重够用；Pillow 已装，无新依赖。
+    """
+    from PIL import Image
+
+    with Image.open(path) as img:
+        if crop_bottom > 0:
+            w, h = img.size
+            img = img.crop((0, 0, w, max(1, int(h * (1 - crop_bottom)))))
+        gray = img.convert("L").resize((size + 1, size))
+        pixels = list(gray.tobytes())  # L 模式每像素 1 字节；tobytes 替代 deprecated getdata
+    bits = 0
+    for row in range(size):
+        for col in range(size):
+            idx = row * (size + 1) + col
+            if pixels[idx] > pixels[idx + 1]:
+                bits |= 1 << (row * size + col)
+    return bits
+
+
+def _hamming(a: int, b: int) -> int:
+    return bin(a ^ b).count("1")
+
+
+def _dedup_by_dhash(
+    frames: list[tuple[float, Path]],
+    *,
+    threshold: int = DHASH_DEDUP_THRESHOLD,
+    crop_bottom: float = DHASH_CROP_BOTTOM,
+) -> list[tuple[float, Path]]:
+    """近重复（汉明距离 ≤ threshold）只留第一个——同一幻灯片讲半天只留 1 帧。
+
+    ``crop_bottom`` 裁掉底部字幕条再算 hash：实际视频字幕逐句变但画面没变，
+    不裁的话同一白板会被判成多帧（SpaceX 样本实测：帧1/帧2 距离 8→裁 25% 后 1）。
+    """
+    if len(frames) <= 1:
+        return frames
+    kept: list[tuple[float, Path]] = []
+    hashes: list[int] = []
+    for ts, path in frames:
+        try:
+            h = _dhash(path, crop_bottom=crop_bottom)
+        except Exception:  # noqa: BLE001 —— 读图失败按「独一无二」处理，不丢帧
+            h = -1
+        if any(h != -1 and _hamming(h, h2) <= threshold for h2 in hashes):
+            continue
+        hashes.append(h)
+        kept.append((ts, path))
+    return kept
+
+
+def extract_scene_frames(
+    video_path: Path,
+    scenes: list[tuple[float, float]],
     output_dir: Path,
     *,
-    interval: int = FRAME_INTERVAL,
-    max_frames: int = MAX_FRAMES,
+    max_frames: int = MAX_SCENE_FRAMES,
 ) -> list[tuple[float, Path]]:
-    """用 ffmpeg 按间隔提取关键帧，返回 [(timestamp, frame_path)]。"""
+    """每个场景中点抽 1 帧（ffmpeg -ss seek）+ dHash 去重 + 超上限均匀采样。
+
+    替换旧的固定间隔抽帧：场景切换点才是画面真正变化的地方，固定间隔会漏掉短画面、
+    重复抽同一静止幻灯片。
+    """
     frames_dir = output_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
-    pattern = str(frames_dir / "frame_%04d.jpg")
 
-    # fps=1/interval 表示每 interval 秒取一帧
-    subprocess.run(
-        [
-            "ffmpeg", "-i", str(video_path),
-            "-vf", f"fps=1/{interval}",
-            "-q:v", "2",  # JPEG 质量（2=高质量）
-            "-y",
-            pattern,
-        ],
-        capture_output=True,
-        check=True,
-    )
+    result: list[tuple[float, Path]] = []
+    for i, (start, end) in enumerate(scenes):
+        mid = (start + end) / 2
+        frame_path = frames_dir / f"frame_{i:04d}.jpg"
+        # -ss 放在 -i 前是 fast seek（跳到最近 keyframe），单帧抽取足够快且准
+        subprocess.run(
+            [
+                "ffmpeg", "-ss", f"{mid:.3f}", "-i", str(video_path),
+                "-frames:v", "1", "-q:v", "2", "-y", str(frame_path),
+            ],
+            capture_output=True,
+            check=True,
+        )
+        if frame_path.is_file():
+            result.append((mid, frame_path))
 
-    frames = sorted(frames_dir.glob("frame_*.jpg"))
-    # 文件名 frame_0001.jpg → timestamp = (index) * interval
-    result = []
-    for i, frame_path in enumerate(frames[:max_frames]):
-        timestamp = i * interval
-        result.append((timestamp, frame_path))
+    result = _dedup_by_dhash(result)
+    if len(result) > max_frames:
+        # 超上限均匀采样（样本阶段；后续可换视觉模型评信息量取 top-N）
+        step = len(result) / max_frames
+        result = [result[int(i * step)] for i in range(max_frames)]
     return result
 
 
-def describe_frames(
+def _parse_frame_output(content: str) -> tuple[str, str]:
+    """解析视觉模型输出 → (text_layer, desc)。
+
+    约定输出格式：
+        TEXT_LAYER:
+        <逐字转录的文字，没有则「无」>
+
+        DESC:
+        <简短画面描述>
+    模型不严格守格式时兜底：整体当 desc，text_layer 留空。
+    """
+    import re
+
+    text = content.strip()
+    text_layer = ""
+    desc = text  # 兜底：整体当描述
+    m = re.search(r"TEXT_LAYER\s*[:：]\s*(.*?)(?:\n\s*DESC\s*[:：]|$)", text, re.DOTALL | re.IGNORECASE)
+    if m:
+        text_layer = m.group(1).strip()
+        m2 = re.search(r"DESC\s*[:：]\s*(.*)", text, re.DOTALL | re.IGNORECASE)
+        desc = m2.group(1).strip() if m2 else ""
+    if text_layer.lower() in ("无", "none", "（无）", "(无)", ""):
+        text_layer = ""
+    return text_layer, desc
+
+
+# 视觉逐字转录 prompt：从「描述画面」升级为「逐字转录屏幕代码」(保留缩进/符号)
+_FRAME_TRANSCRIBE_PROMPT = (
+    "这是视频的一个关键画面截图。请做两件事：\n"
+    "1. 【逐字转录】画面里如果有代码/命令行/终端/幻灯片文字，逐字转录出来，"
+    "严格保留缩进、符号、大小写，不要改写或修正，不要添加解释。"
+    "是代码就用代码块包裹（标注语言，如 ```python）；是纯文字就直接给。\n"
+    "2. 【画面描述】用一句话描述这个画面展示什么（图表/架构图/动画的某一帧/纯人物说话/页面截图）。\n\n"
+    "严格按以下格式输出（不要加额外说明）：\n"
+    "TEXT_LAYER:\n<转录的文字；画面里没有可读文字就写「无」>\n\nDESC:\n<一句话画面描述>"
+)
+
+# 解析失败时的兜底重试 prompt：只要描述（保证至少有 alt，不再产出「画面截图」空壳）
+_FRAME_DESC_ONLY_PROMPT = (
+    "这是视频的一个关键画面截图。请用一句话准确描述画面展示的内容："
+    "是纯人物说话、还是图表/曲线图（说明图表讲什么）、架构图（说明结构）、"
+    "软件界面截图（说明是什么软件和页面）、幻灯片（说明标题）、白板（说明画了什么）。"
+    "只输出这一句话，不要解释。"
+)
+
+
+def transcribe_frames(
     frames: list[tuple[float, Path]],
     *,
     client,
     deadline_s: float = 600,
-) -> list[FrameDescription]:
-    """用视觉模型描述每帧画面，返回 FrameDescription 列表。
+) -> list[FrameContent]:
+    """DeepSeek-flash 视觉：逐字转录屏幕代码 + 描述画面；帧字节 store_media 存库。
 
-    ⚠️ 带总时限（deadline_s，默认 10 分钟）：LLM 网关挂起时单帧调用最多
-    等满 client 超时（300s），8 帧 × 300s = 40 分钟假死（2026-11-15 实测）。
-    超过总时限就放弃剩余帧——帧描述是锦上添花，不能拖死整条导入。
+    替换旧的 describe_frames（只描述成文字）：现在是逐字转录（保留缩进）+ 真嵌图（media_key）。
+    ⚠️ 带总时限 deadline_s：LLM 网关挂起时单帧最多等满 client 超时，N 帧×超时=假死，
+    超过总时限放弃剩余帧（帧是锦上添花，不能拖死导入）。
+    ⚠️ 模型偶尔不守 TEXT_LAYER/DESC 格式（只回一句描述/废话）→ 兜底用纯描述 prompt
+    重试一次，保证 alt 有真实画面描述而不是兜底的「画面截图」。
     """
     import time as _time
 
-    from app.service.llm.client import LLMError
+    from app.service.media import store_media
 
-    prompt = (
-        "这是视频的一个画面截图。请描述画面中展示的内容，重点关注：\n"
-        "- 代码/命令行/终端内容（如果有，尽量读出文字）\n"
-        "- 图表/架构图/流程图（描述结构和关键信息）\n"
-        "- 项目页面/网站截图（描述页面内容和功能）\n"
-        "- 如果是纯人物说话的画面，简短描述即可\n"
-        "只输出描述，不要解释。"
-    )
-
-    descriptions: list[FrameDescription] = []
+    results: list[FrameContent] = []
     started = _time.monotonic()
     for timestamp, frame_path in frames:
         if _time.monotonic() - started > deadline_s:
@@ -396,24 +527,51 @@ def describe_frames(
             raw = frame_path.read_bytes()
             if len(raw) > 10 * 1024 * 1024:  # 超过 10MB 跳过
                 continue
+            media_key = store_media(raw, "")  # 帧字节内容寻址存库（真嵌图）
             b64 = base64.b64encode(raw).decode("ascii")
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
-                    ],
-                }
-            ]
-            chat = client.chat(messages, temperature=0.0, max_tokens=get_settings().llm_max_output_tokens)
-            desc = chat.content.strip()
-            if desc:
-                descriptions.append(FrameDescription(timestamp=timestamp, description=desc))
-        except Exception:
-            continue  # 单帧失败跳过
+            image_part = {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
 
-    return descriptions
+            chat = client.chat(
+                [{"role": "user", "content": [{"type": "text", "text": _FRAME_TRANSCRIBE_PROMPT}, image_part]}],
+                temperature=0.0,
+                max_tokens=get_settings().llm_max_output_tokens,
+            )
+            text_layer, desc = _parse_frame_output(chat.content)
+            if not desc and not text_layer:
+                # 格式没被遵守且没解析出内容 → 兜底重试纯描述
+                chat2 = client.chat(
+                    [{"role": "user", "content": [{"type": "text", "text": _FRAME_DESC_ONLY_PROMPT}, image_part]}],
+                    temperature=0.0,
+                    max_tokens=get_settings().llm_max_output_tokens,
+                )
+                desc = chat2.content.strip()[:300]
+            results.append(
+                FrameContent(
+                    timestamp=timestamp, alt=desc or "画面截图", text_layer=text_layer, media_key=media_key
+                )
+            )
+        except Exception:
+            continue  # 单帧失败跳过（不丢其他帧）
+
+    return results
+
+
+def _extract_frames(video_path: Path | None, output_dir: Path, client) -> list[FrameContent]:
+    """公共帧逻辑：场景检测抽帧 + dHash 去重 + 视觉逐字转录 + store_media 真嵌图。
+
+    douyin / B站兜底 / yt-dlp 三条路径共用（替换各路径里重复的
+    extract_key_frames+describe_frames 调用）。任何一步失败返回 []，不阻塞转写。
+    """
+    if video_path is None:
+        return []
+    try:
+        scenes = detect_scenes(video_path)
+        frames = extract_scene_frames(video_path, scenes, output_dir)
+        if not frames:
+            return []
+        return transcribe_frames(frames, client=client)
+    except Exception:  # noqa: BLE001 —— 帧提取失败不影响转写（与旧逻辑一致）
+        return []
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -430,10 +588,15 @@ def build_video_markdown(
     owner_name: str,
     duration: int,
     transcript_segments: list[dict],
-    frame_descriptions: list[FrameDescription],
+    frame_contents: list[FrameContent],
     url: str,
 ) -> str:
-    """合并 whisper 转写 + 帧描述 → 富 markdown。"""
+    """合并 whisper 转写 + 关键帧（嵌图标记 + 文字层）→ 富 markdown。
+
+    关键帧按时间戳对齐到 transcript 段（最近前置时间戳）：在对应字幕前插入
+    帧的文字层（逐字转录的代码）+ ``![alt](baleen-image:N)`` 图片标记。
+    N 是帧序号，下游 G0/organizer 用 ``frame_images[N]`` 的 media_key 还原成 image 块。
+    """
     parts: list[str] = [f"# {title}\n"]
 
     # 元数据
@@ -442,26 +605,37 @@ def build_video_markdown(
     if description:
         parts.append(f"> {description[:200]}\n")
 
-    # 帧描述（按时间戳插入，标记为画面信息）
-    frame_by_time = {int(fd.timestamp): fd for fd in frame_descriptions}
+    # 关键帧按时间戳对齐（int 秒做匹配键，与旧逻辑同款「最近前置时间戳」）
+    frame_by_time = {int(fc.timestamp): (i, fc) for i, fc in enumerate(frame_contents)}
 
-    # whisper 转写为主体
     current_time = 0.0
     for seg in transcript_segments:
         seg_start = seg["start"]
-        # 在这段字幕之前插入对应时间的帧描述
+        # 在这段字幕前插入对应时间的帧（文字层 + 嵌图标记）
         for frame_time in list(frame_by_time.keys()):
             if frame_time <= seg_start and frame_time >= current_time:
-                fd = frame_by_time.pop(frame_time)
-                parts.append(f"\n> 📷 [{_format_timestamp(fd.timestamp)}] 画面：{fd.description}\n")
+                idx, fc = frame_by_time.pop(frame_time)
+                _emit_frame(parts, idx, fc)
         parts.append(seg["text"])
 
-    # 剩余的帧描述（字幕结束后的）
+    # 剩余帧（字幕结束后的画面）
     for frame_time in sorted(frame_by_time.keys()):
-        fd = frame_by_time[frame_time]
-        parts.append(f"\n> 📷 [{_format_timestamp(fd.timestamp)}] 画面：{fd.description}\n")
+        idx, fc = frame_by_time[frame_time]
+        _emit_frame(parts, idx, fc)
 
     return "\n".join(parts)
+
+
+def _emit_frame(parts: list[str], idx: int, fc: FrameContent) -> None:
+    """把一个关键帧的文字层（逐字转录）+ 嵌图标记追加到 parts。
+
+    alt 带时间戳前缀 ``[mm:ss]``，方便审样本时核对图文对齐；organizer 重写时 alt 可改，
+    但 ``baleen-image:N`` 标记必须保留（视频专用 prompt 约束）。
+    """
+    ts = _format_timestamp(fc.timestamp)
+    if fc.text_layer:
+        parts.append(f"\n{fc.text_layer}\n")
+    parts.append(f"\n![[{ts}] {fc.alt}](baleen-image:{idx})\n")
 
 
 def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "", cookies_file: str = "") -> dict:
@@ -511,9 +685,10 @@ def _content_from_media(
     progress_cb=None,
     output_dir: Path,
 ) -> VideoContent:
-    """公共尾部：音频转写 + 可选帧 + markdown（douyin / B站浏览器兜底共用）。
+    """公共尾部：音频转写 + 场景抽帧 + 视觉转录 + 嵌图 markdown（douyin / B站兜底 / yt-dlp 共用）。
 
-    调用方负责 output_dir 的创建与清理（finally rmtree）。
+    调用方负责 output_dir 的创建与清理（finally rmtree）；帧字节已 ``store_media`` 持久化，
+    output_dir 删除不影响已存的图片。
     """
     import shutil
 
@@ -526,14 +701,7 @@ def _content_from_media(
         if progress_cb:
             progress_cb("识别画面中…", 72)
 
-        frame_descriptions: list[FrameDescription] = []
-        if client is not None and video_path is not None:
-            try:
-                frames = extract_key_frames(video_path, output_dir, interval=_frame_interval(duration_s))
-                if frames:
-                    frame_descriptions = describe_frames(frames, client=client)
-            except Exception:  # noqa: BLE001 —— 帧描述失败不影响转写
-                pass
+        frame_contents: list[FrameContent] = _extract_frames(video_path, output_dir, client)
 
         markdown = build_video_markdown(
             title=title,
@@ -541,7 +709,7 @@ def _content_from_media(
             owner_name=owner_name,
             duration=duration_s,
             transcript_segments=transcript_segments,
-            frame_descriptions=frame_descriptions,
+            frame_contents=frame_contents,
             url=url,
         )
     finally:
@@ -553,8 +721,18 @@ def _content_from_media(
         owner_name=owner_name,
         duration=duration_s,
         transcript_segments=transcript_segments,
-        frame_descriptions=frame_descriptions,
+        frame_contents=frame_contents,
         markdown=markdown,
+        frame_images=[
+            {
+                "index": i,
+                "media_key": fc.media_key,
+                "alt": fc.alt,
+                "text_layer": fc.text_layer,
+                "timestamp": fc.timestamp,
+            }
+            for i, fc in enumerate(frame_contents)
+        ],
     )
 
 
@@ -593,9 +771,10 @@ def _extract_generic_content(
     client=None,
     progress_cb=None,
 ) -> VideoContent:
-    """通用 yt-dlp 路径（B站/其他平台）：元信息 → 音频 → whisper → 可选帧 → markdown。"""
-    import shutil
+    """通用 yt-dlp 路径（B站/其他平台）：元信息 → 下载音频(+可选视频) → 公共尾部。
 
+    复用 ``_content_from_media``（转写 + 场景抽帧 + 嵌图），与 douyin / B站兜底同构。
+    """
     output_dir = Path(tempfile.mkdtemp(prefix="video_extract_"))
 
     # ① 获取视频元信息（yt-dlp --dump-json，平台无关）
@@ -607,7 +786,7 @@ def _extract_generic_content(
     resolved_url = info["webpage_url"]
 
     # 时长检查：faster-whisper small GPU ~15x 实时后，瓶颈在下载——
-    # 上限提到 90 分钟（worker 的 timeout=7200（2 小时）够 90 分钟视频全程）。
+    # 上限 90 分钟（worker timeout=7200（2 小时）够全程）。
     MAX_WHISPER_DURATION = 5400  # 90 分钟
     if duration > MAX_WHISPER_DURATION:
         minutes = duration // 60
@@ -622,17 +801,8 @@ def _extract_generic_content(
         sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file,
         output_dir=output_dir,
     )
-    wav_path = extract_audio(audio_file, output_dir)
-
-    # ③ whisper 转写（est=时长为保守上限，实际 GPU 上通常数倍于实时）
-    if progress_cb:
-        progress_cb("whisper 转写中…", 30, est_seconds=duration)
-    transcript_segments = transcribe_audio(wav_path)
-    if progress_cb:
-        progress_cb("识别画面中…", 72)
-
-    # ④ 尝试下载视频 → 提取帧 → 视觉描述（可选，失败跳过）
-    frame_descriptions: list[FrameDescription] = []
+    # ③ 尝试下载视频（可选，帧提取用；失败跳过，不影响转写）
+    video_path = None
     if client is not None:
         try:
             video_path = download_video(
@@ -640,34 +810,21 @@ def _extract_generic_content(
                 sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file,
                 output_dir=output_dir,
             )
-            frames = extract_key_frames(video_path, output_dir, interval=_frame_interval(duration))
-            if frames:
-                frame_descriptions = describe_frames(frames, client=client)
         except Exception:
             pass  # 视频下载失败不影响音频转写
 
-    # ⑤ 合并 → markdown
-    markdown = build_video_markdown(
+    # ④ 公共尾部：转写 + 场景抽帧 + 嵌图（finally rmtree output_dir）
+    return _content_from_media(
         title=title,
         description=description,
         owner_name=owner_name,
-        duration=duration,
-        transcript_segments=transcript_segments,
-        frame_descriptions=frame_descriptions,
+        duration_s=duration,
+        audio_path=audio_file,
+        video_path=video_path,
         url=resolved_url,
-    )
-
-    # 清理临时文件
-    shutil.rmtree(output_dir, ignore_errors=True)
-
-    return VideoContent(
-        title=title,
-        description=description,
-        owner_name=owner_name,
-        duration=duration,
-        transcript_segments=transcript_segments,
-        frame_descriptions=frame_descriptions,
-        markdown=markdown,
+        client=client,
+        progress_cb=progress_cb,
+        output_dir=output_dir,
     )
 
 
@@ -748,14 +905,15 @@ def extract_video_content(
 
 
 __all__ = [
-    "FrameDescription",
+    "FrameContent",
     "VideoContent",
     "build_video_markdown",
-    "describe_frames",
+    "detect_scenes",
     "download_audio",
     "download_video",
     "extract_audio",
-    "extract_key_frames",
+    "extract_scene_frames",
     "extract_video_content",
     "transcribe_audio",
+    "transcribe_frames",
 ]

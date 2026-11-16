@@ -256,6 +256,7 @@ async def extract_and_import_video(
     import uuid
 
     from app.service.imports import run_import_async
+    from app.service.imports.pipeline import VIDEO_FRAMES_SUFFIX
     from app.service.llm.resolve import resolve_charter, resolve_llm_budgets, resolve_llm_config
 
     # 解析 LLM 配置（同 import_file）
@@ -329,6 +330,15 @@ async def extract_and_import_video(
     staging_dir.mkdir(parents=True, exist_ok=True)
     staging = staging_dir / filename
     staging.write_text(markdown_content, encoding="utf-8")
+
+    # 视频关键帧清单 sidecar：pipeline G0/ organizer 靠它把 baleen-image:N 还原成
+    # image 块（含 media_key）并多模态喂图。写在 md 同目录 → worker 清理暂存时一并删。
+    frame_images = getattr(vc, "frame_images", None) if mode == "whisper" else None
+    if frame_images:
+        import json
+
+        sidecar = staging.with_name(staging.name + VIDEO_FRAMES_SUFFIX)
+        sidecar.write_text(json.dumps(frame_images, ensure_ascii=False), encoding="utf-8")
 
     # ---- Phase 3: 跑 pipeline（用预创建 source + job）----
     result = await run_import_async(

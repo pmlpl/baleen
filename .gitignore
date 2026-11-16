@@ -94,3 +94,7 @@ temp/
 bilibili_video_*/
 bilibili_audio_*/
 bilibili_extract_*/
+
+# 视频→笔记升级的样本审阅产物（临时,不进仓库;主人看过可删）
+/sample_spacex_*.md
+/sample_frames/
