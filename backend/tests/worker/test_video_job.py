@@ -480,20 +480,87 @@ def test_dhash_crop_bottom_ignores_subtitle_changes(tmp_path: Path) -> None:
 
 
 def test_parse_frame_output_fallback_formats() -> None:
-    """_parse_frame_output：标准格式解析出 text_layer+desc；不守格式时整体当 desc。"""
+    """_parse_frame_output：标准格式解析出 text_layer+desc+信息密度；不守格式时整体当 desc。"""
     from app.service.video_extractor import _parse_frame_output
 
-    tl, desc = _parse_frame_output("TEXT_LAYER:\nprint('hi')\n\nDESC:\n一个代码编辑器")
+    tl, desc, info = _parse_frame_output(
+        "INFO: high\n\nTEXT_LAYER:\nprint('hi')\n\nDESC:\n一个代码编辑器"
+    )
     assert tl == "print('hi')"
     assert desc == "一个代码编辑器"
+    assert info is True
 
-    tl2, desc2 = _parse_frame_output("只有一句描述，没有遵守格式")
+    tl2, desc2, info2 = _parse_frame_output("只有一句描述，没有遵守格式")
     assert tl2 == ""
     assert desc2 == "只有一句描述，没有遵守格式"
+    assert info2 is True  # 解析不出 INFO → 保守当有信息（宁留勿删）
 
-    tl3, desc3 = _parse_frame_output("TEXT_LAYER:\n无\n\nDESC:\n纯人物说话画面")
+    tl3, desc3, info3 = _parse_frame_output("TEXT_LAYER:\n无\n\nDESC:\n纯人物说话画面")
     assert tl3 == ""  # 「无」→ 空
     assert desc3 == "纯人物说话画面"
+    assert info3 is True
+
+
+def test_parse_frame_output_low_info_detection() -> None:
+    """INFO: low（表情包/黑屏/纯标题卡）→ is_informative=False。"""
+    from app.service.video_extractor import _parse_frame_output
+
+    tl, desc, info = _parse_frame_output(
+        "INFO: low\n\nTEXT_LAYER:\n无\n\nDESC:\n挠头的卡通表情包，表达焦虑"
+    )
+    assert info is False
+    assert tl == ""
+    assert desc == "挠头的卡通表情包，表达焦虑"
+
+    # 小写/中文冒号也认
+    _tl, _desc, info2 = _parse_frame_output("INFO：low\n\nTEXT_LAYER:\n无\n\nDESC:\n纯黑屏")
+    assert info2 is False
+
+
+def test_low_info_frames_are_dropped(monkeypatch, tmp_path) -> None:
+    """transcribe_frames：INFO=low 且无文字层的帧被丢弃（不 store_media、不进结果）。
+
+    主人反馈：22 分钟视频 30 帧里 5-6 张表情包/黑屏过场零信息，撑长笔记。
+    """
+    from PIL import Image
+
+    import app.service.media as media_module
+    from app.service.video_extractor import transcribe_frames
+
+    monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
+
+    # 两张帧文件
+    frames = []
+    for i in range(2):
+        p = tmp_path / f"f{i}.jpg"
+        Image.new("RGB", (16, 16), (i * 100, 0, 0)).save(p)
+        frames.append((float(i * 10), p))
+
+    replies = [
+        "INFO: high\n\nTEXT_LAYER:\n```python\nx = 1\n```\n\nDESC:\n代码编辑器",
+        "INFO: low\n\nTEXT_LAYER:\n无\n\nDESC:\n卡通表情包，表达焦虑",
+    ]
+
+    class FakeClient:
+        def __init__(self):
+            self.i = 0
+
+        def chat(self, messages, **_kw):
+            r = replies[self.i]
+            self.i += 1
+            from types import SimpleNamespace
+
+            return SimpleNamespace(content=r)
+
+    out = transcribe_frames(frames, client=FakeClient())
+    assert len(out) == 1  # 低信息帧被丢
+    assert out[0].alt == "代码编辑器"
+    assert "x = 1" in out[0].text_layer
+    assert out[0].media_key  # 留下的帧存了字节
+
+    # 低信息帧的字节没落盘：media 目录只有 1 个文件
+    media_files = [p for p in (tmp_path / "media").rglob("*") if p.is_file()]
+    assert len(media_files) == 1
 
 
 def test_extract_scene_frames_caps_at_max() -> None:

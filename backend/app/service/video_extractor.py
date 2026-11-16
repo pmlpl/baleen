@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 import re
 import subprocess
 import tempfile
@@ -25,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.config import get_settings
+
+log = logging.getLogger(__name__)
 
 # 从分享文本提取 URL（用户常把整段分享文本直接粘贴进来）。
 # 停在空白/中日韩字符/常见中文标点处——抖音短链后常直接跟「复制此链接」。
@@ -454,22 +457,31 @@ def extract_scene_frames(
     return result
 
 
-def _parse_frame_output(content: str) -> tuple[str, str]:
-    """解析视觉模型输出 → (text_layer, desc)。
+def _parse_frame_output(content: str) -> tuple[str, str, bool]:
+    """解析视觉模型输出 → (text_layer, desc, is_informative)。
 
     约定输出格式：
+        INFO: high|low
         TEXT_LAYER:
         <逐字转录的文字，没有则「无」>
 
         DESC:
         <简短画面描述>
-    模型不严格守格式时兜底：整体当 desc，text_layer 留空。
+    ``is_informative``：画面是否值得嵌进笔记（有实质文字/图表/代码/界面 = high；
+    表情包/黑屏/纯标题卡/转场动画 = low）。解析不出 INFO 时**保守当 informative=True**
+    （宁留勿删，避免漏掉信息帧）。
     """
     import re
 
     text = content.strip()
     text_layer = ""
     desc = text  # 兜底：整体当描述
+    is_informative = True  # 默认保守：判定不出就当有信息
+
+    info_m = re.search(r"INFO\s*[:：]\s*(high|low)", text, re.IGNORECASE)
+    if info_m:
+        is_informative = info_m.group(1).lower() == "high"
+
     m = re.search(r"TEXT_LAYER\s*[:：]\s*(.*?)(?:\n\s*DESC\s*[:：]|$)", text, re.DOTALL | re.IGNORECASE)
     if m:
         text_layer = m.group(1).strip()
@@ -477,18 +489,25 @@ def _parse_frame_output(content: str) -> tuple[str, str]:
         desc = m2.group(1).strip() if m2 else ""
     if text_layer.lower() in ("无", "none", "（无）", "(无)", ""):
         text_layer = ""
-    return text_layer, desc
+    return text_layer, desc, is_informative
 
 
-# 视觉逐字转录 prompt：从「描述画面」升级为「逐字转录屏幕代码」(保留缩进/符号)
+# 视觉逐字转录 prompt：从「描述画面」升级为「逐字转录屏幕代码 + 信息密度判定」
 _FRAME_TRANSCRIBE_PROMPT = (
-    "这是视频的一个关键画面截图。请做两件事：\n"
-    "1. 【逐字转录】画面里如果有代码/命令行/终端/幻灯片文字，逐字转录出来，"
-    "严格保留缩进、符号、大小写，不要改写或修正，不要添加解释。"
-    "是代码就用代码块包裹（标注语言，如 ```python）；是纯文字就直接给。\n"
-    "2. 【画面描述】用一句话描述这个画面展示什么（图表/架构图/动画的某一帧/纯人物说话/页面截图）。\n\n"
+    "这是视频的一个关键画面截图。请做三件事：\n"
+    "1. 【信息密度】判断这个画面值不值得放进笔记：\n"
+    "   - high：画面有实质可读内容——代码、命令行、幻灯片要点、表格、图表、架构图、"
+    "流程示意、软件界面（这些值得截图保留）\n"
+    "   - low：画面几乎没有信息——表情包/梗图、纯黑屏/纯色背景、纯标题卡"
+    "（只有视频标题或一句口号）、转场动画、纯人物说话的特写\n"
+    "2. 【逐字转录】画面里如果有代码/命令行/终端/幻灯片文字/表格，逐字转录出来，"
+    "严格保留缩进、符号、大小写、表格结构，不要改写或修正，不要添加解释。"
+    "是代码就用代码块包裹（标注语言，如 ```python）；表格用 markdown 表格；是纯文字就直接给。\n"
+    "3. 【画面描述】用一句话描述这个画面展示什么（图表/架构图/动画的某一帧/纯人物说话/页面截图）。\n\n"
     "严格按以下格式输出（不要加额外说明）：\n"
-    "TEXT_LAYER:\n<转录的文字；画面里没有可读文字就写「无」>\n\nDESC:\n<一句话画面描述>"
+    "INFO: high 或 low\n\n"
+    "TEXT_LAYER:\n<转录的文字；画面里没有可读文字就写「无」>\n\n"
+    "DESC:\n<一句话画面描述>"
 )
 
 # 解析失败时的兜底重试 prompt：只要描述（保证至少有 alt，不再产出「画面截图」空壳）
@@ -506,9 +525,12 @@ def transcribe_frames(
     client,
     deadline_s: float = 600,
 ) -> list[FrameContent]:
-    """DeepSeek-flash 视觉：逐字转录屏幕代码 + 描述画面；帧字节 store_media 存库。
+    """DeepSeek-flash 视觉：逐字转录屏幕代码 + 信息密度判定 + 描述画面；帧字节 store_media 存库。
 
     替换旧的 describe_frames（只描述成文字）：现在是逐字转录（保留缩进）+ 真嵌图（media_key）。
+    **信息密度筛选**（2026-11-16 主人反馈后加）：模型判 INFO=low 的帧（表情包/黑屏/纯标题卡/
+    转场/纯人物特写）直接丢弃，不存 media、不进笔记——否则 22 分钟视频 30 帧里有 5-6 张
+    零信息装饰图，笔记被撑得又长又水。
     ⚠️ 带总时限 deadline_s：LLM 网关挂起时单帧最多等满 client 超时，N 帧×超时=假死，
     超过总时限放弃剩余帧（帧是锦上添花，不能拖死导入）。
     ⚠️ 模型偶尔不守 TEXT_LAYER/DESC 格式（只回一句描述/废话）→ 兜底用纯描述 prompt
@@ -520,6 +542,7 @@ def transcribe_frames(
 
     results: list[FrameContent] = []
     started = _time.monotonic()
+    kept = dropped = 0
     for timestamp, frame_path in frames:
         if _time.monotonic() - started > deadline_s:
             break  # 总时限到，放弃剩余帧
@@ -527,7 +550,6 @@ def transcribe_frames(
             raw = frame_path.read_bytes()
             if len(raw) > 10 * 1024 * 1024:  # 超过 10MB 跳过
                 continue
-            media_key = store_media(raw, "")  # 帧字节内容寻址存库（真嵌图）
             b64 = base64.b64encode(raw).decode("ascii")
             image_part = {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
 
@@ -536,7 +558,11 @@ def transcribe_frames(
                 temperature=0.0,
                 max_tokens=get_settings().llm_max_output_tokens,
             )
-            text_layer, desc = _parse_frame_output(chat.content)
+            text_layer, desc, is_informative = _parse_frame_output(chat.content)
+            if not is_informative and not text_layer:
+                # 低信息帧且无可转录文字 → 丢弃（装饰图不嵌进笔记，也不存 blob）
+                dropped += 1
+                continue
             if not desc and not text_layer:
                 # 格式没被遵守且没解析出内容 → 兜底重试纯描述
                 chat2 = client.chat(
@@ -545,6 +571,8 @@ def transcribe_frames(
                     max_tokens=get_settings().llm_max_output_tokens,
                 )
                 desc = chat2.content.strip()[:300]
+            media_key = store_media(raw, "")  # 只给留下的信息帧存字节
+            kept += 1
             results.append(
                 FrameContent(
                     timestamp=timestamp, alt=desc or "画面截图", text_layer=text_layer, media_key=media_key
@@ -553,6 +581,8 @@ def transcribe_frames(
         except Exception:
             continue  # 单帧失败跳过（不丢其他帧）
 
+    if dropped:
+        log.info("帧信息密度筛选：保留 %d / 丢弃 %d 张低信息帧", kept, dropped)
     return results
 
 

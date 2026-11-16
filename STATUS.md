@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-16 · 视频→笔记升级(方案 A):PySceneDetect 场景抽帧(threshold=27)+dHash 去重(裁底部25%防字幕干扰)替换固定间隔 8 帧;DeepSeek-flash 视觉**逐字转录**屏幕代码/界面;帧字节 store_media **真嵌图**(`![alt](baleen-image:N)`);organizer 视频**多模态**(喂帧图+视频规则约束标记不丢、图随章走);e2e 实证 note=5467 标题/8章节/2图全通;基线 **491 passed**
+**最后更新**：2026-11-16 · 视频→笔记升级(方案 A)+质量修正:PySceneDetect 场景抽帧(threshold=27)+dHash 去重(裁底部25%)+DeepSeek 视觉逐字转录+store_media 真嵌图+organizer 视频多模态;**质量修正(主人 22 分钟真实视频反馈):帧加 `INFO: high|low` 信息密度筛选(low 表情包/黑屏/纯标题卡丢弃不落盘,实测 30→22)+标题层级硬约束(总标题不当章、10+ 条目清单禁止一条一章→H1 17→4~5)+图片扎堆规则(同小节≤2张)**;基线 **493 passed**
 
 ### 已完成模块
 
@@ -61,13 +61,13 @@
 | **数学公式渲染** | `frontend/src/utils/math.ts` + `markdown.ts` | ✅ KaTeX 行内 `$...$`/块级 `$$...$$`,NoteView/QaView 共用;原文级占位保护(公式里 `[1]`/`**` 不被行内替换吃);pandoc 式启发式防美元价签误判;块级收集不越空行/标题/自闭合行(防吞正文成烂公式报红);20 边界用例探针(`scripts/probe_math_render.mjs`,含 QA 真实消息回归)全过 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
 | **视频笔记页 + whisper（v22→v26）** | `app/service/video_extractor.py` + `douyin_extractor.py` + `VideoView.vue` | ✅ whisper 异步（API 立即 201，worker 2h 超时，video_stage/progress 进度）；**faster-whisper small**（GPU float16 实测 15x 实时，构造失败/推理失败双重退 CPU int8）；B 站 yt-dlp 路径；**抖音 Playwright 免 cookie**（系统 Edge 拦截详情接口，用户零配置）；前端进度条（whisper 阶段按视频时长插值） |
-| **视频→笔记升级·真嵌图（v27）** | `video_extractor.py` + `organizer.py` + `pipeline.py` + `worker.py` | ✅ **PySceneDetect 场景抽帧**(ContentDetector threshold=27 HSV, min_scene_len=2s)每场景中点抽帧 + **dHash 去重**(算hash前裁底部25%——字幕逐句变会把同一白板判成多帧,实测距离8→1) + 上限30帧均匀采样;替换旧固定间隔~8帧。**DeepSeek-flash 视觉逐字转录**屏幕代码/界面(保留缩进/符号,输出格式解析失败用纯描述prompt重试一次保alt);帧字节 `store_media` **真嵌图** `![alt](baleen-image:N)`。**organizer 视频多模态**:`_VIDEO_RULES` 约束标记不删/不汇总文末/图随章走 + 标记→画面对照表 + 帧图 base64 多模态喂入;organizer 输出的 `baleen-image:N` 按帧清单还原成 image 块(带 media key)。worker 写 `<md>.frames.json` sidecar,pipeline G0 读它还原。**e2e 实证**:SpaceX 3分钟 → note 5467,标题「如何信任 AI 编码智能体」、8章节、2图(63KB/68KB 在盘)、chunks 19/emb 9;**491 passed**(+10)|
+| **视频→笔记升级·真嵌图（v27→v28）** | `video_extractor.py` + `organizer.py` + `pipeline.py` + `worker.py` | ✅ **PySceneDetect 场景抽帧**(threshold=27 HSV)每场景中点 + **dHash 去重**(裁底部25%——字幕逐句变会把同一白板判成多帧,实测距离8→1) + 上限30帧。**DeepSeek-flash 视觉逐字转录**(保留缩进/符号;格式失败用纯描述 prompt 重试)+帧字节 `store_media` **真嵌图** `![alt](baleen-image:N)`。**organizer 视频多模态**:标记不删/不汇总文末/图随章走 + 标记→画面对照表 + 帧图 base64;输出按帧清单还原 image 块。worker 写 `<md>.frames.json` sidecar,pipeline G0 读它还原。**v28 质量修正(主人 22 分钟真实视频反馈)**:① **帧信息密度筛选** `INFO: high|low`——low(表情包/黑屏/纯标题卡/转场/纯人物特写)丢弃**不落盘**,实测 30→22 张,丢的正是挠头表情包/建议收藏爱心/4张纯标题卡;② **标题层级硬约束**——总标题不当章、**10+ 条目清单禁止一条一章**(显式覆盖「3+大主题必须多章」),H1 **17→4~5**、H2 31→17~19、H3 0→31~39,15 热词归组为基础层/连接层/执行层/业务层;③ **图片扎堆规则**——同小节≤2张、连续3+张须分散(改前 6 张连甩在导读,改后各节 1~2 张、图跟内容走);**493 passed**|
 | **个人中心** | `app/api/profile.py` + `frontend/src/views/ProfileView.vue` | ✅ GET /api/profile 聚合（用户信息/使用统计/章程预览前 300 字/配置掩码,六字段同设置页口径）；前端 /profile 页导航入口,只读展示,编辑跳章程/设置页;6 测试;真后端+浏览器双冒烟通过 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  491 passed
+cd backend && uv run pytest -q     →  493 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -93,6 +93,7 @@ cd backend && uv run pytest -q     →  491 passed
 → **467**（个人中心聚合端点 6 测:统计口径/owner 隔离/章程截断/密钥不泄漏;2026-11-14）
 → **468**（导入自动建会话撤回:ADR 0005 阶段3,删 summarizer 导入路径;2026-11-15）
 → **491**（视频→笔记升级:场景抽帧+dHash去重+真嵌图+organizer多模态;2026-11-16）
+→ **493**（视频质量修正:帧信息密度筛选+标题层级硬约束+图片扎堆规则;2026-11-16）
 
 **任何新任务都不许把这个数降下来。**
 
