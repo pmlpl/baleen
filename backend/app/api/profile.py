@@ -50,6 +50,8 @@ class ProfileSettings(BaseModel):
     api_key_tail: str
     tavily_set: bool
     tavily_tail: str
+    llm_context_tokens: int | None  # 与 SettingsOut 同口径
+    llm_max_output_tokens: int | None
 
 
 class ProfileOut(BaseModel):
@@ -98,5 +100,7 @@ async def read_profile(
             api_key_tail=api_tail,
             tavily_set=tavily_set,
             tavily_tail=tavily_tail,
+            llm_context_tokens=row.llm_context_tokens if row else None,
+            llm_max_output_tokens=row.llm_max_output_tokens if row else None,
         ),
     )

@@ -19,16 +19,21 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.core.config import get_settings
 from app.service.llm import LLMClient, LLMError, estimate_tokens, truncate_to_tokens
 from app.service.parse.blocks import flatten_text
 from app.service.parse.md_parser import parse_md_text
 from app.service.parse.types import ParseResult
 from app.service.rewrite.outline import CN_NUMBERS, NUMBER_PREFIX
 
-# ---- prompt 预算 ----
-PROMPT_TOKEN_BUDGET = 6000  # 总输入（system + user）的估算 token 上限
-MIN_SAMPLE_TOKENS = 200  # 正文采样挤压后不足此值 → 放弃采样只报 warning
+# ---- 预算兜底 ----
+# 输入:prompt_budget=None(用户没在设置页填 llm_context_tokens)→ 不截断,整篇喂模型。
+#   用户填了值 → 按该值截断(_build_user_message 现有逻辑,供精确控制)。
+# 输出:ORGANIZER_DEFAULT_OUTPUT_TOKENS —— 用户没在设置页填 llm_max_output_tokens 时的统一兜底。
+#   非「按模型预设表」:统一值,用户可在设置页填自己模型/厂商的上限覆盖。
+#   131072(128K)对主流大模型(deepseek-flash 输出上限 384K 等)稳妥,够重写几十万字。
+#   不读 env settings.llm_max_output_tokens——它被 vision/extractor/outline 共用,改它会波及单页短任务。
+ORGANIZER_DEFAULT_OUTPUT_TOKENS = 131072
+MIN_SAMPLE_TOKENS = 200  # 正文采样挤压后不足此值 → 放弃采样只报 warning(仅在用户填了 context 时生效)
 
 # 契约规则（从 note-format.md §2/§3/§5 浓缩，嵌入 prompt）
 _CONTRACT_RULES = """\
@@ -172,9 +177,13 @@ def _build_user_message(
     filename: str,
     ext: str,
     size_bytes: int | None,
-    budget: int,
+    budget: int | None,
 ) -> tuple[str, dict]:
-    """组装 user 消息，返回 (消息文本, 统计信息)。"""
+    """组装 user 消息，返回 (消息文本, 统计信息)。
+
+    budget=None → 不截断，整篇喂模型（用户没在设置页填 llm_context_tokens 时的默认）。
+    budget=int  → 按该值（token）截断正文（用户填了 context 上限时启用，保留旧行为）。
+    """
     text = flatten_text(parse_result.blocks)
     chars = len(text)
 
@@ -198,26 +207,27 @@ def _build_user_message(
     )
     footer = "\n</file_content>"
 
-    fixed_tokens = estimate_tokens(header + instruction + footer)
-    sample_budget = budget - fixed_tokens
-    sample = ""
+    # budget=None → 全文喂，不截断（默认路径：用户没填 context 上限）
+    sample = text
     truncated = False
     note = ""
 
-    if sample_budget >= MIN_SAMPLE_TOKENS:
-        candidate = text[: sample_budget * 4]
-        sample, truncated = truncate_to_tokens(candidate, sample_budget)
-        if truncated or len(sample) < len(text):
+    if budget is not None:
+        fixed_tokens = estimate_tokens(header + instruction + footer)
+        sample_budget = budget - fixed_tokens
+        if sample_budget >= MIN_SAMPLE_TOKENS:
+            candidate = text[: sample_budget * 4]
+            sample, truncated = truncate_to_tokens(candidate, sample_budget)
+            if truncated or len(sample) < len(text):
+                truncated = True
+                note = (
+                    f"\n(注意:内容超出预算，已截断;原始 {chars} 字符，仅保留前 {len(sample)} 字符)"
+                )
+        else:
             truncated = True
-            note = (
-                f"\n(注意:内容超出预算，已截断;原始 {chars} 字符，仅保留前 {len(sample)} 字符)"
-            )
-    else:
-        truncated = True
-        note = "\n(注意:内容太短，已原样传入)"
-
-    if not sample:
-        sample = text  # 兜底：不让正文为空
+            note = "\n(注意:内容太短，已原样传入)"
+        if not sample:
+            sample = text  # 兜底：不让正文为空
 
     user = f"{header}{instruction}{sample}{footer}{note}"
     return user, {**meta_info, "truncated": truncated, "original_chars": chars, "kept_chars": len(sample)}
@@ -307,22 +317,28 @@ def organize_note(
     size_bytes: int | None = None,
     client: LLMClient | None = None,
     max_tokens: int | None = None,
+    prompt_budget: int | None = None,
+    output_budget: int | None = None,
 ) -> OrganizeResult:
     """AI 笔记整理：读契约 → LLM 重写 markdown → 返回 blocks。
 
     ``client`` 为 None 时用 ``LLMClient.from_settings()``。
+    ``prompt_budget``:输入预算(None=不截断整篇喂;int=按值截断)。worker 从 app_settings 注入。
+    ``output_budget``:输出预算(worker 从 app_settings 注入;None=用 ORGANIZER_DEFAULT_OUTPUT_TOKENS)。
+    ``max_tokens``:测试直接传的输出上限,优先级高于 output_budget。
     ⚠️ 同步函数：async 调用方必须用 ``asyncio.to_thread`` 包装。
     """
     cli = client or LLMClient.from_settings()
-    settings = get_settings()
-    output_budget = max_tokens or settings.llm_max_output_tokens
+    # 输出预算:max_tokens(测试直传) > output_budget(worker 注入的 app_settings 值)
+    #   > ORGANIZER_DEFAULT_OUTPUT_TOKENS(兜底)。
+    effective_output = max_tokens or output_budget or ORGANIZER_DEFAULT_OUTPUT_TOKENS
 
     user_msg, stats = _build_user_message(
         parse_result,
         filename=filename,
         ext=ext,
         size_bytes=size_bytes,
-        budget=PROMPT_TOKEN_BUDGET,
+        budget=prompt_budget,
     )
     messages = [
         {"role": "system", "content": _SYSTEM},
@@ -336,7 +352,7 @@ def organize_note(
 
     for attempt in range(2):  # 首次 + 纠错重试 1 次
         try:
-            chat = cli.chat(messages, temperature=0.0, max_tokens=output_budget)
+            chat = cli.chat(messages, temperature=0.0, max_tokens=effective_output)
         except LLMError:
             # LLM 网络/认证/限流异常 → 向上抛（pipeline 层降级）
             raise

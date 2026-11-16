@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-16 · 前端数学公式渲染(KaTeX)+笔记标题回写(organizer 重写后首 H1 → notes.title,修视频导入 blob 标题);基线 **473 passed**
+**最后更新**：2026-11-16 · organizer 预算自适应(用户在设置页填 context/output,没填默认全文喂+131072 兜底),修长视频/长文档导入正文被截断(4986: 57K→3563);基线 **481 passed**
 
 ### 已完成模块
 
@@ -22,13 +22,13 @@
 | **向量化** | `app/service/embed/` | ✅ torch 2.14.1+cu126，cuda 52 items/s |
 | **G1 价值闸** | `app/service/gate/g1.py` | ✅ 真实样本**误拒率 0/15 = 0.0%** |
 | **G2 归属闸** | `app/service/gate/g2.py` | ✅ H-批2 + 线 J 政策修正；eval 系统用（pipeline 改用 organizer，见下） |
-| **AI 笔记整理（v21）** | `app/service/rewrite/organizer.py` + `pipeline.py` | ✅ 替代 G2+outline：LLM 读 note-format.md 契约重写 markdown（补标题/去噪/组织结构）；无可整理→不入库；LLM 异常→降级原文入库；没配 key 不允许上传；**organizer 重写后首 H1 回写 notes.title(`_title` 去编号),不再卡在原文派生值——修视频导入用平台文案当标题的 blob(4986 已修)** |
+| **AI 笔记整理（v21）** | `app/service/rewrite/organizer.py` + `pipeline.py` | ✅ 替代 G2+outline：LLM 读 note-format.md 契约重写 markdown（补标题/去噪/组织结构）；无可整理→不入库；LLM 异常→降级原文入库；没配 key 不允许上传；**organizer 重写后首 H1 回写 notes.title(`_title` 去编号),不再卡在原文派生值——修视频导入用平台文案当标题的 blob(4986 已修)**；**预算自适应(v22):去掉过时硬编码(PROMPT_TOKEN_BUDGET=6000/llm_max_output_tokens=8192)→ app_settings 加 llm_context_tokens/llm_max_output_tokens(用户填,没填默认全文喂不截断+131072 输出兜底),修长视频/长文档导入正文被截到几千字** |
 | **导入状态机** | `app/service/imports/pipeline.py` | ✅ I-批1；端到端实测，父块无向量已核对 |
 | **arq worker + 上传 API** | `app/worker/`、`app/api/upload.py` | ✅ I-批2；新建 201 / dedupe 200 / 轮询可用 |
 | **混合检索 + RRF** | `app/repo/search.py`、`app/service/retrieve/` | ✅ 线 K；真实 query 双路命中，RRF 与公式吻合 |
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
 | **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
-| **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效 |
+| **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效；**v22 加 llm_context_tokens/llm_max_output_tokens(per-user 预算,没填走兜底)** |
 | **API 端点总览** | `app/main.py` | ✅ 28 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 7 · 问答/会话/导出 8 · 设置 2 · 个人中心 1（数字由 `scripts/doc_lint.py` 守门） |
 | **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页/个人中心 + 登录注册 + 书架 + 笔记两栏阅读 |
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, DateTime, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -31,6 +31,12 @@ class AppSettings(Base):
     douyin_cookies: Mapped[str | None] = mapped_column(Text)
     # 知识库章程(问卷生成的自然语言,DB 优先于内置默认;NULL = 回退内置默认章程)
     charter: Mapped[str | None] = mapped_column(Text)
+    # LLM 预算(per-user 自适应;NULL = 走兜底):
+    #   llm_context_tokens —— 输入上下文上限;NULL = 不截断,整篇喂模型
+    #   llm_max_output_tokens —— 输出上限;NULL = 用 organizer 兜底(ORGANIZER_DEFAULT_OUTPUT_TOKENS)
+    # 不预设模型表:用户在设置页填自己模型/厂商的上限即可覆盖。
+    llm_context_tokens: Mapped[int | None] = mapped_column(Integer)
+    llm_max_output_tokens: Mapped[int | None] = mapped_column(Integer)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

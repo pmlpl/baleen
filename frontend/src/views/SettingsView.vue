@@ -21,6 +21,8 @@ const keySet = ref(false)
 const tavilyKey = ref('')
 const tavilyTail = ref('')
 const tavilySet = ref(false)
+const contextTokens = ref('')
+const outputTokens = ref('')
 const loading = ref(false)
 const saving = ref(false)
 const errorText = ref('')
@@ -37,6 +39,8 @@ async function load(): Promise<void> {
     keySet.value = s.api_key_set
     tavilyTail.value = s.tavily_tail
     tavilySet.value = s.tavily_set
+    contextTokens.value = s.llm_context_tokens != null ? String(s.llm_context_tokens) : ''
+    outputTokens.value = s.llm_max_output_tokens != null ? String(s.llm_max_output_tokens) : ''
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {
@@ -50,11 +54,16 @@ async function save(): Promise<void> {
   errorText.value = ''
   saved.value = false
   try {
+    const ctx = contextTokens.value.trim()
+    const out = outputTokens.value.trim()
     const s = await updateSettings({
       llm_base_url: baseUrl.value.trim() || null,
       llm_api_key: apiKey.value.trim() || null,
       llm_model: model.value.trim() || null,
       tavily_api_key: tavilyKey.value.trim() || null,
+      // 空 = 保持不变;0 = 清空回退兜底;正数 = 用户填的上限
+      llm_context_tokens: ctx === '' ? null : Number(ctx),
+      llm_max_output_tokens: out === '' ? null : Number(out),
     })
     keyTail.value = s.api_key_tail
     keySet.value = s.api_key_set
@@ -120,6 +129,28 @@ onMounted(() => {
           autocomplete="off"
         />
         <span v-if="tavilySet" class="muted key-hint">已设置(末四位 {{ tavilyTail }})</span>
+      </label>
+      <label class="field">
+        <span class="field-label">上下文上限(可选,token)</span>
+        <input
+          v-model="contextTokens"
+          class="input"
+          type="number"
+          min="0"
+          placeholder="留空=不截断,整篇喂模型"
+        />
+        <span class="muted key-hint">填你模型的上下文长度;留空默认全文喂</span>
+      </label>
+      <label class="field">
+        <span class="field-label">输出上限(可选,token)</span>
+        <input
+          v-model="outputTokens"
+          class="input"
+          type="number"
+          min="0"
+          placeholder="留空=默认 131072"
+        />
+        <span class="muted key-hint">填你模型的最大输出;留空默认 131072</span>
       </label>
       <button class="btn btn--primary" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : '保存' }}

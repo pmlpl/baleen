@@ -22,8 +22,10 @@ class SettingsRepo(Repo):
         llm_model: str | None = None,
         tavily_api_key: str | None = None,
         charter: str | None = None,
+        llm_context_tokens: int | None = None,
+        llm_max_output_tokens: int | None = None,
     ) -> AppSettings:
-        """按传入字段更新;None = 保持不变,空串 = 清空(回退默认/文件)。api_key 仅非空时更新。"""
+        """按传入字段更新;None = 保持不变,空串/0 = 清空(回退默认/兜底)。api_key 仅非空时更新。"""
         row = await self.get()
         if row is None:
             row = AppSettings(owner_id=self.owner_id)
@@ -38,5 +40,12 @@ class SettingsRepo(Repo):
             row.tavily_api_key = tavily_api_key or None
         if charter is not None:
             row.charter = charter or None
+        if llm_context_tokens is not None:
+            # 0/负 = 清空(回退兜底:不截断全文喂);正数 = 用户填的上限
+            row.llm_context_tokens = llm_context_tokens if llm_context_tokens > 0 else None
+        if llm_max_output_tokens is not None:
+            row.llm_max_output_tokens = (
+                llm_max_output_tokens if llm_max_output_tokens > 0 else None
+            )
         await self.session.flush()
         return row

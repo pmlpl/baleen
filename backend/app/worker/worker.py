@@ -114,12 +114,13 @@ async def import_file(
     # 延迟导入:上传 API 进程 import 本模块(拿 STAGING_ROOT/enqueue_import)时,
     # 不把 torch/解析栈拉进 api 进程
     from app.service.imports import run_import_async
-    from app.service.llm.resolve import resolve_charter, resolve_llm_config
+    from app.service.llm.resolve import resolve_charter, resolve_llm_budgets, resolve_llm_config
 
     # 读该用户的 charter 与 LLM 配置(api_key 不继承 .env;没配就传 None,流水线走降级口径)
     async with session_factory() as session:
         charter = await resolve_charter(session, owner_id)
         base_url, api_key, model = await resolve_llm_config(session, owner_id)
+        prompt_budget, output_budget = await resolve_llm_budgets(session, owner_id)
     # 导入是后台任务,允许长耗时:标题整理要整篇过一遍,60s 默认超时不够
     client = (
         LLMClient(
@@ -139,6 +140,8 @@ async def import_file(
         charter=charter,
         owner_id=owner_id,
         client=client,
+        prompt_budget=prompt_budget,
+        output_budget=output_budget,
     )
     if no_llm and not result.deduped and result.source_id is not None:
         await _mark_g2_skipped(result.source_id, owner_id)
@@ -253,12 +256,13 @@ async def extract_and_import_video(
     import uuid
 
     from app.service.imports import run_import_async
-    from app.service.llm.resolve import resolve_charter, resolve_llm_config
+    from app.service.llm.resolve import resolve_charter, resolve_llm_budgets, resolve_llm_config
 
     # 解析 LLM 配置（同 import_file）
     async with session_factory() as session:
         charter = await resolve_charter(session, owner_id)
         base_url, api_key, model = await resolve_llm_config(session, owner_id)
+        prompt_budget, output_budget = await resolve_llm_budgets(session, owner_id)
     client = (
         LLMClient(
             base_url=base_url,
@@ -334,6 +338,8 @@ async def extract_and_import_video(
         charter=charter,
         owner_id=owner_id,
         client=client,
+        prompt_budget=prompt_budget,
+        output_budget=output_budget,
         source_id=source_id,
     )
 

@@ -189,6 +189,8 @@ async def run_import_async(
     session_factory: async_sessionmaker[AsyncSession] | None = None,
     charter: str | None = None,
     client: LLMClient | None = None,
+    prompt_budget: int | None = None,
+    output_budget: int | None = None,
     embed_func: EmbedFunc | None = None,
     token_counter: TokenCounter | None = None,
     worker: str = WORKER,
@@ -417,6 +419,8 @@ async def run_import_async(
                             ext=path.suffix.lower(),
                             size_bytes=len(data),
                             client=client,
+                            prompt_budget=prompt_budget,
+                            output_budget=output_budget,
                         )
                     except Exception as exc:  # noqa: BLE001 — LLM 网络异常，降级原文入库
                         log.warning("AI 笔记整理异常(降级原文入库): %s", exc)

@@ -24,6 +24,9 @@ class SettingsOut(BaseModel):
     api_key_tail: str  # 末 4 位,便于确认是哪把 key
     tavily_set: bool
     tavily_tail: str  # 联网搜索(Tavily)key,同样只回末 4 位
+    # LLM 预算(per-user 自适应;None = 走兜底)
+    llm_context_tokens: int | None  # None = 不截断,整篇喂模型
+    llm_max_output_tokens: int | None  # None = 用 organizer 兜底(131072)
 
 
 class SettingsUpdate(BaseModel):
@@ -33,6 +36,9 @@ class SettingsUpdate(BaseModel):
     llm_api_key: str | None = Field(default=None, max_length=200)
     llm_model: str | None = Field(default=None, max_length=100)
     tavily_api_key: str | None = Field(default=None, max_length=200)
+    # LLM 预算:None/缺省 = 保持不变;0 = 清空(回退兜底)。用户填自己模型/厂商的上限。
+    llm_context_tokens: int | None = Field(default=None, ge=0, le=2_000_000)
+    llm_max_output_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
 
 
 def _tail(secret: str | None) -> tuple[bool, str]:
@@ -53,6 +59,8 @@ async def read_settings(session: SessionDep, owner_id: CurrentOwnerDep) -> Setti
         api_key_tail=api_tail,
         tavily_set=tavily_set,
         tavily_tail=tavily_tail,
+        llm_context_tokens=row.llm_context_tokens if row else None,
+        llm_max_output_tokens=row.llm_max_output_tokens if row else None,
     )
 
 
@@ -65,6 +73,8 @@ async def update_settings(
         llm_api_key=payload.llm_api_key,
         llm_model=payload.llm_model,
         tavily_api_key=payload.tavily_api_key,
+        llm_context_tokens=payload.llm_context_tokens,
+        llm_max_output_tokens=payload.llm_max_output_tokens,
     )
     await session.commit()
     return await read_settings(session, owner_id)

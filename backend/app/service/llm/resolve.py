@@ -54,8 +54,29 @@ async def resolve_charter(session: AsyncSession, owner_id: int) -> str:
     return get_settings().resolve_charter()
 
 
+async def resolve_llm_budgets(
+    session: AsyncSession, owner_id: int
+) -> tuple[int | None, int | None]:
+    """返回 (context_tokens, max_output_tokens),均为用户在设置页填的值。
+
+    None = 用户没填,由调用方(organizer)用自己的兜底口径处理:
+      - context_tokens=None → 不截断,整篇喂模型
+      - max_output_tokens=None → 用 ORGANIZER_DEFAULT_OUTPUT_TOKENS
+    不预设模型表:预算完全由用户填,没填走兜底。
+    """
+    row = await _row(session, owner_id)
+    ctx = row.llm_context_tokens if (row is not None and row.llm_context_tokens) else None
+    out = (
+        row.llm_max_output_tokens
+        if (row is not None and row.llm_max_output_tokens)
+        else None
+    )
+    return ctx, out
+
+
 __all__ = [
     "resolve_charter",
+    "resolve_llm_budgets",
     "resolve_llm_config",
     "resolve_tavily_key",
 ]

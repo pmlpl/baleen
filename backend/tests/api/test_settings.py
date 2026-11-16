@@ -65,3 +65,62 @@ def test_tavily_key_roundtrip(env: SimpleNamespace) -> None:
     assert body["tavily_set"] is True
     assert body["tavily_tail"] == "2345"
     assert env.client.get("/api/settings").json()["tavily_tail"] == "2345"
+
+
+def test_llm_budgets_roundtrip(env: SimpleNamespace) -> None:
+    """llm_context_tokens / llm_max_output_tokens 设置页往返。"""
+    resp = env.client.put(
+        "/api/settings",
+        json={"llm_context_tokens": 1000000, "llm_max_output_tokens": 131072},
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["llm_context_tokens"] == 1000000
+    assert body["llm_max_output_tokens"] == 131072
+    # GET 回显
+    body = env.client.get("/api/settings").json()
+    assert body["llm_context_tokens"] == 1000000
+    assert body["llm_max_output_tokens"] == 131072
+
+
+def test_llm_budgets_clear_with_zero(env: SimpleNamespace) -> None:
+    """0 = 清空回 NULL(走兜底)。"""
+    env.client.put(
+        "/api/settings",
+        json={"llm_context_tokens": 1000000, "llm_max_output_tokens": 131072},
+    )
+    resp = env.client.put(
+        "/api/settings", json={"llm_context_tokens": 0, "llm_max_output_tokens": 0}
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["llm_context_tokens"] is None
+    assert body["llm_max_output_tokens"] is None
+
+
+def test_resolve_llm_budgets_reads_db(env: SimpleNamespace) -> None:
+    """resolve_llm_budgets:用户填了 → 返回值;没填 → None(走兜底/不截断)。"""
+    from app.service.llm.resolve import resolve_llm_budgets
+
+    # 先清空(可能被前一个测试设过)
+    env.client.put(
+        "/api/settings", json={"llm_context_tokens": 0, "llm_max_output_tokens": 0}
+    )
+
+    async def _read() -> tuple:
+        async with env.shared["factory"]() as session:
+            return await resolve_llm_budgets(session, env.owner_id)
+
+    # 没填 → (None, None)
+    ctx, out = env.client.portal.call(_read)
+    assert ctx is None
+    assert out is None
+
+    # 填了 → 返回值
+    env.client.put(
+        "/api/settings",
+        json={"llm_context_tokens": 200000, "llm_max_output_tokens": 8192},
+    )
+    ctx, out = env.client.portal.call(_read)
+    assert ctx == 200000
+    assert out == 8192

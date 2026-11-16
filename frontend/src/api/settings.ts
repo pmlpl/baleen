@@ -11,6 +11,10 @@ export interface AppSettingsView {
   api_key_tail: string
   tavily_set: boolean
   tavily_tail: string
+  /** null = 不截断,整篇喂模型 */
+  llm_context_tokens: number | null
+  /** null = 用 organizer 兜底(131072) */
+  llm_max_output_tokens: number | null
 }
 
 export interface SettingsUpdate {
@@ -19,6 +23,9 @@ export interface SettingsUpdate {
   llm_api_key?: string | null
   llm_model?: string | null
   tavily_api_key?: string | null
+  /** null/缺省 = 保持不变;0 = 清空回退兜底 */
+  llm_context_tokens?: number | null
+  llm_max_output_tokens?: number | null
 }
 
 export function getSettings(): Promise<AppSettingsView> {

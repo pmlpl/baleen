@@ -27,9 +27,11 @@ class FakeClient:
         self.fail_with = fail_with
         self.call_count = 0
         self.received_messages: list[list[dict]] = []
+        self.received_max_tokens: list[int] = []
 
     def chat(self, messages: list[dict], *, temperature: float = 0.0, max_tokens: int = 800, response_format: Any = None) -> Any:
         self.received_messages.append(messages)
+        self.received_max_tokens.append(max_tokens)
         self.call_count += 1
         if self.fail_with is not None:
             raise self.fail_with("fake network error")
@@ -227,3 +229,62 @@ def test_organize_content_wrapped_in_file_content_tag() -> None:
     assert "<file_content>" in user_msg
     assert "</file_content>" in user_msg
     assert "敏感内容" in user_msg
+
+
+# ---- 预算自适应(prompt_budget / output_budget)----
+
+
+def test_organize_large_doc_not_truncated_when_no_budget() -> None:
+    """prompt_budget=None(用户没填 context)→ 全文喂,不截断。
+
+    这是修视频/长文档导入截断的核心断言:旧 PROMPT_TOKEN_BUDGET=6000 会把这种长度截断。
+    """
+    big_text = "闭包是函数和词法环境的组合。" * 4000  # 远超旧 6000 token 上限
+    pr = _make_parse_result(big_text)
+    client = FakeClient([_SUCCESS_JSON])
+    result = organize_note(pr, filename="big.md", ext=".md", client=client)
+
+    user_msg = client.received_messages[0][1]["content"]
+    assert "已截断" not in user_msg
+    assert big_text in user_msg  # 全文都在
+    assert result.meta.get("truncated") is False
+
+
+def test_organize_large_doc_truncated_when_budget_set() -> None:
+    """prompt_budget=6000(用户填了 context)→ 按值截断(保留旧行为,供精确控制)。"""
+    big_text = "闭包是函数和词法环境的组合。" * 4000
+    pr = _make_parse_result(big_text)
+    client = FakeClient([_SUCCESS_JSON])
+    organize_note(pr, filename="big.md", ext=".md", client=client, prompt_budget=6000)
+
+    user_msg = client.received_messages[0][1]["content"]
+    assert "已截断" in user_msg
+    assert big_text not in user_msg  # 被截断了
+
+
+def test_organize_output_default_when_none() -> None:
+    """output_budget=None(用户没填)→ 用 ORGANIZER_DEFAULT_OUTPUT_TOKENS。"""
+    from app.service.rewrite.organizer import ORGANIZER_DEFAULT_OUTPUT_TOKENS
+
+    pr = _make_parse_result()
+    client = FakeClient([_SUCCESS_JSON])
+    organize_note(pr, filename="test.md", ext=".md", client=client)
+    assert client.received_max_tokens[0] == ORGANIZER_DEFAULT_OUTPUT_TOKENS
+
+
+def test_organize_output_override() -> None:
+    """output_budget=5000 → 用 5000(用户填的覆盖兜底)。"""
+    pr = _make_parse_result()
+    client = FakeClient([_SUCCESS_JSON])
+    organize_note(pr, filename="test.md", ext=".md", client=client, output_budget=5000)
+    assert client.received_max_tokens[0] == 5000
+
+
+def test_organize_max_tokens_priority() -> None:
+    """max_tokens(测试直传)优先于 output_budget。"""
+    pr = _make_parse_result()
+    client = FakeClient([_SUCCESS_JSON])
+    organize_note(
+        pr, filename="test.md", ext=".md", client=client, max_tokens=999, output_budget=5000
+    )
+    assert client.received_max_tokens[0] == 999
