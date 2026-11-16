@@ -31,6 +31,7 @@ from app.service.media import store_media
 from app.service.parse import ParseResult, ParseStatus, parse_file
 from app.service.parse.blocks import empty_doc
 from app.service.rewrite.organizer import OrganizeResult, organize_note
+from app.service.rewrite.outline import NUMBER_PREFIX
 
 STORAGE_ROOT = ROOT_DIR / "storage"
 DEDUPE_PREFIX = "import:"
@@ -89,11 +90,17 @@ def _store_blob(data: bytes, sha: str) -> Path:
 
 
 def _title(doc: dict, filename: str) -> str:
+    """doc 首个 heading 文本(去编号);无 heading 退化文件名 stem。
+
+    去编号:organizer 重写后 heading 被 renumber 加了「一、」「2.1」前缀,
+    当笔记标题不雅——剥掉(复用 outline.NUMBER_PREFIX,与 renumber 同款)。
+    原始 H1 无编号,不受影响。
+    """
     for block in doc.get("content") or []:
         if block.get("type") == "heading":
             text = "".join(n.get("text", "") for n in block.get("content") or []).strip()
             if text:
-                return text
+                return NUMBER_PREFIX.sub("", text).strip()
     return Path(filename).stem
 
 
@@ -387,6 +394,7 @@ async def run_import_async(
             # no_llm=True（内部路径：chat save-note，内容已被 LLM 整理过）→ 跳过
             # no_llm=False → 读 note-format.md 契约 → LLM 重写 markdown → 更新 blocks
             original_title = _title(pr.blocks, path.name)
+            note_title = original_title  # organizer 重写 blocks 后会用新首 H1 重算
             org: OrganizeResult | None = None
             if no_llm:
                 result.g2_verdict = None
@@ -443,11 +451,12 @@ async def run_import_async(
                 # organizer 返回了重写后的 blocks → 替换（流向 note.doc 与 chunk）
                 if org is not None and org.blocks is not None:
                     pr.blocks = org.blocks
+                    note_title = _title(pr.blocks, path.name)  # 重写后的首 H1 当标题(去编号)
                     result.headings_rewritten = True
                     meta = dict(source.parse_meta or {})
                     meta["headings_rewritten"] = True
                     source.parse_meta = meta
-                    log.info("AI 笔记整理完成: %s", original_title)
+                    log.info("AI 笔记整理完成: %s → %s", original_title, note_title)
 
             # ---- note ----
             t = time.perf_counter()
@@ -455,7 +464,7 @@ async def run_import_async(
             if note is None:
                 note = await repos.notes.create(
                     source_id=source_id,
-                    title=original_title,
+                    title=note_title,
                     doc=pr.blocks,
                     quality=result.quality,
                 )

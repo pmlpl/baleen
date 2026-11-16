@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-15 · 导入自动建会话撤回(ADR 0005 阶段3)+导航收口(个人中心右移/健康指示移除)+前端数学公式渲染(KaTeX);基线 **468 passed**
+**最后更新**：2026-11-16 · 前端数学公式渲染(KaTeX)+笔记标题回写(organizer 重写后首 H1 → notes.title,修视频导入 blob 标题);基线 **473 passed**
 
 ### 已完成模块
 
@@ -22,7 +22,7 @@
 | **向量化** | `app/service/embed/` | ✅ torch 2.14.1+cu126，cuda 52 items/s |
 | **G1 价值闸** | `app/service/gate/g1.py` | ✅ 真实样本**误拒率 0/15 = 0.0%** |
 | **G2 归属闸** | `app/service/gate/g2.py` | ✅ H-批2 + 线 J 政策修正；eval 系统用（pipeline 改用 organizer，见下） |
-| **AI 笔记整理（v21）** | `app/service/rewrite/organizer.py` + `pipeline.py` | ✅ 替代 G2+outline：LLM 读 note-format.md 契约重写 markdown（补标题/去噪/组织结构）；无可整理→不入库；LLM 异常→降级原文入库；没配 key 不允许上传 |
+| **AI 笔记整理（v21）** | `app/service/rewrite/organizer.py` + `pipeline.py` | ✅ 替代 G2+outline：LLM 读 note-format.md 契约重写 markdown（补标题/去噪/组织结构）；无可整理→不入库；LLM 异常→降级原文入库；没配 key 不允许上传；**organizer 重写后首 H1 回写 notes.title(`_title` 去编号),不再卡在原文派生值——修视频导入用平台文案当标题的 blob(4986 已修)** |
 | **导入状态机** | `app/service/imports/pipeline.py` | ✅ I-批1；端到端实测，父块无向量已核对 |
 | **arq worker + 上传 API** | `app/worker/`、`app/api/upload.py` | ✅ I-批2；新建 201 / dedupe 200 / 轮询可用 |
 | **混合检索 + RRF** | `app/repo/search.py`、`app/service/retrieve/` | ✅ 线 K；真实 query 双路命中，RRF 与公式吻合 |

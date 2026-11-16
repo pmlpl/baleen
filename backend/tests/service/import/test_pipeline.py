@@ -352,8 +352,9 @@ class TestHeadingRewrite:
                         select(Note).where(Note.source_id == result.source_id)
                     )
                     assert note is not None
-                    # 笔记标题仍是原文派生(不被 organizer 的 H1 顶掉)
-                    assert note.title == "plain"
+                    # 笔记标题用 organizer 重写后的首 H1(去编号),不再卡在原文派生值
+                    # —— 否则视频导入等"原始 H1 = 平台文案"的场景会得到一长串 blob 标题
+                    assert note.title == "闭包与内存泄漏"
                     doc_headings = [
                         b for b in (note.doc or {}).get("content", []) if b.get("type") == "heading"
                     ]
