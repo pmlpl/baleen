@@ -121,8 +121,8 @@ def fetch_bilibili_media(url: str, *, sessdata: str = "", output_dir: Path | Non
             "请在自己的浏览器里手动打开该视频页通过一次验证，或稍后重试导入。"
         )
 
-    title = (video_data.get("title") or f"bilibili_{bvid}").strip()
-    desc = (video_data.get("desc") or "").strip()
+    title = re.sub(r"\s+", " ", video_data.get("title") or f"bilibili_{bvid}").strip()
+    desc = re.sub(r"\s+", " ", (video_data.get("desc") or "")).strip()
     author = (video_data.get("owner") or {}).get("name", "")
     duration_s = int(video_data.get("duration") or 0)
 

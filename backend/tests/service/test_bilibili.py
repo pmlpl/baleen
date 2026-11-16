@@ -384,3 +384,12 @@ def test_fetch_bilibili_empty_subtitle_body(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setattr(bilibili, "_fetch_subtitle_raw", lambda sub_url: [])
     with pytest.raises(BilibiliError, match="字幕内容为空"):
         fetch_bilibili("https://www.bilibili.com/video/BV1GJ411x7h7/")
+
+
+def test_sanitize_filename_strips_newlines() -> None:
+    """多行简介生成的标题带换行 → 压成空格（Windows 文件名不允许换行）。"""
+    raw = "去看这个SpaceX AI工程师1小时的课程。\n这是我见过最清晰的课。\n从单.md"
+    safe = sanitize_filename(raw)
+    assert "\n" not in safe and "\r" not in safe and "\t" not in safe
+    assert "从单" in safe
+

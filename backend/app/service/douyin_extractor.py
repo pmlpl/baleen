@@ -169,10 +169,10 @@ def fetch_douyin_video(
     if not aweme:
         raise RuntimeError("抖音详情响应格式变化（没有 aweme_detail），请把链接发给开发者核查。")
 
-    desc = (aweme.get("desc") or "").strip()
+    desc = re.sub(r"\s+", " ", (aweme.get("desc") or "")).strip()
     author = (aweme.get("author") or {}).get("nickname", "")
     duration_s = int((aweme.get("video") or {}).get("duration") or 0) // 1000
-    title = desc.split("#")[0].strip() or f"抖音视频{video_id}"
+    title = re.sub(r"\s+", " ", desc.split("#")[0]).strip() or f"抖音视频{video_id}"
 
     play_url = _pick_play_url(aweme)
     video_path = out_dir / f"douyin_{video_id}.mp4"

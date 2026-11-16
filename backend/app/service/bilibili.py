@@ -278,8 +278,13 @@ def _format_duration(seconds: int) -> str:
 
 
 def sanitize_filename(title: str) -> str:
-    """视频标题 → 安全文件名(Windows 非法字符替换为 _，截断 100 字)。"""
-    safe = re.sub(r'[<>:"/\\|?*]', "_", title).strip()
+    """视频标题 → 安全文件名(Windows 非法字符替换为 _，截断 100 字)。
+
+    ⚠️ 换行/制表符也是 Windows 文件名非法字符（抖音简介多行，
+    标题取自简介时会带上）——先压成空格再过滤，否则 io.open 直接 OSError 22。
+    """
+    safe = re.sub(r"[\r\n\t]+", " ", title)
+    safe = re.sub(r'[<>:"/\\|?*]', "_", safe).strip()
     return safe[:100] if safe else "bilibili_video"
 
 
