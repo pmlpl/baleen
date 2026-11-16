@@ -5,7 +5,7 @@
  * GET /api/notes?q=&limit=&offset= —— 搜索框输入防抖 300ms 才发请求;
  * 翻页/搜索都通过 reload() 重拉,失败给人话提示不白屏。
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
@@ -214,11 +214,13 @@ async function importOneFile(file: File, attachments: File[] = []): Promise<bool
     imports.value.push({ name: file.name, stage: '❌ 超过 50MB 上限', status: 'failed' })
     return false
   }
-  const item: ImportItem = {
+  // reactive 包裹：后续 item.stage = ... 的变更才能触发界面重渲染
+  // （裸对象塞进 ref 数组后改原始引用，会绕过响应式触发器——进度会假死）
+  const item = reactive<ImportItem>({
     name: file.name,
     stage: attachments.length > 0 ? `排队中(含 ${attachments.length} 张图片)` : '排队中',
     status: 'pending',
-  }
+  })
   imports.value.push(item)
   let upload
   try {

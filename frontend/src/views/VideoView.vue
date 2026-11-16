@@ -7,7 +7,7 @@
  * - 两种模式：字幕快速（秒级，仅 B 站） / whisper 深度（分钟级，下载音频+whisper转写）
  * - 导入进度面板复用 LibraryView 的模式
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
@@ -118,12 +118,27 @@ function computeProgress(detail: SourceDetail): number {
   return 5
 }
 
-// 进行中的导入持久化到 localStorage：刷新页面后进度面板自动恢复（不再凭空消失）
+// 进行中的导入持久化到 localStorage（sourceId + 原始链接）：
+// 刷新页面后进度面板【和左侧视频/链接预览】全部自动恢复（不再凭空消失）
 const ACTIVE_KEY = 'baleen-active-video-import'
 
-function rememberActive(sourceId: number | null): void {
+function rememberActive(sourceId: number | null, url = ''): void {
   if (sourceId === null) localStorage.removeItem(ACTIVE_KEY)
-  else localStorage.setItem(ACTIVE_KEY, String(sourceId))
+  else localStorage.setItem(ACTIVE_KEY, JSON.stringify({ sourceId, url }))
+}
+
+function readActive(): { sourceId: number; url: string } | null {
+  const raw = localStorage.getItem(ACTIVE_KEY)
+  if (raw === null) return null
+  try {
+    const parsed = JSON.parse(raw) as { sourceId?: unknown; url?: unknown }
+    const sourceId = typeof parsed.sourceId === 'number' ? parsed.sourceId : NaN
+    const url = typeof parsed.url === 'string' ? parsed.url : ''
+    if (!Number.isFinite(sourceId) || sourceId <= 0) return null
+    return { sourceId, url }
+  } catch {
+    return null
+  }
 }
 
 async function waitImportDone(
@@ -173,12 +188,14 @@ async function importVideo(): Promise<void> {
   imports.value = []
   whisperStart = null
 
-  const item: ImportItem = {
+  // reactive 包裹：轮询里 item.stage/progress 的变更才能触发界面重渲染
+  // （裸对象塞进 ref 数组后改原始引用会绕过响应式——进度条假死的根因）
+  const item = reactive<ImportItem>({
     stage: mode.value === 'whisper' ? '提交中…' : '拉取字幕中',
     status: 'pending',
     progress: 2,
     noteId: null,
-  }
+  })
   imports.value.push(item)
 
   try {
@@ -191,7 +208,7 @@ async function importVideo(): Promise<void> {
       item.progress = 100
       item.noteId = null
     } else {
-      rememberActive(upload.source_id)
+      rememberActive(upload.source_id, url)
       await trackImport(upload.source_id, item)
     }
   } catch (error) {
@@ -202,33 +219,29 @@ async function importVideo(): Promise<void> {
   }
 }
 
-// 刷新/重开页面 → 恢复进行中的导入（进度面板不再凭空消失）
+// 刷新/重开页面 → 恢复进行中的导入：进度面板【和链接/播放器】全部回来
 onMounted(async () => {
-  const saved = localStorage.getItem(ACTIVE_KEY)
+  const saved = readActive()
   if (saved === null) return
-  const sourceId = Number(saved)
-  if (!Number.isFinite(sourceId) || sourceId <= 0) {
-    localStorage.removeItem(ACTIVE_KEY)
-    return
-  }
+  urlInput.value = saved.url // 恢复链接 → 播放器/抖音预览/模式判定全部跟着恢复
   try {
-    const detail = await getSource(sourceId)
+    const detail = await getSource(saved.sourceId)
     if (detail.job.status === 'done' || detail.job.status === 'failed') {
       // 已结束：笔记在笔记库里，无需恢复面板
-      localStorage.removeItem(ACTIVE_KEY)
+      rememberActive(null)
       return
     }
     whisperStart = null
-    const item: ImportItem = {
+    const item = reactive<ImportItem>({
       stage: importStageText(detail),
       status: 'pending',
       progress: computeProgress(detail),
       noteId: null,
-    }
+    })
     imports.value.push(item)
-    await trackImport(sourceId, item)
+    await trackImport(saved.sourceId, item)
   } catch {
-    localStorage.removeItem(ACTIVE_KEY)
+    rememberActive(null)
   }
 })
 </script>
