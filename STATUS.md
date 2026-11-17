@@ -56,7 +56,8 @@
 | **md 带图片导入** | `parse/md_parser.py` + `service/media.py` + `POST /api/sources attachments` + `GET /api/media/{key}` | ✅ 图片按相对路径随主文件上传→内容寻址存 `storage/media/`;doc 只留 `media` key;缺文件退 alt 并警告;外链不抓;暂存改每上传一目录(worker 清理兼容) |
 | **扫描件 PDF 视觉识别** | `vision.parse_scanned_pdf` + `parse_pdf(client=)` | ✅ 无文本层 PDF 逐页 150dpi 栅格化→视觉转写;单页失败跳过留痕、全失败降级;30 页上限明说;有文本层 PDF 不烧视觉;e2e 中文两页全通(G1/G2 accept,标题正确)| 
 | **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
-| **对话附件（v17）** | `qa.py` `attachments`/`images` + QaView 📎 | ✅ 文本入 `<reference_files>` 不入库；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级；无视觉模型也能用 |
+| **对话附件（v17→v28）** | `app/api/parse.py` + `service/qa/file_analyzer.py` + `service/parse/html_parser.py` + QaView 📎 | ✅ v28 起 📎 文档类统一走 `POST /api/parse`（复用 G0 不入库，HTML/docx/pdf/pptx/md/csv/txt 一套口径）；正文 > 40000 字符 map-reduce 分层分析（`mode=analyzed`，20 块上限→422）；`attachments[].text` 上限 20000→40000；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级 |
+| **冻结分段摘要 digest（v28）** | `app/service/qa/digest.py` + `answerer.py`(`HISTORY_TOKEN_BUDGET`) | ✅ 老对话压成不可变「第二条 system」+ 近窗 append-only，**保前缀缓存**、止静默丢失、砍二次式成本；token > 100K 触发 / 200K 安全网；异步 arq 触发，旧消息不删、前端零改 |
 | **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底 |
 | **数学公式渲染** | `frontend/src/utils/math.ts` + `markdown.ts` | ✅ KaTeX 行内 `$...$`/块级 `$$...$$`,NoteView/QaView 共用;原文级占位保护(公式里 `[1]`/`**` 不被行内替换吃);pandoc 式启发式防美元价签误判;块级收集不越空行/标题/自闭合行(防吞正文成烂公式报红);20 边界用例探针(`scripts/probe_math_render.mjs`,含 QA 真实消息回归)全过 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
@@ -68,7 +69,7 @@
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  497 passed
+cd backend && uv run pytest -q     →  532 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
