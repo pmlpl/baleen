@@ -645,7 +645,7 @@ async def chat_stream_endpoint(
                 citations = build_web_citations(web_results, answer_text)
                 cost_tokens = qa.cost_tokens or 0
                 model_name = qa.model or llm.model
-                cache_hit = cache_miss = 0
+                cache_hit, cache_miss = qa.prompt_cache_hit_tokens or 0, qa.prompt_cache_miss_tokens or 0
             else:
                 iterator = llm.chat_stream(messages, max_tokens=3000)
                 marker = False  # [NO_KB] = 笔记答不了,LLM 会给自身知识回答(不外发)
@@ -718,7 +718,7 @@ async def chat_stream_endpoint(
                         citations = build_web_citations(web_results2, answer_text)
                         cost_tokens = qa.cost_tokens or 0
                         model_name = qa.model or llm.model
-                        cache_hit = cache_miss = 0
+                        cache_hit, cache_miss = qa.prompt_cache_hit_tokens or 0, qa.prompt_cache_miss_tokens or 0
                         yield _sse("delta", {"text": answer_text})
                     else:
                         answer_text = (
