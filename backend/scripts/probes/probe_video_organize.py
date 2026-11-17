@@ -1,6 +1,6 @@
 """阶段2 探针：对 SpaceX 3分钟样本跑 organizer 视频多模态，产出最终图文笔记。
 
-用法： cd backend && .venv/Scripts/python.exe -I scripts/probe_video_organize.py
+用法： cd backend && .venv/Scripts/python.exe -I scripts/probes/probe_video_organize.py
 产出：
   1. organizer 原始输出 markdown（baleen-image:N 标记）→ baleen/sample_spacex_organizer.md
   2. 可预览版（标记替换为 sample_frames 相对路径）→ baleen/sample_spacex_organizer_preview.md

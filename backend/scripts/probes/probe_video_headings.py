@@ -3,7 +3,7 @@
 用途：主人反馈「一、直接是视频主题（应算笔记名）、下一级直接 16 块太多」。
 本探针把 note 5468 的 doc（含 30 张图）直接喂 organizer，看新视频规则下的标题结构。
 
-用法： cd backend && .venv/Scripts/python.exe -I scripts/probe_video_headings.py [note_id]
+用法： cd backend && .venv/Scripts/python.exe -I scripts/probes/probe_video_headings.py [note_id]
 """
 import asyncio
 import sys

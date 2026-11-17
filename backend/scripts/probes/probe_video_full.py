@@ -3,7 +3,7 @@
 产出图文 markdown 给主人审：图位置 / 代码原样转录 / 图文对齐。
 
 用法：
-  cd backend && .venv/Scripts/python.exe -I scripts/probe_video_full.py
+  cd backend && .venv/Scripts/python.exe -I scripts/probes/probe_video_full.py
   （自动下载 SpaceX 切前 3 分钟；或传已有切片路径省下载：
    probe_video_full.py <clip.mp4>）
 """

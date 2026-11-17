@@ -3,7 +3,7 @@
 不重导视频，直接用 storage/media 里的帧字节 → DeepSeek 判 INFO high/low。
 用途：验证「只留信息帧、丢装饰图」规则的实际效果。
 
-用法： cd backend && .venv/Scripts/python.exe -I scripts/probe_frame_info_density.py [note_id]
+用法： cd backend && .venv/Scripts/python.exe -I scripts/probes/probe_frame_info_density.py [note_id]
 """
 import asyncio
 import sys

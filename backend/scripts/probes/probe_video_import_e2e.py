@@ -3,7 +3,7 @@
 验证点：G0 读 sidecar → organizer 视频多模态 → note 入库（doc 含 image 块）
 → 切块/向量化 → 笔记详情可取出 images（前端 NoteView 渲染依据）。
 
-用法： cd backend && .venv/Scripts/python.exe -I scripts/probe_video_import_e2e.py
+用法： cd backend && .venv/Scripts/python.exe -I scripts/probes/probe_video_import_e2e.py
 """
 import asyncio
 import json

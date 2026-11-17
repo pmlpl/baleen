@@ -1,6 +1,6 @@
 """探针：验证场景检测抽帧 + 嵌图链路（不调真 LLM，验证本地结构）。
 
-用法： cd backend && .venv/Scripts/python.exe -I scripts/probe_video_scene.py <video_path>
+用法： cd backend && .venv/Scripts/python.exe -I scripts/probes/probe_video_scene.py <video_path>
 合成测试视频（2 场景 180s）：
   ffmpeg -f lavfi -i "testsrc=size=640x480:rate=24:duration=90" \
          -f lavfi -i "smptebars=size=640x480:rate=24:duration=90" \
