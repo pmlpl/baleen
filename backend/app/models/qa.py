@@ -65,3 +65,28 @@ class QaMessage(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class QaDigest(Base):
+    """一段冻结的对话摘要:把若干早期消息压成不可变摘要,作为 LLM 历史的压缩视角。
+
+    与 qa_messages 平行存在;被 digest 覆盖的旧消息**不删**(前端仍显示完整对话原文),
+    digest 只在「喂 LLM 时」替代老消息重放 —— 既止住超长会话的静默丢失,又用不可变
+    分段保住上游前缀缓存命中(两次冻结之间前缀字节不变 → 命中)。详见 ``digest.py``。
+    """
+
+    __tablename__ = "qa_digests"
+    __table_args__ = (Index("qa_digests_session_idx", "session_id", "id"),)
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    owner_id: Mapped[int] = mapped_column(BigInteger, server_default="1", nullable=False)
+    session_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("qa_sessions.id", ondelete="CASCADE"), nullable=False
+    )
+    # 该摘要覆盖 [start_msg_id, end_msg_id] 闭区间的 qa_messages.id
+    start_msg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    end_msg_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    summary: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

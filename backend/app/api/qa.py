@@ -31,7 +31,7 @@ from app.api.deps import CurrentOwnerDep, SessionDep
 from app.api.library import RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import QaRepo
-from app.service.llm import LLMClient, LLMError
+from app.service.llm import LLMClient, LLMError, estimate_tokens
 from app.service.llm.resolve import resolve_llm_config, resolve_tavily_key
 from app.service.qa.answerer import (
     _EMPTY_ANSWER,
@@ -44,6 +44,7 @@ from app.service.qa.answerer import (
     build_qa_messages,
     build_web_citations,
 )
+from app.service.qa.digest import DIGEST_FREEZE_BATCH, DIGEST_TRIGGER_TOKENS
 from app.service.qa.rewriter import rewrite_question
 from app.service.qa.summarizer import (
     NoteTopic,
@@ -348,17 +349,23 @@ async def chat(
             raise HTTPException(status_code=404, detail=f"会话不存在:{payload.session_id}")
 
     # 2) 历史两版(在插入新消息之前读,天然不含本条):
-    #    llm_content 重放版给 answer(会话内前缀对齐 → 缓存命中);
+    #    近窗 = 最后一段 digest 之后的消息(无 digest 则全部);老对话已冻结成 digest,
+    #    作为第二条 system 重放(见 answerer.compose_digest_block),不再原文重放——
+    #    既止住超长会话静默丢失,又用不可变分段保住前缀缓存命中。
+    #    llm_content 重放版给 answer(近窗前缀对齐 → 缓存命中);
     #    content 可读版给改写器(它只需要「聊了什么」,不带旧检索片段)。
-    prior = await repo.list_messages(qa_session.id)
+    digests = await repo.list_digests(qa_session.id)
+    last_end = digests[-1].end_msg_id if digests else 0
+    window_msgs = await repo.list_messages_after(qa_session.id, last_end)
+    digest_summaries = [d.summary for d in digests]
     history = [
         {
             "role": m.role,
             "content": (m.llm_content or m.content) if m.role == "user" else m.content,
         }
-        for m in prior
+        for m in window_msgs
     ]
-    history_chat = [{"role": m.role, "content": m.content} for m in prior]
+    history_chat = [{"role": m.role, "content": m.content} for m in window_msgs]
 
     # 3) 检索词:追问先经 LLM 改写成独立完整的问题(best-effort,改写失败回退原问题)
     search_query = payload.question
@@ -386,7 +393,7 @@ async def chat(
     attachments = [{"name": a.name, "text": a.text} for a in payload.attachments]
     user_images = [{"mime": i.mime, "data_url": i.data_url} for i in payload.images]
     messages, _build_meta = build_qa_messages(
-        payload.question, kb_hits, history=history, ref_notes=ref_notes, attachments=attachments
+        payload.question, kb_hits, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
     )
     llm_user_text = messages[-1]["content"]
 
@@ -420,6 +427,7 @@ async def chat(
             client=llm,
             ref_notes=ref_notes,
             attachments=attachments,
+            digest_summaries=digest_summaries,
             images=user_images,
         )
     else:
@@ -431,6 +439,7 @@ async def chat(
             client=llm,
             ref_notes=ref_notes,
             attachments=attachments,
+            digest_summaries=digest_summaries,
             images=user_images + hit_images,
         )
         # 二段兜底:LLM 用 [NO_KB] 标记「笔记答不了」→ 联网搜;没配 Tavily 就用它自己的
@@ -455,6 +464,7 @@ async def chat(
                     client=llm,
                     ref_notes=ref_notes,
                     attachments=attachments,
+            digest_summaries=digest_summaries,
                     images=user_images,
                 )
                 used_web = True
@@ -481,6 +491,19 @@ async def chat(
         cache_miss_tokens=qa.prompt_cache_miss_tokens or 0,
     )
     await session.commit()
+
+    # 冻结分段摘要:近窗超阈值则把最老一批异步冻结成 digest(fire-and-forget,不阻塞响应;
+    # 失败静默 —— digest 是 best-effort,不能因入队失败影响已完成的回答)。
+    if sum(estimate_tokens(m["content"]) for m in history) > DIGEST_TRIGGER_TOKENS:
+        freeze = window_msgs[:DIGEST_FREEZE_BATCH]
+        try:
+            from app.worker.worker import enqueue_digest
+            await enqueue_digest(
+                qa_session.id, owner_id=owner_id,
+                start_msg_id=freeze[0].id, end_msg_id=freeze[-1].id,
+            )
+        except Exception:  # noqa: BLE001 —— Redis/入队失败不影响已完成的回答
+            pass
 
     took_ms = int(round((time.perf_counter() - started) * 1000))
     return ChatResponse(
@@ -521,15 +544,19 @@ async def chat_stream_endpoint(
         if qa_session is None:
             raise HTTPException(status_code=404, detail=f"会话不存在:{payload.session_id}")
 
-    prior = await repo.list_messages(qa_session.id)
+    # 近窗 = 最后一段 digest 之后的消息(无 digest 则全部);老对话已冻结成 digest。
+    digests = await repo.list_digests(qa_session.id)
+    last_end = digests[-1].end_msg_id if digests else 0
+    window_msgs = await repo.list_messages_after(qa_session.id, last_end)
+    digest_summaries = [d.summary for d in digests]
     history = [
         {
             "role": m.role,
             "content": (m.llm_content or m.content) if m.role == "user" else m.content,
         }
-        for m in prior
+        for m in window_msgs
     ]
-    history_chat = [{"role": m.role, "content": m.content} for m in prior]
+    history_chat = [{"role": m.role, "content": m.content} for m in window_msgs]
 
     search_query = payload.question
     if history:
@@ -555,7 +582,7 @@ async def chat_stream_endpoint(
     attachments = [{"name": a.name, "text": a.text} for a in payload.attachments]
     user_images = [{"mime": i.mime, "data_url": i.data_url} for i in payload.images]
     messages, _build_meta = build_qa_messages(
-        payload.question, kb_hits, history=history, ref_notes=ref_notes, attachments=attachments
+        payload.question, kb_hits, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
     )
     llm_user_text = messages[-1]["content"]
 
@@ -609,6 +636,7 @@ async def chat_stream_endpoint(
                     client=llm,
                     ref_notes=ref_notes,
                     attachments=attachments,
+            digest_summaries=digest_summaries,
                     images=user_images,
                 )
                 accumulated.append(qa.answer)
@@ -683,6 +711,7 @@ async def chat_stream_endpoint(
                             client=llm,
                             ref_notes=ref_notes,
                             attachments=attachments,
+            digest_summaries=digest_summaries,
                             images=user_images,
                         )
                         answer_text = qa.answer
@@ -725,6 +754,17 @@ async def chat_stream_endpoint(
                 cache_miss_tokens=cache_miss,
             )
             await session.commit()
+            # 冻结分段摘要:近窗超阈值则异步冻结(fire-and-forget;失败静默)。
+            if sum(estimate_tokens(m["content"]) for m in history) > DIGEST_TRIGGER_TOKENS:
+                freeze = window_msgs[:DIGEST_FREEZE_BATCH]
+                try:
+                    from app.worker.worker import enqueue_digest
+                    await enqueue_digest(
+                        qa_session.id, owner_id=owner_id,
+                        start_msg_id=freeze[0].id, end_msg_id=freeze[-1].id,
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
             yield _sse(
                 "done",
                 {

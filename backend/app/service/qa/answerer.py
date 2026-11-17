@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 
 from app.service.llm import LLMClient, LLMResponseError, estimate_tokens, truncate_to_tokens
+from app.service.qa.digest import compose_digest_block
 
 # 喂给 LLM 的上下文(检索到的父块正文)token 上限。DeepSeek 上下文很大(64K+),
 # 这里 cap 主要是控制成本;top_k=5 × 父块正文极少超此值。
@@ -28,7 +29,7 @@ CONTEXT_TOKEN_BUDGET = 8000
 # 会话内 prompt 前缀逐轮对齐 → 命中率 90%+,命中部分计费约一折)。
 # 下面两个只是超长会话的安全网,正常永远触不到;裁剪会破坏前缀对齐,轻易别调小。
 HISTORY_MAX_MESSAGES = 200
-HISTORY_TOKEN_BUDGET = 24000
+HISTORY_TOKEN_BUDGET = 200000  # 1M 上下文:安全网提到 200K(冻结阈值 100K,留余量兜底)
 # reasoning 模型会先吃 token 思考,completion 预算要留够(reasoning + 答案)。
 DEFAULT_MAX_TOKENS = 3000
 # 用户引用的笔记(@某篇):单篇 token 上限(引用是「在问什么」的信号,整篇太长就截头部)
@@ -190,6 +191,7 @@ def build_qa_messages(
     history_max: int = HISTORY_MAX_MESSAGES,
     ref_notes: list[dict[str, str]] | None = None,
     attachments: list[dict[str, str]] | None = None,
+    digest_summaries: list[str] | None = None,
 ) -> tuple[list[dict[str, str]], dict]:
     """组装 system + 历史 + 当前消息;命中片段编号塞进 <context>,按 token 预算截断。
 
@@ -242,6 +244,11 @@ def build_qa_messages(
     )
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system}]
+    # digest 段(冻结摘要):作为第二条 system,插在固定规则后、近窗前。
+    # 旧段字节不变 → 前缀缓存命中;空 → 不插,行为同改造前。
+    digest_block = compose_digest_block(digest_summaries or [])
+    if digest_block:
+        messages.append({"role": "system", "content": digest_block})
     kept_history = _trim_history(history or [], history_budget, history_max)
     messages.extend({"role": m["role"], "content": m["content"]} for m in kept_history)
     messages.append({"role": "user", "content": current_user})
@@ -252,6 +259,7 @@ def build_qa_messages(
         "kept_chars": kept_chars,
         "context_tokens_est": estimate_tokens(context),
         "history_kept": len(kept_history),
+        "digests_used": len([s for s in (digest_summaries or []) if s]),
         "ref_notes": len(ref_notes or []),
         "attachments": len(attachments or []),
     }
@@ -296,8 +304,9 @@ def build_web_answer_messages(
     history_max: int = HISTORY_MAX_MESSAGES,
     ref_notes: list[dict[str, str]] | None = None,
     attachments: list[dict[str, str]] | None = None,
+    digest_summaries: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    """库外问题的消息组装:system → 历史重放 → 当前 user(引用块 + 附件块 + <web_context> + 问题)。"""
+    """库外问题的消息组装:system(+digest) → 历史重放 → 当前 user(引用块 + 附件块 + <web_context> + 问题)。"""
     entries = []
     for i, r in enumerate(results, start=1):
         content = (r.get("content") or "")[:1200]
@@ -310,6 +319,9 @@ def build_web_answer_messages(
         f"问题:{question.strip()}"
     )
     messages: list[dict[str, str]] = [{"role": "system", "content": WEB_SYSTEM_PROMPT}]
+    digest_block = compose_digest_block(digest_summaries or [])
+    if digest_block:
+        messages.append({"role": "system", "content": digest_block})
     kept = _trim_history(history or [], history_budget, history_max)
     messages.extend({"role": m["role"], "content": m["content"]} for m in kept)
     messages.append({"role": "user", "content": current_user})
@@ -344,6 +356,7 @@ def answer_web(
     ref_notes: list[dict[str, str]] | None = None,
     attachments: list[dict[str, str]] | None = None,
     images: list[dict] | None = None,
+    digest_summaries: list[str] | None = None,
 ) -> QaResult:
     """库外问题:联网搜索结果 → LLM → 带 [W n] 来源标注的回答(citations.note_id=None)。
 
@@ -352,7 +365,7 @@ def answer_web(
     """
     cli = client or LLMClient.from_settings()
     messages = build_web_answer_messages(
-        question, results, history=history, ref_notes=ref_notes, attachments=attachments
+        question, results, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
     )
     if images:
         attach_images(messages, images)
@@ -364,7 +377,7 @@ def answer_web(
         if not images:
             raise
         messages = build_web_answer_messages(
-            question, results, history=history, ref_notes=ref_notes, attachments=attachments
+            question, results, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
         )
         chat = cli.chat(messages, max_tokens=max_tokens, temperature=temperature)
         degraded_no_image = True
@@ -415,6 +428,7 @@ def answer(
     ref_notes: list[dict[str, str]] | None = None,
     attachments: list[dict[str, str]] | None = None,
     images: list[dict] | None = None,
+    digest_summaries: list[str] | None = None,
 ) -> QaResult:
     """问答:命中片段 + 对话历史 → LLM → 带出处的答案。
 
@@ -427,7 +441,7 @@ def answer(
 
     cli = client or LLMClient.from_settings()
     messages, meta = build_qa_messages(
-        question, hits, history=history, ref_notes=ref_notes, attachments=attachments
+        question, hits, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
     )
     if images:
         attach_images(messages, images)
@@ -440,7 +454,7 @@ def answer(
         if not images:
             raise
         messages, meta = build_qa_messages(
-            question, hits, history=history, ref_notes=ref_notes, attachments=attachments
+            question, hits, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
         )
         chat = cli.chat(messages, max_tokens=max_tokens, temperature=temperature)
         degraded_no_image = True

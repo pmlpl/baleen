@@ -23,6 +23,7 @@ from arq.connections import RedisSettings
 from app.core.config import ROOT_DIR, get_settings
 from app.core.db import session_factory
 from app.repo import Repos
+from app.repo.qa import QaRepo
 from app.service.llm import LLMClient
 from app.service.parse.blocks import empty_doc
 
@@ -395,6 +396,87 @@ async def enqueue_video_extract(
         await pool.aclose()
 
 
+async def digest_conversation(
+    ctx: dict,
+    session_id: int,
+    *,
+    owner_id: int,
+    start_msg_id: int,
+    end_msg_id: int,
+) -> dict:
+    """arq 任务:把 [start_msg_id, end_msg_id] 区间的对话冻结成一段不可变 digest。
+
+    fire-and-forget:chat 端点 commit 后入队,本任务异步生成摘要并落 qa_digests。
+    失败向上抛(arq 自动重试);幂等键 ``digest:{session_id}:{end_msg_id}`` 保证同区间
+    不重复冻结。没配 api_key 的用户跳过(近窗继续累积,安全网兜底,不崩)。
+    """
+    from app.service.llm.resolve import resolve_llm_config
+    from app.service.qa.digest import dialogue_from_messages, run_digest
+
+    async with session_factory() as session:
+        repo = QaRepo(session, owner_id)
+        msgs = await repo.list_messages_in_range(session_id, start_msg_id, end_msg_id)
+        if not msgs:
+            return {"session_id": session_id, "digest_id": None, "skipped": "no_messages"}
+        dialogue = dialogue_from_messages(msgs)
+        base_url, api_key, model = await resolve_llm_config(session, owner_id)
+        client = (
+            LLMClient(
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                timeout=get_settings().llm_long_task_timeout,
+            )
+            if api_key
+            else None
+        )
+        if client is None:
+            return {"session_id": session_id, "digest_id": None, "skipped": "no_api_key"}
+        summary = await run_digest(dialogue, client=client)
+        if not summary:
+            return {"session_id": session_id, "digest_id": None, "skipped": "empty_summary"}
+        digest = await repo.add_digest(
+            session_id,
+            start_msg_id=start_msg_id,
+            end_msg_id=end_msg_id,
+            summary=summary,
+        )
+        await session.commit()
+        return {
+            "session_id": session_id,
+            "digest_id": digest.id,
+            "summary_len": len(summary),
+        }
+
+
+async def enqueue_digest(
+    session_id: int, *, owner_id: int, start_msg_id: int, end_msg_id: int
+) -> str | None:
+    """入队冻结摘要任务。
+
+    ``_job_id = digest:{session_id}:{end_msg_id}`` 保证同一区间幂等(不会重复冻结)。
+    重试场景先删 arq job/result 键(失败结果在 Redis 保留期间同 ID 入队会被静默丢弃,
+    用户重新提问触发冻结就永远不生效)。
+    """
+    from arq.constants import job_key_prefix, result_key_prefix
+
+    pool = await create_pool(RedisSettings.from_dsn(get_settings().redis_url))
+    try:
+        job_id = f"digest:{session_id}:{end_msg_id}"
+        await pool.delete(f"{job_key_prefix}{job_id}", f"{result_key_prefix}{job_id}")
+        job = await pool.enqueue_job(
+            "digest_conversation",
+            session_id,
+            owner_id=owner_id,
+            start_msg_id=start_msg_id,
+            end_msg_id=end_msg_id,
+            _job_id=job_id,
+        )
+        return job.job_id if job is not None else None
+    finally:
+        await pool.aclose()
+
+
 async def on_startup(ctx: dict) -> None:
     await asyncio.to_thread(clean_stale_uploads)
 
@@ -411,6 +493,7 @@ class WorkerSettings:
     functions = [
         import_file,
         func(extract_and_import_video, timeout=7200),
+        digest_conversation,
     ]
     on_startup = on_startup
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

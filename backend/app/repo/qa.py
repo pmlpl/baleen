@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from sqlalchemy import delete, func, select
 
-from app.models.qa import QaMessage, QaSession
+from app.models.qa import QaDigest, QaMessage, QaSession
 from app.repo.base import Repo
 
 
@@ -103,3 +103,77 @@ class QaRepo(Repo):
             )
         )
         return bool(result.rowcount)
+
+    # ---- 冻结分段摘要(Tier-1 长会话上下文管理,见 service/qa/digest.py)----
+
+    async def list_digests(self, session_id: int) -> list[QaDigest]:
+        """该会话的 digest 段(按 id 升序 = 冻结时间序)。"""
+        rows = await self.session.scalars(
+            select(QaDigest)
+            .where(QaDigest.owner_id == self.owner_id, QaDigest.session_id == session_id)
+            .order_by(QaDigest.id)
+        )
+        return list(rows)
+
+    async def add_digest(
+        self,
+        session_id: int,
+        *,
+        start_msg_id: int,
+        end_msg_id: int,
+        summary: str,
+    ) -> QaDigest:
+        row = QaDigest(
+            owner_id=self.owner_id,
+            session_id=session_id,
+            start_msg_id=start_msg_id,
+            end_msg_id=end_msg_id,
+            summary=summary,
+        )
+        self.session.add(row)
+        await self.session.flush()
+        return row
+
+    async def list_messages_after(self, session_id: int, after_msg_id: int) -> list[QaMessage]:
+        """id > after_msg_id 的消息(按 id 升序)——近窗原文(after_msg_id=0 返回全部)。"""
+        rows = await self.session.scalars(
+            select(QaMessage)
+            .where(
+                QaMessage.owner_id == self.owner_id,
+                QaMessage.session_id == session_id,
+                QaMessage.id > after_msg_id,
+            )
+            .order_by(QaMessage.id)
+        )
+        return list(rows)
+
+    async def list_messages_in_range(
+        self, session_id: int, start_id: int, end_id: int
+    ) -> list[QaMessage]:
+        """[start_id, end_id] 闭区间的消息(按 id 升序)——worker 读待冻结消息用。"""
+        rows = await self.session.scalars(
+            select(QaMessage)
+            .where(
+                QaMessage.owner_id == self.owner_id,
+                QaMessage.session_id == session_id,
+                QaMessage.id >= start_id,
+                QaMessage.id <= end_id,
+            )
+            .order_by(QaMessage.id)
+        )
+        return list(rows)
+
+    async def count_window_messages(self, session_id: int, after_msg_id: int) -> int:
+        """近窗消息条数(id > after_msg_id)——触发冻结判断用,不传文本。"""
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(QaMessage)
+                .where(
+                    QaMessage.owner_id == self.owner_id,
+                    QaMessage.session_id == session_id,
+                    QaMessage.id > after_msg_id,
+                )
+            )
+            or 0
+        )

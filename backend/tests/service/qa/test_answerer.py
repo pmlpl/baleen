@@ -321,3 +321,53 @@ class TestAnswer:
         client, _ = _client([(401, b'{"error":{"message":"unauthorized"}}')])
         with pytest.raises(LLMAuthError):
             answer("问题", [_hit()], client=client)
+
+
+class TestDigestBlock:
+    """冻结分段摘要(digest):作为第二条 system 插在固定规则后、近窗前。
+
+    旧段字节不变 → 前缀缓存命中;空 → 不插,行为同改造前(向后兼容)。
+    """
+
+    def test_digest_inserted_as_second_system(self) -> None:
+        msgs, meta = build_qa_messages("继续", [_hit()], digest_summaries=["用户问了闭包"])
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "system"  # digest 段
+        assert "<prior_summary>" in msgs[1]["content"]
+        assert "用户问了闭包" in msgs[1]["content"]
+        assert meta["digests_used"] == 1
+
+    def test_no_digest_no_second_system(self) -> None:
+        """空 digest → 只有 1 条 system,行为同改造前(向后兼容)。"""
+        msgs, meta = build_qa_messages("问题", [_hit()])
+        assert sum(1 for m in msgs if m["role"] == "system") == 1
+        assert meta["digests_used"] == 0
+
+    def test_none_digest_same_as_empty(self) -> None:
+        """digest_summaries=None(默认)→ 同空,不插第二条 system。"""
+        msgs, _ = build_qa_messages("问题", [_hit()], digest_summaries=None)
+        assert sum(1 for m in msgs if m["role"] == "system") == 1
+
+    def test_digest_before_history(self) -> None:
+        """digest 段在历史之前(system+digest 稳定前缀,近窗 append-only 命中)。"""
+        msgs, _ = build_qa_messages("继续", [], history=_history(), digest_summaries=["早期摘要"])
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "system"  # digest
+        assert msgs[2]["role"] == "user"  # 历史第一条
+        assert "早期摘要" in msgs[1]["content"]
+
+    def test_web_path_also_injects_digest(self) -> None:
+        """联网兜底路径也插 digest 段(库外答时仍带早期对话摘要)。"""
+        results = [{"title": "搜索结果", "url": "https://x", "content": "片段"}]
+        msgs = build_web_answer_messages("问题", results, digest_summaries=["早期摘要"])
+        assert msgs[0]["role"] == "system"
+        assert msgs[1]["role"] == "system"
+        assert "<prior_summary>" in msgs[1]["content"]
+
+    def test_answer_passes_digest_to_llm(self) -> None:
+        """answer() 透传 digest_summaries → LLM 收到第二条 system 含摘要。"""
+        client, transport = _client([(200, _chat("根据历史,闭包是……[1]"))])
+        answer("继续", [_hit()], digest_summaries=["用户问了闭包"], client=client)
+        body = transport.calls[0]["body"]
+        assert b"prior_summary" in body
+        assert "用户问了闭包".encode() in body
