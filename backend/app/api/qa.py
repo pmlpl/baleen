@@ -56,7 +56,9 @@ from app.service.qa.websearch import search_web
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
 
-MAX_QUERY_CHARS = 500
+# 提问长度上限:原 500 常把长提示词挡成 422;放宽到远超模型上下文的量级,
+# 不再因 question 字符数校验失败,实际长度仍受 LLM 上下文约束(超了是模型层错误)
+MAX_QUERY_CHARS = 200_000
 DEFAULT_TOP_K = 5
 MAX_TOP_K = 20
 TITLE_CHARS = 30  # 会话标题 = 首问前 30 字
@@ -74,7 +76,9 @@ class AttachmentInput(BaseModel):
     """
 
     name: str = Field(min_length=1, max_length=200)
-    text: str = Field(min_length=1, max_length=20000)
+    # 上限与 /api/parse 的 FILE_FULL_CHARS 对齐:小文件全文直塞,大文件在解析层已被
+    # 分析成报告,这里不再收 20000 那种小上限(20000 是纯正文前的旧口径,太保守)
+    text: str = Field(min_length=1, max_length=40000)
 
 
 class ImageInput(BaseModel):

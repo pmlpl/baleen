@@ -13,6 +13,7 @@ import { getToken } from '../auth/token'
 import { describeApiError } from '../api/http'
 import { listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
+import { parseAttachment } from '../api/parse'
 import {
   deleteSession,
   getSession,
@@ -69,26 +70,14 @@ const noteCustomText = ref('')
 
 // ---------------- 对话附件(参考文件给 AI 看,不入库) ----------------
 
-/** 文本类文件扩展名白名单:这些能前端直接读成文本喂给 AI。
- * PDF/DOCX/PPTX 等二进制文档不在此列 —— 走「笔记库页导入→/检索 引用」路径。
- * 图片单独走视觉通道(见 IMAGE_FILE_RE)。 */
-const TEXT_FILE_EXTS = new Set([
-  'txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'xml', 'yaml', 'yml',
-  'html', 'htm', 'css', 'js', 'mjs', 'cjs', 'ts', 'jsx', 'tsx',
-  'py', 'java', 'c', 'cpp', 'cc', 'h', 'hpp', 'rs', 'go', 'rb', 'php',
-  'sql', 'sh', 'bash', 'zsh', 'bat', 'ps1', 'ini', 'toml', 'cfg', 'conf',
-  'log', 'env', 'gitignore', 'dockerfile', 'makefile',
-])
-/** 图片扩展名:走视觉通道(读成 data URL,后端 attach_images);与文本附件分开存 */
+/** 图片扩展名:走视觉通道(读成 data URL,后端 attach_images);与文档附件分开存 */
 const IMAGE_FILE_RE = /\.(jpe?g|png|gif|webp|bmp)$/i
 /** 单张图片上限:base64 进 prompt 太大烧 token,5MB 够大多数截图 */
 const ATTACH_IMAGE_MAX_BYTES = 5 * 1024 * 1024
 /** 单次提问最多挂的图片数(与后端 ChatRequest.images max_length 对齐) */
 const ATTACH_IMAGE_MAX_COUNT = 4
-/** 单文件读取上限:超过不读(防内存炸);后端 text 字段上限 20000 字符会再截一次 */
-const ATTACH_MAX_BYTES = 2 * 1024 * 1024
-/** 后端 AttachmentInput.text 的 max_length;超过按字符截断 */
-const ATTACH_MAX_CHARS = 20000
+/** 单次提问最多挂的文档附件数(与后端 ChatRequest.attachments max_length=5 对齐) */
+const ATTACH_TEXT_MAX_COUNT = 5
 
 const attachFileInput = ref<HTMLInputElement | null>(null)
 /** 已挂的文本附件 chips;随下一次提问发给后端,发送后清空(与引用笔记同口径) */
@@ -96,26 +85,16 @@ const attachments = ref<ChatAttachment[]>([])
 /** 已挂的图片附件 chips(走视觉通道);与文本附件同消耗口径 */
 const imageAttachments = ref<ChatImageAttachment[]>([])
 
-function fileExt(name: string): string {
-  const dot = name.lastIndexOf('.')
-  // 无扩展名的常见文本文件名(Dockerfile/Makefile)按整体名匹配
-  if (dot < 0) return name.toLowerCase()
-  return name.slice(dot + 1).toLowerCase()
+/** data URL → Blob(后端 /api/parse 回传的图片都是 data URL 形态,缩图函数吃 Blob)。 */
+async function dataUrlToBlob(dataUrl: string): Promise<Blob> {
+  const resp = await fetch(dataUrl)
+  return await resp.blob()
 }
 
-function readFileAsText(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
-    reader.onerror = () => reject(reader.error ?? new Error('读取失败'))
-    reader.readAsText(file)
-  })
-}
-
-/** 把图片文件用 canvas 缩到长边 ≤1024px、导出 JPEG data URL。
+/** 把图片(Blob/File 均可)用 canvas 缩到长边 ≤1024px、导出 JPEG data URL。
  * 网关对大 payload 返 413,视觉模型也不需要原分辨率;统一 JPEG 体积小、模型友好。 */
 function resizeImageToDataUrl(
-  file: File,
+  file: Blob,
   maxDim = 1024,
   quality = 0.8,
 ): Promise<{ dataUrl: string; mime: string }> {
@@ -153,7 +132,8 @@ function resizeImageToDataUrl(
   })
 }
 
-/** 把选中的文件分流:图片 → 视觉通道 data URL;文本类 → 文本附件;其余提示走导入。 */
+/** 把选中的文件分流:图片 → 前端视觉通道;文档类一律交后端 /api/parse 统一解析(G0,不入库)。
+ * 格式白名单/编码探测/HTML 剥 base64/大文件分析分层都在后端,前端不再读文本。 */
 async function addAttachmentFiles(files: FileList | File[]): Promise<void> {
   const list = Array.from(files)
   for (const file of list) {
@@ -177,27 +157,41 @@ async function addAttachmentFiles(files: FileList | File[]): Promise<void> {
       }
       continue
     }
-    const ext = fileExt(file.name)
-    if (!TEXT_FILE_EXTS.has(ext)) {
-      errorText.value =
-        `《${file.name}》不是文本类或图片文件;PDF/DOCX/PPTX 请去笔记库页「导入笔记」后用 /检索 引用。`
+    if (attachments.value.length >= ATTACH_TEXT_MAX_COUNT) {
+      errorText.value = `一次最多挂 ${ATTACH_TEXT_MAX_COUNT} 个文档附件(与后端上限对齐)。`
       continue
     }
-    if (file.size > ATTACH_MAX_BYTES) {
-      errorText.value = `《${file.name}》超过 2MB,不适合当对话附件;请去笔记库页「导入笔记」。`
-      continue
-    }
+    // 解析可能要几十秒(扫描件逐页视觉识别 / 大文件 map-reduce 分析),给明确的进行中提示
+    errorText.value = `正在解析《${file.name}》…`
     try {
-      let text = await readFileAsText(file)
-      if (text.length > ATTACH_MAX_CHARS) {
-        text = text.slice(0, ATTACH_MAX_CHARS) + `\n…(已截断,原文共 ${text.length} 字符)`
+      const resp = await parseAttachment(file)
+      if (resp.status !== 'ok') {
+        errorText.value = `《${file.name}》:${resp.message ?? '解析失败'}`
+        continue
       }
-      // 同名去重:已挂过就不重复加
-      if (attachments.value.some((a) => a.name === file.name)) continue
-      attachments.value.push({ name: file.name, text })
-      errorText.value = ''
-    } catch {
-      errorText.value = `《${file.name}》读取失败`
+      // 正文进文档附件(全文或分析报告,分层在后端做完);同名去重
+      if (resp.text !== '' && !attachments.value.some((a) => a.name === file.name)) {
+        attachments.value.push({
+          name: file.name,
+          text: resp.text,
+          analyzed: resp.mode === 'analyzed',
+        })
+      }
+      // 文内图片(md/html 的 data URI / 本地图)转前端视觉通道,与直接挂图片同一条路(canvas 缩图)
+      for (const img of resp.images) {
+        if (imageAttachments.value.length >= ATTACH_IMAGE_MAX_COUNT) {
+          errorText.value = `一次最多挂 ${ATTACH_IMAGE_MAX_COUNT} 张图片,多余的已丢弃。`
+          break
+        }
+        if (imageAttachments.value.some((a) => a.name === img.name)) continue
+        const blob = await dataUrlToBlob(img.data_url)
+        const { dataUrl, mime } = await resizeImageToDataUrl(blob)
+        imageAttachments.value.push({ name: img.name, mime, data_url: dataUrl })
+      }
+      // 后端 warnings(编码容错/图片超限/大文件已分析等)透传给用户
+      errorText.value = resp.warnings.length > 0 ? `《${file.name}》:${resp.warnings.join(';')}` : ''
+    } catch (error) {
+      errorText.value = `《${file.name}》解析失败:${describeApiError(error)}`
     }
   }
 }
@@ -279,15 +273,34 @@ function onHistoryKeydown(event: KeyboardEvent): void {
   }
 }
 
-/** 输入框键盘统一入口:命令菜单 → 笔记选择器 → 历史回溯(前者拦截了就不往后传) */
+/** 输入框键盘统一入口:笔记选择器 → 命令菜单 → 空输入 Backspace 删 chip → 历史回溯(前者拦截了就不往后传) */
 function onInputKeydown(event: KeyboardEvent): void {
+  // picker 优先:开着时 Esc 关的是 picker,不会先被 slash 菜单吃掉
+  if (notePicker.value) {
+    onPickerKeydown(event)
+    if (event.defaultPrevented) return
+  }
   if (slashOpen.value) {
     onSlashKeydown(event)
     if (event.defaultPrevented) return
   }
-  if (notePicker.value) {
-    onPickerKeydown(event)
-    if (event.defaultPrevented) return
+  // 输入框为空时 Backspace 从后往前删 chip:图片 → 文本附件 → 引用笔记
+  if (event.key === 'Backspace' && input.value === '' && !notePicker.value && !slashOpen.value) {
+    if (imageAttachments.value.length > 0) {
+      imageAttachments.value.pop()
+      event.preventDefault()
+      return
+    }
+    if (attachments.value.length > 0) {
+      attachments.value.pop()
+      event.preventDefault()
+      return
+    }
+    if (referencedNotes.value.length > 0) {
+      referencedNotes.value.pop()
+      event.preventDefault()
+      return
+    }
   }
   onHistoryKeydown(event)
 }
@@ -342,7 +355,40 @@ const pickerNotes = ref<NoteListItem[]>([])
 const pickerLoading = ref(false)
 let pickerSeq = 0
 
+// ---------------- 输入草稿(按会话存 localStorage,刷新/切会话不丢) ----------------
+
+const DRAFT_KEY_PREFIX = 'baleen-qa-draft::'
+/** 进笔记选择器前的草稿:picker 复用输入框当筛选词,退出时还原 */
+let draftBeforePicker = ''
+
+/** 当前会话对应的草稿 key;新会话(未落库)用 'new' */
+function draftKey(): string {
+  return DRAFT_KEY_PREFIX + (currentSessionId.value === null ? 'new' : String(currentSessionId.value))
+}
+
+/** 恢复当前会话的输入草稿(挂载/openSession/startNew 时调用) */
+function loadDraft(): void {
+  let saved = ''
+  try {
+    saved = localStorage.getItem(draftKey()) ?? ''
+  } catch {
+    /* storage 禁用/满:跳过恢复,不影响主流程 */
+  }
+  input.value = saved
+}
+
+// 草稿随打字持久化;picker/slash 模式下输入框被复用为筛选/命令词,不存
+watch(input, () => {
+  if (notePicker.value || slashOpen.value) return
+  try {
+    localStorage.setItem(draftKey(), input.value)
+  } catch {
+    /* storage 禁用/满:跳过持久化 */
+  }
+})
+
 function openNotePicker(): void {
+  draftBeforePicker = input.value
   notePicker.value = true
   input.value = ''
   void loadPickerNotes('')
@@ -351,6 +397,7 @@ function openNotePicker(): void {
 function closeNotePicker(): void {
   notePicker.value = false
   pickerNotes.value = []
+  input.value = draftBeforePicker // 还原进 picker 前的草稿
 }
 
 function toggleNoteRef(note: NoteRef): void {
@@ -422,13 +469,15 @@ function closeSlash(): void {
 }
 
 function updateSlash(): void {
+  if (notePicker.value) return // 笔记选择器开着时输入的是筛选词,不再拉起命令菜单
   slashOpen.value = input.value.startsWith('/')
   slashActive.value = 0
 }
 
 function executeSlash(cmd: ChatCommand): void {
-  closeSlash()
+  // 先清输入再关菜单:此刻 slash 还开着,watch 不会把空串写进草稿(保住原本的问题草稿)
   input.value = ''
+  closeSlash()
   cmd.run()
 }
 
@@ -499,11 +548,13 @@ const rendered = computed(() =>
   messages.value.map((m) => (m.role === 'assistant' ? renderMarkdown(m.content) : '')),
 )
 
-/** 最新一条助手消息的缓存命中率;null = 当前模型没返回缓存数据 */
+/** 最近一条「有缓存数据」的助手消息命中率:联网搜索轮没有缓存数据,
+ * 若只看最后一条,联网后会把历史命中率抹掉(刷新恢复后也跟着"消失")。
+ * null = 会话里还没有任何带缓存数据的回答 */
 const lastCacheRate = computed<number | null>(() => {
   for (let i = messages.value.length - 1; i >= 0; i -= 1) {
     const m = messages.value[i]
-    if (m.role === 'assistant') return m.cache_hit_rate
+    if (m.role === 'assistant' && m.cache_hit_rate !== null) return m.cache_hit_rate
   }
   return null
 })
@@ -527,9 +578,10 @@ onBeforeUnmount(() => {
 
 onMounted(() => {
   void refreshSessions()
-  // URL 带了 ?session=N → 直接恢复那个会话
+  // URL 带了 ?session=N → 直接恢复那个会话(草稿在 openSession 里恢复)
   const sid = Number(route.query.session)
   if (Number.isFinite(sid) && sid > 0) void openSession(sid)
+  else loadDraft() // 没指定会话 → 恢复新会话草稿
 })
 
 function scrollBottom(): void {
@@ -554,6 +606,7 @@ function startNew(): void {
   attachments.value = []
   imageAttachments.value = []
   cancelNotePlan()
+  loadDraft() // 新会话恢复自己的草稿
   syncSessionUrl(null)
 }
 
@@ -566,6 +619,7 @@ async function openSession(id: number): Promise<void> {
     currentSessionId.value = detail.id
     messages.value = detail.messages
     syncSessionUrl(id)
+    loadDraft() // 恢复这个会话自己的输入草稿
     scrollBottom()
     // 历史消息里可能有 mermaid 图 / SVG 插图
     await nextTick()
@@ -1111,8 +1165,14 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
               没有匹配的命令(输入 / 看全部)
             </p>
           </div>
-          <!-- /检索 的笔记选择器:输入文字按标题筛,点击引用 -->
-          <div v-if="notePicker" class="slash-menu card">
+          <!-- /检索 的笔记选择器:输入文字按标题筛,点击引用;
+               全屏遮罩兜底「点外部也能退出」,菜单本体盖在遮罩之上 -->
+          <div v-if="notePicker" class="picker-mask" aria-hidden="true" @click="closeNotePicker"></div>
+          <div v-if="notePicker" class="slash-menu card slash-menu--picker">
+            <div class="picker-head">
+              <span class="picker-title muted">选择要引用的笔记</span>
+              <button class="np-cancel" type="button" @click="closeNotePicker">取消</button>
+            </div>
             <button
               v-for="n in pickerNotes"
               :key="n.id"
@@ -1144,7 +1204,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
                 </button>
               </span>
             </div>
-            <!-- 已挂的附件 chips(灰 = 临时参考文件,不入库;随提问消耗) -->
+            <!-- 已挂的文档附件 chips(灰 = 临时参考文件,不入库;随提问消耗) -->
             <div v-if="attachments.length > 0" class="ref-chips">
               <span
                 v-for="(a, idx) in attachments"
@@ -1153,6 +1213,13 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
                 :title="`取消附件《${a.name}》`"
               >
                 {{ a.name }}
+                <span
+                  v-if="a.analyzed"
+                  class="chip-analyzed"
+                  title="大文件已由 AI 分析提炼,细节可能省略"
+                >
+                  已分析
+                </span>
                 <button class="ref-chip-x" type="button" aria-label="取消附件" @click="removeAttachment(idx)">
                   ×
                 </button>
@@ -1723,6 +1790,33 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   box-shadow: var(--shadow);
 }
 
+/* /检索 笔记选择器:全屏遮罩兜底「点外部退出」,菜单本体盖在遮罩上 */
+.picker-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  background: rgba(20, 24, 33, 0.18);
+}
+
+.slash-menu--picker {
+  z-index: 30;
+}
+
+.picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 6px 6px;
+}
+
+.picker-title {
+  font-size: 12.5px;
+}
+
+.picker-head .np-cancel {
+  margin-top: 0;
+}
+
 .slash-item {
   display: flex;
   width: 100%;
@@ -1786,6 +1880,14 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   border-color: var(--line-strong);
   background: var(--bg-soft);
   color: var(--ink-2);
+}
+
+/* 「已分析」小标:大文件经后端 AI 分析提炼的标记 */
+.chip-analyzed {
+  font-size: 11px;
+  color: var(--accent-ink);
+  opacity: 0.85;
+  white-space: nowrap;
 }
 
 /* 图片附件 chip:带缩略图 */

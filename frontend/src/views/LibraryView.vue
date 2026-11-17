@@ -347,13 +347,13 @@ function onShelfDrop(event: DragEvent): void {
       >
         {{ importing ? '导入中…' : '＋ 导入笔记' }}
       </button>
-      <!-- 导入文件选择器(隐藏,由按钮/拖放触发;8 种格式 + 图片) -->
+      <!-- 导入文件选择器(隐藏,由按钮/拖放触发;10 种格式 + 图片) -->
       <input
         ref="importFileInput"
         class="visually-hidden"
         type="file"
         multiple
-        accept=".pdf,.docx,.md,.markdown,.txt,.pptx,.csv,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tif,.tiff"
+        accept=".pdf,.docx,.md,.markdown,.html,.htm,.txt,.pptx,.csv,.jpg,.jpeg,.png,.gif,.webp,.bmp,.tif,.tiff"
         aria-label="选择要导入的文件"
         @change="onImportPicked"
       />

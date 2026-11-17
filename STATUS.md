@@ -29,7 +29,7 @@
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
 | **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
 | **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效；**v22 加 llm_context_tokens/llm_max_output_tokens(per-user 预算,没填走兜底)** |
-| **API 端点总览** | `app/main.py` | ✅ 28 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 7 · 问答/会话/导出 8 · 设置 2 · 个人中心 1（数字由 `scripts/doc_lint.py` 守门） |
+| **API 端点总览** | `app/main.py` | ✅ 29 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 7 · 问答/会话/导出 8 · 解析 1 · 设置 2 · 个人中心 1（数字由 `scripts/doc_lint.py` 守门） |
 | **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页/个人中心 + 登录注册 + 书架 + 笔记两栏阅读 |
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
 | **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷 → LLM 生成章程 → 存 DB → G2 热生效；每用户一份 |

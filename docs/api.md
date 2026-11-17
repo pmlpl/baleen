@@ -1,4 +1,4 @@
-# API 契约 v27
+# API 契约 v28
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -85,7 +85,8 @@
 > 旧的单文件上传完全兼容（不传 `attachments` 即旧行为）。
 
 - `deduped=true` 表示同 `sha256` 已存在且已处理完，**不会再入队**，直接拿已有 `source_id`。
-- **支持格式**：.pdf / .docx / .pptx / .md / .markdown / .txt / **.csv（v14 新增：整篇表格，首行当表头，
+- **支持格式**：.pdf / .docx / .pptx / .md / .markdown / **.html / .htm（v28 新增：剥 style/script，
+  内嵌 `data:` 图片按内容寻址存库，外链不联网抓）** / .txt / **.csv（v14 新增：整篇表格，首行当表头，
   自动嗅探分隔符，GB18030 兼容）** / 图片（v13 起走视觉转写）；.doc / .xlsx / .xls 显式拒绝并给转换提示。
 - 415 = 扩展名不认识；413 = 超 50 MB；422 = 没带文件。
 - 该账号没配 API Key → **400**（所有内容必须经 AI 笔记整理，防止未整理内容污染知识库）。
@@ -361,7 +362,7 @@ B 站 / 抖音视频链接导入。两种模式：
 - `session_id` 缺省/null = 自动建会话（title = 首问前 30 字）
 - `top_k` 默认 5，上限 20
 - `note_ids`（可选）：用户 @ 某篇笔记 = 告诉 AI「在问什么」；注入 `<referenced_notes>` 块，检索照跑找关联笔记
-- **`attachments`（可选，v17）**：对话附件，用户临时上传给 AI 看的参考文件文本，**不入库**；前端把文本类文件（txt/md/json/csv/代码等）读成 `{name, text}` 透传，注入 prompt 的 `<reference_files>` 块（≤5 个，`text` ≤ 20000 字符，超长截断）。PDF/DOCX/PPTX 等二进制文档走「笔记库页导入 → `note_ids` 引用」路径
+- **`attachments`（可选，v17，v28 改链路）**：对话附件，用户临时上传给 AI 看的参考文件文本，**不入库**；前端把文档类文件统一交 **`POST /api/parse`** 解析后拿到 `{name, text}` 透传，注入 prompt 的 `<reference_files>` 块（≤5 个，`text` ≤ 40000 字符）。HTML/DOCX/PDF/PPTX 都可直接当附件（解析在 G0 一套口径），**大文件（正文 > 40000 字符）由后端 map-reduce 分析成报告**（`analyzed` 标记，细节可能省略）
 - **`images`（可选，v17）**：对话图片附件，用户临时上传给 AI 看的图片，**不入库**，走视觉通道；前端把图片用 canvas 缩到长边 ≤1024px、转 JPEG data URL（`{name, mime, data_url}`）透传，后端复用 `attach_images`（OpenAI 视觉 content 数组）附到最后一条 user 消息（≤4 张）。与命中笔记图（`hit_images`）合并附图，但不受其 `MAX_HIT_IMAGES=2` 上限约束。**需视觉模型**（如 deepseek-flash）；配了纯文本模型（如 glm-5.2）时拒图会自动去图降级重试（答案前置说明），不 500
 - 追问先经 LLM 改写检索词；`search_query` 透出实际使用的检索词
 - 原子落库 user/assistant 两条消息；user 消息另存 `llm_content`（含检索/引用/附件上下文，多轮前缀对齐用；图片不进 `llm_content`，重放不依赖图）
@@ -382,6 +383,29 @@ B 站 / 抖音视频链接导入。两种模式：
 - `meta`：`{session_id, session_title, search_query, user_message}`
 - `delta`：`{text}`（正文增量；推理模型的思考过程不下发）
 - `done`：`{assistant_message, took_ms}`（完整消息含出处与 cache_hit_rate，已落库）
+
+### `POST /api/parse`（v28 新增，📎 附件统一解析，不入库）
+
+`multipart/form-data`，字段 `file`（单个文件，≤ 10 MB）。前端 📎 的文档类附件统一走这里：
+后端复用 G0 `parse_file`（与导入同款解析栈），不建 source/job、不入库。
+
+```json
+{
+  "status": "ok",
+  "text": "张三 · 前端工程师 …（全文，或大文件的分析报告）",
+  "mode": "full",
+  "images": [{ "name": "头像", "mime": "image/png", "data_url": "data:image/png;base64,…" }],
+  "warnings": ["大文件已由 AI 分析提炼,细节可能省略;需要原文请拆分后分次上传"],
+  "message": null,
+  "truncated": false
+}
+```
+
+- **`status`**：`ok` / `no_text_expected` / `unsupported_format` / `error`（同 G0 语义）；≠ ok 时 `text` 为空，`message` 带用户可读说明（如 .doc 的转换提示）
+- **分层**：正文 ≤ 40000 字符 → `mode="full"` 全文直塞；超出且配了 API Key → `mode="analyzed"`（map-reduce：分块并行提取 → 合并 ≤ 20000 字符报告）；没配 key → 退化为截断全文（`truncated=true`）+ warning。正文约超 39 万字符（20 块上限）→ **422** 提示拆分
+- **`images`**：文内图片（md/html 的 data URI 与本地图）字节回传，≤ 4 张、单张 ≤ 5 MB（与 chat 的 `images` 上限对齐），前端接进视觉通道缩图；html 外链图不联网抓（与导入同语义）
+- 415 = 扩展名不认识（同 `ALLOWED_EXTS`）；413 = 超 10 MB；**没配 API Key 不挡**（文本格式照常解析，只有视觉/扫描件/分析需要 key）
+- ⚠️ 扫描件 PDF 逐页视觉识别 / 大文件分析可能耗时几十秒，前端要有进行中提示
 
 ### 会话管理
 
@@ -525,6 +549,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-17 | v28 | **📎 附件统一后端解析 + 大文件分层分析**：①新增 `POST /api/parse`（§5，multipart 单文件 ≤ 10 MB，不入库）——复用 G0 `parse_file`，docx/pdf/pptx/md/csv/txt/html 一套口径；响应 `{status, text, mode, images, warnings, message, truncated}`。②新增 `service/parse/html_parser.py`（标准库 HTMLParser 零新依赖）：剥 style/script/head、块级标签断行、h1-h6 产 heading；`<img src="data:...">` 经 `media_sink` 提取字节（导入路径存库/解析路径回传前端视觉通道），外链不联网抓；`PARSERS` 加 `.html/.htm`（`ALLOWED_EXTS` 自动扩大，导入同步支持 HTML）；`media_sink` 特判从 md 扩到 md/html。③新增 `service/qa/file_analyzer.py`（map-reduce）：正文 > 40000 字符分块（20000/块，重叠 500）并行 LLM 提取 → 合并 ≤ 20000 字符报告（`mode=analyzed`）；20 块上限 → `FileTooLargeError` 422 提示拆分；单块失败降级保留原文头部。④`POST /api/qa/chat` 的 `attachments[].text` 上限 20000 → 40000（与解析分层对齐）。⑤前端 `QaView` 📎 文档类全部走 `/api/parse`（删前端白名单/截断/编码逻辑），`api/parse.ts` 新增；chips 加「已分析」标记；解析中显示进行中提示。**背景**：HTML 简历 18 万字符 90% 是 base64，旧前端读文本被 20000 截断；附件全文进 `llm_content` 每轮重放是硬约束，故分层而非放宽上限 |
 | 2026-11-16 | v27 | **视频导入白盒进度日志**：`GET /api/sources/{id}` 响应新增 `video_log`——提取+整理全程的阶段性日志数组，条目 `{ts, stage, pct}`（时间戳 epoch 秒/阶段文本/百分比，非视频导入为 `null`）。worker `_update_video_stage`/`_fail_video_job` 每次埋点追加一条（去重守卫：同 stage 连续调用只刷新 pct；截断保留最近 50 条）；pipeline 在 G0 落盘后追加「解析完成」、organizer 前后追加「AI 整理笔记中」/「AI 整理完成」（基于 `SourcesRepo.get_parse_meta` 绕过 ORM 缓存读最新值，顺带修 `pipeline.py` headings_rewritten 覆盖过时 parse_meta 的隐患）；前端 VideoView `.progress-card` 内新增滚动日志区渲染时间戳+阶段+百分比。复用现有 2s 轮询与 `parse_meta` 持久化，刷新页面日志仍在；不上 SSE/WebSocket |
 | 2026-11-14 | v26 | **个人中心**:§10 新增 **`GET /api/profile`** 聚合端点——用户信息(id/username/注册时间)+ 使用统计(notes/sources/qa_sessions/qa_messages,owner 隔离,notes 只数 active)+ 章程预览(前 300 字,完整内容仍走 `GET /api/charter`)+ 配置掩码视图(与 `GET /api/settings` 六字段同口径,密钥永不回显全文);纯读聚合,复用现有 repo 与 `resolve_llm_config`,无新表无迁移;前端新增 `/profile` 页(导航加「个人中心」入口),只读展示,编辑动作跳章程/设置页 |
 | 2026-11-14 | v25 | **抖音免 cookie 提取 + 导入进度条**：①抖音模式改走 Playwright（`douyin_extractor.py`，channel=msedge 用系统 Edge）打开视频页拦截详情接口，元信息+播放地址全拿到，CDN 直连下载——**用户零配置**，废除 v24 的 `douyin_cookies` 设置字段（`PUT /api/settings` 移除，DB 列保留标注废弃；实测 ttwid 单值/首页 cookie/蜘蛛页全被抖音反爬封死，手动复制完整 Cookie 头对普通用户不可用）；②`GET /api/sources/{id}` 响应新增 `video_progress`（0-100）与 `video_est_seconds`（转写预计秒数），前端进度条在 whisper 阶段按视频时长插值（base 模型 ~1x 实时）；③worker `deduped=True` 语义收紧为仅 job done（失败重试不再被误报「之前导入过」），入队前清 arq 旧结果键；④organizer prompt：质量评级标准具体化（评整理后的笔记本身，视频/字幕来源不构成降级理由）+ 多并列大主题升多章结构指引（内部行为，无接口变化） |

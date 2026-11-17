@@ -15,6 +15,7 @@ from pathlib import Path
 from . import blocks
 from .csv_parser import parse_csv
 from .docx_parser import parse_docx
+from .html_parser import parse_html
 from .md_parser import parse_md
 from .pdf_parser import parse_pdf
 from .pptx_parser import parse_pptx
@@ -64,6 +65,8 @@ PARSERS = {
     ".docx": parse_docx,
     ".md": parse_md,
     ".markdown": parse_md,
+    ".html": parse_html,
+    ".htm": parse_html,
     ".pptx": parse_pptx,
     ".txt": parse_txt,
     ".csv": parse_csv,
@@ -123,8 +126,9 @@ def parse_file(
         if ext == ".pdf":
             # PDF 解析器要吃 client:扫描件才逐页视觉识别,有文本层时 client 不参与
             return parse_pdf(p, client=client)
-        if ext in (".md", ".markdown") and media_sink is not None:
-            return parse_md(p, media_sink=media_sink)
+        # md/html 都是「文内引用本地图」的格式:sink 非空时图片字节经回调落地/回传
+        if ext in (".md", ".markdown", ".html", ".htm") and media_sink is not None:
+            return parser(p, media_sink=media_sink)
         return parser(p)
     except Exception as exc:  # G0 不允许异常外逃,统一收敛为 error
         return ParseResult(

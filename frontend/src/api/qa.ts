@@ -29,10 +29,12 @@ export interface QaMessage {
   cache_hit_rate: number | null
 }
 
-/** 对话附件:用户临时上传给 AI 看的参考文件文本(前端读文本类文件得到,不入库)。 */
+/** 对话附件:用户临时上传给 AI 看的参考文件文本(后端 /api/parse 统一解析得到,不入库)。 */
 export interface ChatAttachment {
   name: string
   text: string
+  /** true = 大文件经后端 AI 分析成报告(丢细节);chips 上显示「已分析」标记 */
+  analyzed?: boolean
 }
 
 /** 对话图片附件:用户临时上传给 AI 看的图片(前端读成 data URL,不入库,走视觉通道)。 */
