@@ -1,0 +1,36 @@
+﻿rel_path,ai_verdict,ai_reason,latency_ms
+_inbox/016-core-tools-test-coverage.md,accept,实施记录含多个可复用知识单元：Path.write_text 恒 truncate 导致 append 失效的根因与一行修复、monkeypatch 不能改 pydantic-settings 实例字段须替换 module.get_settings、tmp_path+monkeypatch 测文件落盘工具的标准模式，均为跨项目可复用的踩坑结论,43911
+_inbox/02-04-闭包.md,accept,自包含的 JavaScript 闭包技术笔记，含定义、形成条件、数据私有化/防抖节流/单例/记忆化等可直接复用的完整代码模式与常见坑（var/let 循环、内存泄漏），脱离作者上下文任何人可直接复用,56250
+_inbox/02-12-Fetch-Axios.md,accept,技术笔记类文件，含大量可直接复用的知识单元：fetch 的四个坑（4xx/5xx 不抛异常、res.json() 只能调一次、默认不带 cookie、AbortController 实现超时）、axios 拦截器统一封装模式、fetch vs axios 选型对比表，内容自包含、跨项目可复用,255571
+_inbox/02-16-手写实战练习.md,accept,自写技术笔记，含可直接复用的知识单元：WeakMap 防循环引用的深拷贝完整实现、四种数组去重方法的性能对比（O(n) vs O(n²)）、手写 new/instanceof/Object.create 的原理拆解与边界情况（构造函数返回对象时的行为），内容自包含、不依赖作者上下文、跨机器可复用，属 charter「技术笔记与学习总结」默认 accept,13798
+_inbox/20260905_181535_a3e501ad.pdf,unreadable,"解析不了(no_text_expected):扫描件 PDF 的 2 页都没能识别出内容;2 页识别失败;按无文本层处理,可检查设置页模型是否支持视觉",0
+_inbox/20260906_105322_839e8a44.pdf,unreadable,"解析不了(no_text_expected):扫描件 PDF 的 2 页都没能识别出内容;2 页识别失败;按无文本层处理,可检查设置页模型是否支持视觉",0
+_inbox/20260919_150620_eb5e8db3.pdf,reject,可见内容仅为一次失败的 AI 图片转写记录——助手回复「base64 数据被截断、无法识别」并给出重传建议，没有任何实际转写出的内容、触发条件分析或可复用结论，属于无上下文的失败过程残留。,158359
+_inbox/5e47312e6d3499a33f304a0bbdbf8ba3.jpg,unreadable,"解析不了(no_text_expected):视觉识别失败(LLMResponseError),按无文本层处理;可检查设置页模型是否支持视觉",0
+_inbox/8b8442659fd99c1bf9e8518ed19f687a.jpg,unreadable,"解析不了(no_text_expected):视觉识别失败(LLMResponseError),按无文本层处理;可检查设置页模型是否支持视觉",0
+_inbox/Agent应用开发学习指南.md,accept,自包含的技术学习笔记，含可直接复用的知识单元：提示工程三技巧及示例、Function Calling 的 JSON Schema 定义、多 Agent 协作模式对比、Dockerfile/docker-compose 模板和安全风险应对清单，不依赖作者个人上下文，换人换项目均可照用,74484
+_inbox/BGE_M3.pdf,accept,BGE M3 论文全文，含可直接复用的知识单元：自知识蒸馏训练方法、dense/sparse/multi-vector 三路检索统一框架、8192 长文本支持及 MIRACL/MKQA 多语言基准对比数据，内容自洽不依赖作者上下文，属 charter 明确收录的论文类 reference 资料,42401
+_inbox/CodeR.pdf,accept,这是一篇完整的学术论文（CodeR 代码嵌入模型），含摘要、方法（DRU 数据合成原则、Annealing 课程学习策略）、16 项检索任务评测及公开代码/模型链接，属于可独立引用的 reference_data，三问全过,50403
+_inbox/doc-ocr-system__README.md,accept,README 属技术文档默认收，且含可直接复用的知识单元：量化过的推理优化结论（关闭方向分类 1370.8→878.3ms 提速35.9%零精度损失、降采样无收益已排除）、模型选型与体积数据、完整 API 契约与数据库 schema，换机器可按 Docker/脚本复现,74660
+_inbox/hello.txt,reject,"内容仅为一行 hello, world! 测试字符串，无任何结论、步骤或可复用知识单元，属于占位/测试文件",26235
+_inbox/test.txt,reject,占位测试文件，全文仅一句「这是一个测试文件」，无任何结论、步骤或可复用知识单元,4452
+_inbox/【哲风壁纸】人物特写-动漫少女.jpg,reject,文件名即标明是动漫壁纸，属于 charter 明确不收的「纯截图/壁纸」类；且图像数据损坏无法读取，全文无任何可复用的知识内容,13396
+_inbox/屏幕截图_审批查询.png,reject,纯截图类文件：名为「审批查询」的界面截图且无任何文字说明，本次图像数据又未能传回（转写失败），看不到任何可复用的知识单元，直接对应 charter「不收：纯截图」条目。,78601
+_inbox/屏幕截图_用量仪表盘.png,reject,纯截图无任何文字说明，且转写完全失败（正文只是转写失败的提示语，无实际内容），用量仪表盘截图属临时性个人数据，没有任何可复用的知识单元,93012
+_inbox/情景6 Spring Boot消息服务.pptx,accept,课件类文件按知识单元判定：含可直接复用的内容——RabbitMQ 四种工作模式的 routingKey 分发规则与实例、实体类未序列化抛 IllegalArgumentException 的两种解决方案及 Jackson2JsonMessageConverter 配置代码、TTL 概念区分，均为自包含可复现知识，默认 accept（思政段落与个别 MySQL 字样为噪声，不影响理解）,17662
+_inbox/新建 文本文档.txt,unreadable,解析 ok 但无正文,0
+_inbox/某班考勤表（第8-10周）.xlsx,unreadable,"解析不了(unsupported_format):暂不支持 .xlsx 表格簿,请另存为 CSV,或把内容整理进 .md/.txt 后导入",0
+_inbox/某自研项目__README.md,accept,项目 README 属技术文档默认收录，且含大量可复用知识单元：架构图、四种部署方式、端口踩坑（Windows Docker 桥接网络需 host.docker.internal:3307 绕回）、常见问题排错表（SECRET_KEY 轮换致历史密文不可解、vite.config.js 编译产物覆盖 .ts 等「现象—原因—处理」条目），脱离作者上下文仍可独立复用,17032
+_inbox/综合实践课程项目报告.doc,unreadable,"解析不了(unsupported_format):不支持 .doc(旧版二进制格式),请用 Word/WPS 另存为 .docx 后再导入",0
+_inbox/缺陷反馈_某音乐平台逆向研究.md,accept,属「问题-原因-解决」式踩坑记录而非单纯汇报：含多条他人可直接引用的逆向结论——QQ音乐签名函数 __sign_hash_20200305 及盐表在 vendor.chunk.js 中按部署变化、网易云无加密API /api/song/enhance/player/url 可返320kbps音频、Solara proxy.ts 仅为CORS代理不做加密的已纠正误判，以及WEAPI的AES-CBC-128+RSA-1024方案确认，均为可复现的技术事实与「为什么」分析。,16803
+_inbox/软件工程复习核心知识点提取.pdf,accept,自包含的软件工程复习整理，含大量可直接复用的知识单元（逻辑覆盖六种标准的强弱关系、纯收入/投资回收期计算公式、六大UML关系速查表、α/β测试对比、驱动模块vs桩模块辨析等），脱离作者上下文仍成立，属charter'技术笔记与学习总结'默认收条目,26461
+_inbox/软件开发项目大综合实训-AI轻量化落地工程项目实践教学课件.pptx,accept,完整教学课件，含可复用知识单元：轻量化OCR系统全链路蓝图（上传→预处理→ONNX/INT8量化→FastAPI/Vue3/SQLite集成→边缘部署）、精度与推理速度权衡要点、结构化抽取鲁棒性等思考题，按课件类默认收，可作项目实践参考,18685
+_inbox/软件开发项目大综合实训实践授课进度计划表.docx,reject,课程行政进度表，属填报模板类单据：仅罗列日期/周次/学时与授课主题标题（如「Paddle转ONNX、INT8量化」仅作课目名出现），无任何技术步骤、原因分析或结论，换个人拿不到可直接复用的知识单元,177699
+_inbox/软件开发项目大综合实训实践项目指导书.docx,accept,课程技术文档类（指导书），含可直接复用的知识单元：完整的轻量化OCR系统技术栈选型（PaddleOCR-Light→Paddle2ONNX导出→ONNXRuntime INT8量化→FastAPI+Vue3+SQLite，普通CPU i5/8GB即可稳定运行）、五阶段交付物方法论与精度/算力/速度取舍要点，内容自含、换人换机可照此复现；学时分配、签到考核等课程管理内容仅为上下文，不影响主体价值。,36566
+_inbox/错误堆栈.txt,reject,只有一段裸 Traceback（FileNotFoundError 读不到 note.json），无触发条件、无原因分析、无解决结论，任何人都无法从中复用任何知识，直接命中 charter「不收：无上下文的报错堆栈」,47935
+_inbox/附件2-1：某大学学生岗位实习管理人员(指导教师)巡访情况记录表.doc,unreadable,"解析不了(unsupported_format):不支持 .doc(旧版二进制格式),请用 Word/WPS 另存为 .docx 后再导入",0
+_inbox/附件2-9：某大学学生岗位实习安全承诺书.doc,unreadable,"解析不了(unsupported_format):不支持 .doc(旧版二进制格式),请用 Word/WPS 另存为 .docx 后再导入",0
+_inbox/霸道总裁爱上我.doc,unreadable,"解析不了(unsupported_format):不支持 .doc(旧版二进制格式),请用 Word/WPS 另存为 .docx 后再导入",0
+_inbox/鞠婧祎.jpeg,reject,内容仅为图片转写失败的报错说明（图片数据不完整、无法解析），没有任何可复用知识；且文件本身疑似明星照片，属无文字说明的纯图片，命中不收清单,85740
+_inbox/项目实施记录（一）.md,reject,过程汇报类文件：逐条记录环境搭建与Git规范'做了什么'（核查表、装依赖、冒烟通过、分支演练），无问题—原因—解决分析；版本号清单等同requirements.txt、master/feature分支模型是通用规范复述，唯一一处问题解决（系统Python包冲突→改用uv虚拟环境）仅一句常识级带过，与同次实训的实验报告（含RapidOCR锁版本、--no-deps等具体踩坑）形成对照，本文件没有留下'为什么',35242
+_inbox/项目实验实训报告（一）.md,accept,含多条可复用的「问题—原因—解决」记录：RapidOCR 在 Python 3.13 装不上→锁 rapidocr-onnxruntime==1.2.3；opencv 冲突→--no-deps 后单独补依赖；CRLF/LF 跨平台脚本失败→.gitattributes 强制 .sh 用 LF，换人换机器可直接复用。,34730
