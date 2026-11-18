@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import random
 import re
 import sys
@@ -26,6 +27,9 @@ from pathlib import Path
 from typing import Any
 
 from _common import build_dupe_map, load_existing, write_csv
+
+# 路径锚定脚本自身位置:从任何目录跑都不漂移
+EVAL_DIR = Path(__file__).resolve().parents[1]
 
 COLUMNS = [
     "rel_path", "size_kb", "char_count", "page_count", "table_count", "image_count",
@@ -342,32 +346,45 @@ def list_samples(root: Path) -> list[Path]:
     return sorted(files, key=lambda p: p.relative_to(root).as_posix().lower())
 
 def write_labels(labels_path: Path, rows: list[dict[str, str]], seed: int) -> None:
-    # 按 seed 洗牌后切 60/40，保证比例稳定可复现（新增样本会重排，阶段 1 可接受）
-    order = [row["rel_path"] for row in rows]
-    random.Random(seed).shuffle(order)
-    n_dev = round(len(order) * 0.6)
-    dev_set = set(order[:n_dev])
+    """合并式骨架生成:已有标注的行原样保留,**只给新文件追加空白骨架**。
 
-    label_rows: list[dict[str, str]] = []
+    ⚠️ 2026-11-18 修复:本函数原来是整表重写+重排 split——按文档跑「转正流程」
+    会把 35 条人工金标准全部抹掉。金标准不可再生,human_* 已填的行绝不能碰;
+    新行 split 也留空,由 make_split --anchored 增量分配(不动已有 split)。
+    """
+    existing: list[dict[str, str]] = []
+    if labels_path.exists():
+        with labels_path.open("r", encoding="utf-8-sig", newline="") as fh:
+            existing = list(csv.DictReader(fh))
+    seen = {row["rel_path"] for row in existing}
+
+    added = 0
     for row in rows:
         rel = row["rel_path"]
-        label_rows.append(
+        if rel in seen:
+            continue
+        existing.append(
             {
                 "rel_path": rel,
                 "filename": rel.rsplit("/", 1)[-1],
                 "ext": Path(rel).suffix.lower().lstrip("."),
                 "char_count": row["char_count"],
                 "slot": "",
-                "split": "dev" if rel in dev_set else "test",
-                # 第 7–13 列一律留空，由人标注
+                "split": "",
+                # 第 7–13 列一律留空,由人标注
             }
         )
-    write_csv(labels_path, LABEL_COLUMNS, label_rows)
+        added += 1
+    if not added:
+        print(f"[ok] labels 无新增({len(existing)} 行已有,未改动)")
+        return
+    write_csv(labels_path, LABEL_COLUMNS, existing)
+    print(f"[ok] 新增 {added} 行骨架(已有 {len(existing) - added} 行原样保留) → {labels_path}")
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="扫描 eval/inputs/samples/，输出 12 列特征表")
-    parser.add_argument("--samples", default="eval/inputs/samples", help="样本根目录")
-    parser.add_argument("--out", default="eval/inputs/candidates.csv", help="输出 CSV 路径")
+    parser.add_argument("--samples", default=str(EVAL_DIR / "inputs" / "samples"), help="样本根目录")
+    parser.add_argument("--out", default=str(EVAL_DIR / "inputs" / "candidates.csv"), help="输出 CSV 路径")
     parser.add_argument("--resume", action="store_true", help="跳过输出文件里已有的 rel_path")
     parser.add_argument("--random", type=int, default=None, help="只保留随机抽取的 N 个文件")
     parser.add_argument("--seed", type=int, default=42, help="随机种子（默认 42）")

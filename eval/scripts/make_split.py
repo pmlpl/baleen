@@ -31,6 +31,9 @@ import random
 import sys
 from collections import Counter
 from pathlib import Path
+
+# 路径锚定脚本自身位置:从任何目录跑都不漂移
+EVAL_DIR = Path(__file__).resolve().parents[1]
 from typing import Any
 
 from _common import write_csv
@@ -92,8 +95,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="分层重分配 labels.csv 的 split 列（slot×verdict 粒度）"
     )
-    parser.add_argument("--labels", default="eval/inputs/labels.csv")
-    parser.add_argument("--candidates", default="eval/inputs/candidates.csv", help="提供 dupe_of")
+    parser.add_argument("--labels", default=str(EVAL_DIR / "inputs" / "labels.csv"))
+    parser.add_argument("--candidates", default=str(EVAL_DIR / "inputs" / "candidates.csv"), help="提供 dupe_of")
     parser.add_argument("--strategy", choices=("stratified",), default="stratified")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test-ratio", type=float, default=0.4)
