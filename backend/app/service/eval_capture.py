@@ -1,8 +1,8 @@
 """评测候选样本自动归档(「使用即积累」,2026-11-02 主人拍板的 C 路线)。
 
-每次**真实导入**完成后,把原始文件复制进 ``eval/candidates/``、追加登记行到
-``eval/candidates_log.csv``——主人日常用 baleen 的同时,评测语料池自动变大;
-主人有空时复核,挑中的挪进 ``eval/samples/_inbox/`` 走既有流程
+每次**真实导入**完成后,把原始文件复制进 ``eval/inputs/candidates/``、追加登记行到
+``eval/inputs/candidates_log.csv``——主人日常用 baleen 的同时,评测语料池自动变大;
+主人有空时复核,挑中的挪进 ``eval/inputs/samples/_inbox/`` 走既有流程
 (``candidates.py --resume`` 重扫特征 → ``--labels-out`` 出标注骨架)。
 
 设计口径:
@@ -26,8 +26,8 @@ from app.core.config import ROOT_DIR, get_settings
 log = logging.getLogger(__name__)
 
 # 归档区(仓库内但不进 git;文件是主人笔记的副本,复核选中才转正)
-CANDIDATES_DIR = ROOT_DIR / "eval" / "candidates"
-LOG_PATH = ROOT_DIR / "eval" / "candidates_log.csv"
+CANDIDATES_DIR = ROOT_DIR / "eval" / "inputs" / "candidates"
+LOG_PATH = ROOT_DIR / "eval" / "inputs" / "candidates_log.csv"
 
 LOG_COLUMNS = [
     "captured_at",

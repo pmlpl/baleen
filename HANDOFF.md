@@ -5,6 +5,12 @@
 
 ---
 
+> **为什么有这套文档（初心，别忘）**
+>
+> 这个项目多线并行、agent 来回换、跨会话跨天，信息差会反复杀人——互相覆盖、提交混入、测试绿但实际没用、速览说"做完"却没交付块。这套文档不为规范而规范，它只做一件事：把「谁、什么时候、为什么、改了什么、怎么验的、留了什么坑」**钉死**，让事实不丢、不乱、不互相覆盖。
+>
+> 它和项目核心理念同构——**过滤掉协作过程的信息噪音，留下可追溯的事实**，就像笔记库过滤内容噪音、留下知识。迷路了就回来读这一段。
+
 ## 0. 谁读、谁写（先看这张表）
 
 | 文件 | 谁写 | 谁读 |
@@ -64,7 +70,7 @@
    ____
 
 4. 我知道不能碰的：
-   eval/samples/ · eval/labels.csv · HANDOFF.md · 其他角色的目录
+   eval/inputs/samples/ · eval/inputs/labels.csv · HANDOFF.md · 其他角色的目录
    （`AGENTS.md` 可改，但改动必须留痕：§11 记录 + 回复明示）
 
 5. 我拿不准的（逐条列，没有就写"无"）：
@@ -112,9 +118,9 @@
 | **线 I-批2** | `app/worker/` · `app/api/` · `app/main.py` · `backend/pyproject.toml` | arq worker + 上传 API |
 | **线 L** | `frontend/` 全目录（含 `frontend/DELIVERY.md`） | 三页界面（导入 / 笔记库 / 检索） |
 | **线 M** | `app/api/library.py`（新）· `app/repo/library.py`（新）· `app/main.py`（只加 2 行）· `tests/api/`（新）· `STATUS.md` | 4 个查询 API（`docs/api.md` §3 §4） |
-| **线 N** | `eval/queries/`（新）· `eval/scripts/ablation.py`（新）· `eval/ablation.md`（新）· `eval/scripts/make_split.py` · `eval/metrics.py` · `eval/split_meta.json` · **`eval/labels.csv` 的 `split` 列（主人 2026-10-29 专门批准，仅此一列）** · `eval/DELIVERY.md` | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) |
-| **协调方** | `HANDOFF.md` · `docs/note-format.md` · `docs/adr/` · **`docs/api.md`** · `eval/rubric.md` · `eval/labels.csv`（除 `split` 列） · `AGENTS.md` · git 提交 | 只由协调方改 |
-| **已冻结** | `app/service/parse/` · `chunk/` · `embed/` · `imports/pipeline.py` · `app/repo/`（已有文件）· `alembic/` · `eval/samples/` | 已验收，要改先提 ADR |
+| **线 N** | `eval/queries/`（新）· `eval/scripts/ablation.py`（新）· `eval/analysis/ablation.md`（新）· `eval/scripts/make_split.py` · `eval/metrics.py` · `eval/inputs/split_meta.json` · **`eval/inputs/labels.csv` 的 `split` 列（主人 2026-10-29 专门批准，仅此一列）** · `eval/DELIVERY.md` | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) |
+| **协调方** | `HANDOFF.md` · `docs/note-format.md` · `docs/adr/` · **`docs/api.md`** · `eval/rubric.md` · `eval/inputs/labels.csv`（除 `split` 列） · `AGENTS.md` · git 提交 | 只由协调方改 |
+| **已冻结** | `app/service/parse/` · `chunk/` · `embed/` · `imports/pipeline.py` · `app/repo/`（已有文件）· `alembic/` · `eval/inputs/samples/` | 已验收，要改先提 ADR |
 
 ### 三秒自查
 
@@ -171,10 +177,10 @@ md 带图导入、SVG 插图、对话附件（文本+图片）、笔记渲染 v1
 | 新 source 在 worker 处理前 `parse_status=error` | ✅ 加 `pending` 枚举（迁移 `0009`） |
 | 2 个子块超 bge 512 token 被静默截断 | ✅ 代码块超限按行切（`code_part` 编号） |
 | `vite.config.ts` proxy rewrite 从一开始就是错的 | ✅ 已修 |
-| ADR 0004 §5「heading 前缀提升判别力」缺实验 | ✅ 已做 A/B：**给 text/table 裸加前缀 R@5 反掉 2 条**，不改生产（`eval/prefix_ablation.md`） |
+| ADR 0004 §5「heading 前缀提升判别力」缺实验 | ✅ 已做 A/B：**给 text/table 裸加前缀 R@5 反掉 2 条**，不改生产（`eval/analysis/prefix_ablation.md`） |
 | 20 条 query 相关性是执行者自判 | ✅ 主人已逐条复核（15 对 / 2 勉强 / 1 改问法） |
 | 槽 7 分层没细到 (槽位, 判定) | ✅ test 18/18 覆盖，误拒率 0% 不再是假象 |
-| 切块参数 250–400 是推导值、没做过实验 | ✅ 三档消融校准，维持 300（`eval/ablation.md` §12） |
+| 切块参数 250–400 是推导值、没做过实验 | ✅ 三档消融校准，维持 300（`eval/analysis/ablation.md` §12） |
 | **检索没有相关性阈值** | ⚠️ **仍未解决**（RRF 无绝对量纲，v1 取舍见 `docs/api.md` §4） |
 
 ### 两条还在生效的教训
@@ -206,17 +212,17 @@ md 带图导入、SVG 插图、对话附件（文本+图片）、笔记渲染 v1
 | 1 | **线 M** | 后端 4 个查询 API（`docs/api.md` §3 §4） | ✅ 已验收并提交 `745f47c` |
 | 2 | **线 L** | 前端三页（导入 / 笔记库 / 检索） | ✅ 已验收并提交 `f80df35` |
 | 3 | **线 N** | 20 query 集 + 切块消融 + 槽位细化到 (槽位,判定) | ✅ 已验收并提交（见 `git log` 线 N 一条） |
-| 4 | — | **G2 live 复测** | ✅ **已完成（2026-10-31，真链路全量）**：`g2_eval.py` parse→G1→G2 跑全 35 样本（deepseek-flash，6.6 万 token），**误拒率 0/15 = 0%（ok 口径，基线 53.3%）**、非法组合 0、唯一判定错是 1 条误收；十节正式报告 `eval/report.md`（test split）/`report_g2_ok.md`（ok 口径），见 backend/delivery/ 线 R-G2 节 |
+| 4 | — | **G2 live 复测** | ✅ **已完成（2026-10-31，真链路全量）**：`g2_eval.py` parse→G1→G2 跑全 35 样本（deepseek-flash，6.6 万 token），**误拒率 0/15 = 0%（ok 口径，基线 53.3%）**、非法组合 0、唯一判定错是 1 条误收；十节正式报告 `eval/runs/report.md`（test split）/`report_g2_ok.md`（ok 口径），见 backend/delivery/ 线 R-G2 节 |
 | 5 | 线 Q | **问答生成** → 已实现并升级为聊天式多轮 + SSE 流式 + 设置页热生效 | ✅ 线 Q 批1-8（见 backend/delivery/ 线 Q） |
-| 6 | — | **人工复核 20 条 query 的期望** —— 工具已经备好：**`eval/queries/复核单.md`**（每条 query 下面直接抄出「我认为答案在的那一节」的真实正文，只需判断答案在不在那儿；⭐ 标记的 6 条是重点） | ✅ **已完成（2026-10-29，主人逐条判定）**：15 对 / 2 勉强（q07、q09）/ 1 不对（q04）/ 负例维持 2；q04 经主人批准改问法（monkeypatch 前提与原文不符），指标已按复核后标签重算——**300 档 R@5 = 100%**（宽松 n=18 / 严格 n=16 一致），见 `eval/ablation.md` §11 |
+| 6 | — | **人工复核 20 条 query 的期望** —— 工具已经备好：**`eval/queries/复核单.md`**（每条 query 下面直接抄出「我认为答案在的那一节」的真实正文，只需判断答案在不在那儿；⭐ 标记的 6 条是重点） | ✅ **已完成（2026-10-29，主人逐条判定）**：15 对 / 2 勉强（q07、q09）/ 1 不对（q04）/ 负例维持 2；q04 经主人批准改问法（monkeypatch 前提与原文不符），指标已按复核后标签重算——**300 档 R@5 = 100%**（宽松 n=18 / 严格 n=16 一致），见 `eval/analysis/ablation.md` §11 |
 | 7 | — | 补 `notes.markdown` 生成 / 代码块超限 / heading 前缀 A/B（见 §1「真问题」1/5/6） | 未派，等人拍板 |
 | 8 | — | **工具链 + 阶段3/4**（联网搜索 / 写笔记 / 导入后主动总结 / 会话产出笔记） | 📋 **ADR 0005 提案已出（f051998），3 个决策点待主人拍板后动工** |
 
 **~~槽位细化的缺口~~（2026-11-02 复核：已闭环，本段作废）**：`(槽位, 判定)` 共 18 个组合
-**test 已覆盖 18/18**（`eval/labels.csv` 实测，test 18 条 / dev 17 条）；当初缺的
+**test 已覆盖 18/18**（`eval/inputs/labels.csv` 实测，test 18 条 / dev 17 条）；当初缺的
 (2,accept)/(4,reject)/(5,accept)/(7,accept) 全部就位，其中 **(7,accept) = test/`_inbox/8b8442659...jpg`**
 （手写笔记，G1 判定 accept）。也就是说「误拒率在 test 上是虚的」这个担忧**已经不成立**，
-无需再挪样本、无需再动 `eval/samples/`。
+无需再挪样本、无需再动 `eval/inputs/samples/`。
 
 **派活前先确认**：`STATUS.md` 顶部速览里的模块表还准不准（现在**后端 + 前端全绿**，只差问答生成）。
 
@@ -229,7 +235,7 @@ md 带图导入、SVG 插图、对话附件（文本+图片）、笔记渲染 v1
 |---|---|
 | 要新增任何第三方依赖（哪怕只有 1MB） | 文件/函数的命名、目录细分 |
 | 想换技术方案（会偏离 `AGENTS.md` §4/§5 或 ADR） | 测试用例怎么写、断言什么 |
-| 想动 `eval/samples/` 里任何文件 | 代码风格、注释多寡 |
+| 想动 `eval/inputs/samples/` 里任何文件 | 代码风格、注释多寡 |
 | 想改 `AGENTS.md`、`TASK.md`、`labels.csv` 的人工标注列 | 报错文案的中文措辞 |
 | 需要开代理 / 需要外网下载（主人得手动开） | 日志级别、临时脚本放哪 |
 | 评测口径的理解有分歧 | 重构内部实现但不改对外接口 |

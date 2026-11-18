@@ -1,11 +1,11 @@
 #!/usr/bin/env python
 """G2 真跑评测:产品真链路 parse→G1→G2,产出 preds.csv 喂 metrics.py 出十节报告。
 
-    cd backend && uv run python scripts/g2_eval.py --samples ../eval/samples \
-        --out ../eval/preds_live.csv --limit 2            # 试跑
+    cd backend && uv run python scripts/g2_eval.py --samples ../eval/inputs/samples \
+        --out ../eval/runs/preds_live.csv --limit 2            # 试跑
     cd backend && LLM_BASE_URL=https://api.deepseek.com/v1 \
         LLM_API_KEY=sk-xxx LLM_MODEL=deepseek-flash \
-        uv run python scripts/g2_eval.py --samples ../eval/samples --out ../eval/preds_live.csv
+        uv run python scripts/g2_eval.py --samples ../eval/inputs/samples --out ../eval/runs/preds_live.csv
 
 - 与 g2_smoke.py 的分工:g2_smoke 单独考 G2(直接喂 parse 结果);本脚本跑**产品真链路** ——
   G0 非 ok 确定性拒收(产品本就不进闸)、G1 启发式拒收、都过了才烧 G2 的 LLM。
@@ -124,8 +124,8 @@ def _write_csv(out_path: Path, rows: list[dict]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="G2 真跑评测:parse→G1→G2 真链路 → preds.csv")
-    ap.add_argument("--samples", default="../eval/samples", help="样本根目录(rel_path 相对它)")
-    ap.add_argument("--out", default="../eval/preds_live.csv", help="preds 输出 CSV")
+    ap.add_argument("--samples", default="../eval/inputs/samples", help="样本根目录(rel_path 相对它)")
+    ap.add_argument("--out", default="../eval/runs/preds_live.csv", help="preds 输出 CSV")
     ap.add_argument("--limit", type=int, default=None, help="本次最多处理 N 个文件")
     ap.add_argument("--delay", type=float, default=2.0, help="文件之间 sleep 秒数(默认 2)")
     ap.add_argument("--resume", action="store_true", help="跳过 out CSV 里已有判定的 rel_path")

@@ -12,7 +12,7 @@
 
 ## 契约与决策
 
-- [API 契约 v28](docs/api.md) — 前后端接口（版本以「变更记录」为准）
+- [API 契约 v29](docs/api.md) — 前后端接口（版本以「变更记录」为准）
 - ADR（技术决策，答辩素材）：
   - [0001 架构基线](docs/adr/0001-architecture-baseline.md)
   - [0002 解析栈](docs/adr/0002-parsing-stack.md)
@@ -30,12 +30,13 @@
 - 后端归档：[foundation](backend/delivery/2026-10-foundation.md) · [gates-retrieval](backend/delivery/2026-10-gates-retrieval.md) · [qa-and-eval](backend/delivery/2026-10-qa-and-eval.md) · [2026-11](backend/delivery/2026-11.md)
 - [评测线交付](eval/DELIVERY.md) · [前端线交付](frontend/DELIVERY.md)
 
-## 评测
+## 评测（自己跑的说明书：[eval/README](eval/README.md)——一条规则 + 6 步 + 该看到的数字）
 
-- 任务与规则：[TASK 任务书](eval/TASK.md) · [rubric 评分规则](eval/rubric.md) · [复核单](eval/queries/复核单.md) · [queries/README](eval/queries/README.md)
-- 报告（三口径）：[report · test 18](eval/report.md) · [report_all · 全量 35](eval/report_all.md) · [report_g2_ok · ok 21](eval/report_g2_ok.md)
-- 消融：[ablation](eval/ablation.md) · [prefix_ablation](eval/prefix_ablation.md)
-- 置信区间：[ci_g12_dev](eval/ci_g12_dev.md) · [ci_g12_test](eval/ci_g12_test.md) · [ci_retrieval](eval/ci_retrieval.md)
+- 任务与规则：[TASK 任务书](eval/TASK.md) · [rubric 评分规则](eval/rubric.md) · [复核单](eval/queries/复核单.md)
+- 跑批产物（`runs\` 可删可重跑，跑一下就回来）：preds / report / ci / negative_report——生成与看法见 [eval/README](eval/README.md)
+- 消融：[ablation](eval/analysis/ablation.md) · [prefix_ablation](eval/analysis/prefix_ablation.md)
+- 缺陷台账（模式归类 + A 档回归缺口）：[defects_ledger.md](eval/analysis/defects_ledger.md) · [defects_ledger.csv](eval/analysis/defects_ledger.csv)
+- 负例题集：[negative_queries.csv](eval/queries/negative_queries.csv) · [q10 复核单](eval/queries/q10_复核单.md)
 
 ## 时间线（仓库外）
 

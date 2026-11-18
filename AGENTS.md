@@ -30,7 +30,7 @@
 | `docs/` | 架构、API 契约、ADR | 文档任务 |
 | `docs/adr/` | 技术决策记录（**答辩素材，边做边记**） | 文档任务 |
 | `eval/` | 评测脚本、标注、报告 | 评测任务 |
-| `eval/samples/` | **真实样本文件** | ❌ **任何人都不许动** |
+| `eval/inputs/samples/` | **真实样本文件** | ❌ **任何人都不许动** |
 
 **一句话边界**：一次任务只碰一个顶层目录；要跨目录，先说明为什么。
 
@@ -41,7 +41,7 @@
 1. **一次任务只碰一个顶层目录**（`backend/` / `frontend/` / `docs/` / `eval/` 之一）。
 2. **不许擅自新增第三方依赖**。需要时先给出：用途、体积、维护状态、替代方案。等确认。
 3. **不许创建或修改 `.env`**。只能改 `.env.example`。
-4. **不许改 `eval/samples/` 下任何文件** —— 包括重命名、移动、修改内容。**文件名本身就是评测特征**，改了就等于毁掉样本。
+4. **不许改 `eval/inputs/samples/` 下任何文件** —— 包括重命名、移动、修改内容。**文件名本身就是评测特征**，改了就等于毁掉样本。
 5. **不许把任何密钥、token、密码写进代码或提交历史。**
 6. 数据表结构变更**必须**带 Alembic migration，不许手改数据库。
 7. 改完必须能跑通：`docker compose up -d` → 后端 `GET /healthz` 返回 200。
@@ -189,9 +189,9 @@ pnpm dev
 pnpm build
 
 # ---------- 评测 ----------
-python eval/scripts/candidates.py --samples eval/samples --out eval/candidates.csv
+python eval/scripts/candidates.py --samples eval/inputs/samples --out eval/inputs/candidates.csv
 python eval/scripts/runner.py --samples eval/samples --out eval/preds.csv --predictor fake
-python eval/scripts/metrics.py --labels eval/labels.csv --preds eval/preds.csv --split test
+python eval/scripts/metrics.py --labels eval/inputs/labels.csv --preds eval/runs/preds.csv --split test
 ```
 
 ---
@@ -244,7 +244,7 @@ chore: 升级 uv 到 0.13
 2. 明确你要动的是哪个顶层目录，说出来
 3. 列出你打算创建/修改的文件清单 → **等人确认**
 4. 动手，只碰清单里的文件
-5. 自测：命令能跑通、类型检查过、没碰 `eval/samples/`
+5. 自测：命令能跑通、类型检查过、没碰 `eval/inputs/samples/`
 6. **文档同步（交付的一部分，不是可选项）**
    - 写交付块：`backend/delivery/<阶段>.md` · `frontend/DELIVERY.md` · `eval/DELIVERY.md`（格式见 `HANDOFF.md` §4）
    - 有实质工作就写当天日志：`../日志/YYYY-MM-DD.md`（规范见其 `README.md`）
@@ -274,4 +274,5 @@ chore: 升级 uv 到 0.13
 | 2026-11-07 | §10 开工流程把「文档同步」列为第 6 步（原来只在第 6 步「交付说明」里含糊带过）：交付块 / 当天日志 / api.md 版本 / `doc_lint` 0 ERROR；并明确「没写文档的交付不算交付」 |
 | 2026-11-09 | charter.md 退役 + 笔记契约内容层：① 删 `charter.md`（charter 已问卷化存 DB，不再手写文件）；② `config.py` `DEFAULT_CHARTER` 改通用兜底（去掉"软件本科生"身份预设）；③ `docs/note-format.md` 加 §5 内容层（5 条好笔记骨架：用自己的话/原子化/定义+例子/三段可复现/出处，融合 charter 判据 + Zettelkasten）；④ `generator.py` prompt「判据」「笔记长什么样」对齐内容层；⑤ `g2.py` warning 文案 `charter.md`→章程；⑥ `api.md` v18→v19 + 优先级描述更新；⑦ NAVIGATION/HANDOFF/各 docstring 同步清理 `charter.md` 引用。跨 docs/backend/frontend/根目录，理由：charter.md 退役的引用散落全项目 |
 | 2026-11-12 | §1 定位去掉「中文优先」（主人拍板：定位就是「智能笔记库」）：同步 `docs/adr/0001` §1、`backend/pyproject.toml` description、`eval/TASK.md` §一。跨根目录/docs/backend/eval，理由：同一句定位散落 4 处；测试 fixture `utf8.txt` 中的「中文优先」是 UTF-8 编码测试文本，与定位无关，不动 |
+| 2026-11-18 | eval/ 目录按职责重组（inputs 标注语料 / queries 题集 / runs 跑批产物 / analysis 分析 / scripts 脚本，顶层 27→9 条目）：samples/candidates/labels/split_meta 迁入 inputs/，report/ci/preds 迁入 runs/，消融与缺陷台账迁入 analysis/；§3/§6/§10 的 eval 路径同步；eval_capture.py 归档路径随迁（532 passed，doc_lint 0/0） |
 

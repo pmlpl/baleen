@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """baleen / eval · 阶段 2：批量跑器。
 
-对 `eval/samples/` 逐个调用预测器，输出 `preds.csv`（10 列）：
+对 `eval/inputs/samples/` 逐个调用预测器，输出 `preds.csv`（10 列）：
     rel_path, pred_verdict, pred_quality, pred_note_type, pred_score,
     pred_action, cost_tokens, latency_ms, error, raw_json
 
@@ -14,9 +14,9 @@
 - `--predictor http` 未配置时**报错退出**，不假装成功。
 
 用法：
-    python eval/scripts/runner.py --samples eval/samples --out eval/preds.csv \
+    python eval/scripts/runner.py --samples eval/inputs/samples --out eval/runs/preds.csv \
         --predictor fake --dry-run
-    python eval/scripts/runner.py --samples eval/samples --out eval/preds.csv \
+    python eval/scripts/runner.py --samples eval/inputs/samples --out eval/runs/preds.csv \
         --predictor fake --split test --resume
 """
 
@@ -37,6 +37,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import build_dupe_map, load_existing, write_csv  # noqa: E402
 from candidates import extract_features, list_samples  # noqa: E402
 from predictor_fake import predict as fake_predict  # noqa: E402
+
+# 路径锚定脚本自身位置(与 ablation/negative_eval 同法):从任何目录跑都不漂移
+EVAL_DIR = Path(__file__).resolve().parents[1]
 
 COLUMNS = [
     "rel_path", "pred_verdict", "pred_quality", "pred_note_type", "pred_score",
@@ -113,11 +116,11 @@ def run_one(path: Path, root: Path, predictor: str, api_url: str, timeout: float
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="批量跑预测器，输出 preds.csv")
-    parser.add_argument("--samples", default="eval/samples", help="样本根目录")
-    parser.add_argument("--out", default="eval/preds.csv", help="输出 CSV 路径")
+    parser.add_argument("--samples", default=str(EVAL_DIR / "inputs" / "samples"), help="样本根目录")
+    parser.add_argument("--out", default=str(EVAL_DIR / "runs" / "preds.csv"), help="输出 CSV 路径")
     parser.add_argument("--predictor", choices=("fake", "http"), default="fake")
     parser.add_argument("--split", choices=("all", "dev", "test"), default="all")
-    parser.add_argument("--labels", default="eval/labels.csv",
+    parser.add_argument("--labels", default=str(EVAL_DIR / "inputs" / "labels.csv"),
                         help="只用于 --split 过滤，绝不写回")
     parser.add_argument("--api-url", default="", help="--predictor http 时必须提供")
     parser.add_argument("--timeout", type=float, default=120.0, help="HTTP 超时秒数")

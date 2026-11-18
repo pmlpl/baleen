@@ -18,8 +18,8 @@ n 小不可怕,可怕的是只报点估计;样本数 + CI 才是诚实的报告�
 用法:
     python eval/scripts/bootstrap.py --split test
     python eval/scripts/bootstrap.py --split dev
-    python eval/scripts/bootstrap.py --per-query eval/ablation_perquery.json
-    python eval/scripts/bootstrap.py --split test --out eval/ci_test.md
+    python eval/scripts/bootstrap.py --per-query eval/runs/ablation_perquery.json
+    python eval/scripts/bootstrap.py --split test --out eval/runs/ci_test.md
 """
 
 from __future__ import annotations
@@ -31,6 +31,9 @@ import random
 import sys
 from collections.abc import Callable
 from pathlib import Path
+
+# 路径锚定脚本自身位置:从任何目录跑都不漂移
+EVAL_DIR = Path(__file__).resolve().parents[1]
 
 N_BOOT = 2000
 SEED = 42
@@ -227,8 +230,8 @@ def render(title: str, intro: str, table: list[list[str]]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="bootstrap 置信区间(评测指标)")
-    parser.add_argument("--labels", default="eval/labels.csv")
-    parser.add_argument("--preds", default="eval/preds.csv")
+    parser.add_argument("--labels", default=str(EVAL_DIR / "inputs" / "labels.csv"))
+    parser.add_argument("--preds", default=str(EVAL_DIR / "runs" / "preds.csv"))
     parser.add_argument("--per-query", default=None,
                         help="ablation.py --json 的输出;给了就算检索指标 CI")
     parser.add_argument("--split", choices=("test", "dev", "all"), default="test")

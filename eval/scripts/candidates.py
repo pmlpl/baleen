@@ -7,13 +7,13 @@
 输出严格 12 列，定义见 eval/TASK.md D2。
 
 用法：
-    python eval/scripts/candidates.py --samples eval/samples --out eval/candidates.csv
-    python eval/scripts/candidates.py --samples eval/samples --out eval/candidates.csv --resume
-    python eval/scripts/candidates.py --samples eval/samples --out eval/candidates.csv \
+    python eval/scripts/candidates.py --samples eval/inputs/samples --out eval/inputs/candidates.csv
+    python eval/scripts/candidates.py --samples eval/inputs/samples --out eval/inputs/candidates.csv --resume
+    python eval/scripts/candidates.py --samples eval/inputs/samples --out eval/inputs/candidates.csv \
         --random 10 --seed 42
     # 顺带生成标注表骨架（human_* 列全部留空）
-    python eval/scripts/candidates.py --samples eval/samples --out eval/candidates.csv \
-        --labels-out eval/labels.csv
+    python eval/scripts/candidates.py --samples eval/inputs/samples --out eval/inputs/candidates.csv \
+        --labels-out eval/inputs/labels.csv
 """
 
 from __future__ import annotations
@@ -365,9 +365,9 @@ def write_labels(labels_path: Path, rows: list[dict[str, str]], seed: int) -> No
     write_csv(labels_path, LABEL_COLUMNS, label_rows)
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="扫描 eval/samples/，输出 12 列特征表")
-    parser.add_argument("--samples", default="eval/samples", help="样本根目录")
-    parser.add_argument("--out", default="eval/candidates.csv", help="输出 CSV 路径")
+    parser = argparse.ArgumentParser(description="扫描 eval/inputs/samples/，输出 12 列特征表")
+    parser.add_argument("--samples", default="eval/inputs/samples", help="样本根目录")
+    parser.add_argument("--out", default="eval/inputs/candidates.csv", help="输出 CSV 路径")
     parser.add_argument("--resume", action="store_true", help="跳过输出文件里已有的 rel_path")
     parser.add_argument("--random", type=int, default=None, help="只保留随机抽取的 N 个文件")
     parser.add_argument("--seed", type=int, default=42, help="随机种子（默认 42）")

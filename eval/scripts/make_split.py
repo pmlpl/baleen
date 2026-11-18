@@ -18,8 +18,8 @@
 7. 默认**锚定输入文件里已有的 test**，只做最小增量挪动（`--no-anchor-existing` 可关闭）。
 
 用法：
-    python eval/scripts/make_split.py --labels eval/labels.csv --dry-run
-    python eval/scripts/make_split.py --labels eval/labels.csv
+    python eval/scripts/make_split.py --labels eval/inputs/labels.csv --dry-run
+    python eval/scripts/make_split.py --labels eval/inputs/labels.csv
 """
 
 from __future__ import annotations
@@ -92,8 +92,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="分层重分配 labels.csv 的 split 列（slot×verdict 粒度）"
     )
-    parser.add_argument("--labels", default="eval/labels.csv")
-    parser.add_argument("--candidates", default="eval/candidates.csv", help="提供 dupe_of")
+    parser.add_argument("--labels", default="eval/inputs/labels.csv")
+    parser.add_argument("--candidates", default="eval/inputs/candidates.csv", help="提供 dupe_of")
     parser.add_argument("--strategy", choices=("stratified",), default="stratified")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--test-ratio", type=float, default=0.4)

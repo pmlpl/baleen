@@ -16,6 +16,9 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+# 路径锚定脚本自身位置:从任何目录跑都不漂移
+EVAL_DIR = Path(__file__).resolve().parents[1]
+
 VERDICTS = ("accept", "partial", "reject")
 # 质量档次假设：core > normal > reference > junk（reference 是查阅型资料）
 QUALITY_RANK = {"core": 4, "normal": 3, "reference": 2, "junk": 1}
@@ -57,9 +60,9 @@ def write_blank_report(out_path: Path, split: str, scope: list[dict[str, str]],
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="计算评测指标，输出 report.md")
-    parser.add_argument("--labels", default="eval/labels.csv")
-    parser.add_argument("--preds", default="eval/preds.csv")
-    parser.add_argument("--out", default="eval/report.md")
+    parser.add_argument("--labels", default=str(EVAL_DIR / "inputs" / "labels.csv"))
+    parser.add_argument("--preds", default=str(EVAL_DIR / "runs" / "preds.csv"))
+    parser.add_argument("--out", default=str(EVAL_DIR / "runs" / "report.md"))
     parser.add_argument("--split", choices=("all", "dev", "test"), default="test")
     args = parser.parse_args(argv)
 

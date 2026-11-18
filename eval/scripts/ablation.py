@@ -225,7 +225,7 @@ def rank_parents(scores: np.ndarray, children: list[ChildEntry]) -> list[int]:
 def evaluate(
     corpus: Corpus, queries: list[Query], child_mat: np.ndarray, query_mat: np.ndarray
 ) -> dict:
-    """一档的全部指标。命中口径见 eval/ablation.md §3。"""
+    """一档的全部指标。命中口径见 eval/analysis/ablation.md §3。"""
     positives = [i for i, q in enumerate(queries) if not q.is_negative]
     negatives = [i for i, q in enumerate(queries) if q.is_negative]
 

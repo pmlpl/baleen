@@ -4,27 +4,27 @@
 # ===========================================================
 
 # ---------- 评测样本：真实文件，私人 + 体积大 ----------
-eval/samples/*
-!eval/samples/.gitkeep
-!eval/samples/_inbox
-eval/samples/_inbox/*
-!eval/samples/_inbox/.gitkeep
+eval/inputs/samples/*
+!eval/inputs/samples/.gitkeep
+!eval/inputs/samples/_inbox
+eval/inputs/samples/_inbox/*
+!eval/inputs/samples/_inbox/.gitkeep
 
 # ⚠️ 以下文件【必须入库】，谁也别给它们加 ignore 规则：
-#   eval/labels.csv      人工标注（金标准，丢了要重标）
-#   eval/manifest.json   样本清单 + sha256 + 入选理由
-#   eval/rubric.md       标注指南
-#   eval/TASK.md         评测任务书
-#   eval/report.md       评测报告快照（论文引用）
-#   eval/scripts/*.py    评测脚本
+#   eval/inputs/labels.csv      人工标注（金标准，丢了要重标）
+#   eval/manifest.json          样本清单 + sha256 + 入选理由
+#   eval/rubric.md              标注指南
+#   eval/TASK.md                评测任务书
+#   eval/runs/report.md         评测报告快照（论文引用）
+#   eval/scripts/*.py           评测脚本
 
 # ---------- 评测产物：可随时重跑生成 ----------
-eval/preds.csv
-eval/candidates.csv
-eval/candidates_log.csv
+eval/runs/preds.csv
+eval/inputs/candidates.csv
+eval/inputs/candidates_log.csv
 # C 路线「使用即积累」:导入的原始文件副本(gitignore,复核选中才挪进 samples 提交)
-eval/candidates/*
-!eval/candidates/.gitkeep
+eval/inputs/candidates/*
+!eval/inputs/candidates/.gitkeep
 eval/*.tmp
 
 # ---------- Python ----------

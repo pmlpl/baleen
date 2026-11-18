@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 """heading 前缀 A/B(ADR 0004 §5):验证「前缀提升判别力」断言。
 
-三变体 × 纯向量检索,300 档固定,与 chunk 尺度消融(eval/ablation.md)同口径:
+三变体 × 纯向量检索,300 档固定,与 chunk 尺度消融(eval/analysis/ablation.md)同口径:
   V1 = 生产现状:code 块带 `# {heading_path} ({lang})` 前缀;text/table 纯正文。
   V2 = 给 text/table 补 ADR §5 前缀(`{笔记标题} > {heading_path}`);code 不动。  ← 主比较
   V3 = 全量统一 ADR §5:所有块都 `{笔记标题} > {heading_path}\\n{正文}`(code 旧前缀被替换)。
