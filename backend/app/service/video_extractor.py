@@ -432,12 +432,14 @@ def extract_scene_frames(
     *,
     max_frames: int = MAX_SCENE_FRAMES,
 ) -> list[tuple[float, Path, int]]:
-    """每场景抽中点+75% 两个候选（ffmpeg -ss seek）+ dHash 去重 + 超上限均匀采样。
+    """每场景抽中点+75%+95% 三个候选（ffmpeg -ss seek）+ dHash 去重 + 超上限均匀采样。
 
-    双候选（2026-11-19 复核批）：场景中点常截在动画淡入淡出过程上（豆包淡帧/NestJS
-    错位帧实证）。75% 点是画面稳定后的位置；静止场景两候选 dHash 近似会自动去重，
-    不涨视觉成本——只有动画/过渡场景多一次机会。同场景两个候选都活过视觉筛选时，
-    ``transcribe_frames`` 末尾同场景择优只留时间靠后的一帧。
+    多候选（2026-11-19 复核批起步双候选，当晚复核扩三点）：场景中点常截在动画淡入
+    淡出过程上（豆包淡帧/NestJS 错位帧）；75% 点对慢速逐字/打字机动画仍不够——
+    6096 财富自由公式帧截在「下划线占位+零散加号」的半截状态（主人复核实锤）。
+    95% 点几乎必然在逐字动画完成后；同场景多候选都活过视觉筛选时，
+    ``transcribe_frames`` 末尾同场景择优只留时间靠后（画面最稳定）的一帧。
+    静止场景多候选 dHash 近似会自动去重回 1 帧，不涨视觉成本。
     """
     frames_dir = output_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
@@ -445,7 +447,7 @@ def extract_scene_frames(
     result: list[tuple[float, Path, int]] = []
     for i, (start, end) in enumerate(scenes):
         span = end - start
-        for j, ts in enumerate(((start + end) / 2, start + span * 0.75)):
+        for j, ts in enumerate(((start + end) / 2, start + span * 0.75, start + span * 0.95)):
             frame_path = frames_dir / f"frame_{i:04d}_{j}.jpg"
             # -ss 放在 -i 前是 fast seek（跳到最近 keyframe），单帧抽取足够快且准
             subprocess.run(

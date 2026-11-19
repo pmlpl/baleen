@@ -89,6 +89,10 @@ _VIDEO_RULES = r"""\
 - 例外——筛选可能漏网（2026-11-19）：如果某帧的描述明显与知识无关（点赞/收藏/关注/
   一键三连引导、搜索框/地址栏、片头片尾包装、纯人物口播特写），**删掉它的标记**（标记
   删了图就不嵌，这正是要的效果），不要为了「保留所有图」硬塞进笔记。
+- **硬规则（2026-11-19 晚主人复核新增）：禁止复制标记。** `baleen-image:N` 的每个编号
+  在一篇笔记里**最多出现一次**——一帧一标记。想在两个小节都配图时，只能挪标记或换一帧，
+  **绝对不要把同一个标记写两遍**（同一帧嵌两次是错误，管线会只保留第一个）。
+
 
 标题层级（硬约束，视频特别容易写错）：
 - **视频总标题不进正文当章节**：素材第一行 `# 视频标题` 只是来源标题，
@@ -433,6 +437,37 @@ def _video_image_resolver(video_images: list[dict]):
     return resolve
 
 
+def _dedupe_video_doc(doc: dict | None) -> dict | None:
+    """视频路径专用：同 media key 的 image 块只留第一个（一帧一嵌）。
+
+    2026-11-19 晚主人复核 6096 实锤：organizer 想在两节都配图时**复制**了
+    ``baleen-image:N`` 标记（prompt 只禁删/挪没禁复制），同一帧以不同 alt 嵌两次。
+    prompt 规则（每个编号最多出现一次）是软约束，这里是硬守卫：LLM 钻空子也兜住。
+    只用于视频路径（video_images 非空才调用）——普通 md 导入的图片各带各的 media
+    key，合法重复不存在。
+    """
+    if doc is None:
+        return doc
+    seen: set[str] = set()
+
+    def prune(blocks: list) -> list:
+        out = []
+        for b in blocks or []:
+            if b.get("type") == "image":
+                media = (b.get("attrs") or {}).get("media")
+                if media:
+                    if media in seen:
+                        continue  # 同帧复制 → 整块丢弃（保留第一个）
+                    seen.add(media)
+            if isinstance(b.get("content"), list):
+                b["content"] = prune(b["content"])
+            out.append(b)
+        return out
+
+    doc["content"] = prune(doc.get("content") or [])
+    return doc
+
+
 def organize_note(
     parse_result: ParseResult,
     *,
@@ -567,6 +602,8 @@ def organize_note(
         block_list, _chars = parse_md_text(markdown, image_resolver=resolver)
         doc = {"type": "doc", "content": block_list}
         doc = renumber_headings_in_blocks(doc)
+        if video_images:
+            doc = _dedupe_video_doc(doc)
     except Exception as exc:  # markdown 解析失败 → 降级
         return _degraded(
             f"markdown 解析失败：{type(exc).__name__}",

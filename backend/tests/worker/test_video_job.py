@@ -753,9 +753,11 @@ def test_low_info_frame_with_text_layer_also_dropped(monkeypatch, tmp_path) -> N
 
 
 def test_same_scene_dual_candidates_keep_latest(monkeypatch, tmp_path) -> None:
-    """同场景双候选(中点+75%)都活过筛选 → 只留时间靠后的一帧。
+    """同场景多候选(中点+75%+95%)都活过筛选 → 只留时间靠后的一帧。
 
-    中点常截在动画淡入淡出上(豆包淡帧/NestJS 错位帧),后段画面更可能已稳定。
+    中点常截在动画淡入淡出上(豆包淡帧/NestJS 错位帧);75% 点对慢速逐字动画仍不够
+    (6096 财富自由公式截在「下划线+零散加号」半截态)——95% 点几乎必然在动画完成后,
+    同场景择优取最后者。
     """
     from PIL import Image
 
@@ -764,10 +766,10 @@ def test_same_scene_dual_candidates_keep_latest(monkeypatch, tmp_path) -> None:
 
     monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
     frames = []
-    for j in range(2):
+    for j, ts in enumerate((100.0, 125.0, 142.5)):  # 场景 7:中点/75%/95% 三候选
         p = tmp_path / f"f{j}.jpg"
         Image.new("RGB", (16, 16), (j * 90, 0, 0)).save(p)
-        frames.append((100.0 + j * 25.0, p, 7))  # 场景 7:中点 100s / 75% 点 125s
+        frames.append((ts, p, 7))
 
     class FakeClient:
         def __init__(self):
@@ -782,7 +784,7 @@ def test_same_scene_dual_candidates_keep_latest(monkeypatch, tmp_path) -> None:
 
     out = transcribe_frames(frames, client=FakeClient())
     assert len(out) == 1
-    assert out[0].timestamp == 125.0  # 留后弃中
+    assert out[0].timestamp == 142.5  # 留最后(95% 点,画面最稳定)
     assert out[0].scene_idx == 7
 
 

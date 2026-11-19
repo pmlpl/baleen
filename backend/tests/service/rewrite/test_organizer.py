@@ -394,3 +394,43 @@ def test_organize_video_prompt_forbids_dropping_markers() -> None:
     assert "绝对不要删除标记" in rules
     assert "baleen-image:N" in rules
     assert "图跟着所属主题走" in rules
+
+
+
+
+_VIDEO_DUPE_JSON = (
+    '{"organizable": true, "markdown": "# 双例\\n\\n## 第一节\\n\\n'
+    '一节内容。\\n\\n![[0:40] 一线城市家庭案例计算](baleen-image:0)\\n\\n'
+    '## 第二节\\n\\n'
+    '二节内容,想把同一张图再配一次。\\n\\n![[0:41] 反向推演600万案例](baleen-image:0)\\n\\n'
+    '另一帧正常保留。\\n\\n![[1:46] 白板](baleen-image:1)", '
+    '"quality": "core", "note_type": "concept", "reasons": ["融合语音与画面"]}'
+)
+
+
+def test_organize_video_dedupes_duplicate_frame_marker(tmp_path, monkeypatch) -> None:
+    """organizer 复制帧标记 → 同 media key 的 image 块只留第一个（一帧一嵌）。
+
+    2026-11-19 晚主人复核 6096 实锤：4.1/4.2 同帧同 media key 各嵌一次
+    （LLM 想两节都配图时复制了 baleen-image:N，prompt 只禁删/挪没禁复制）。
+    prompt 加了「编号最多出现一次」规则（软约束），本守卫是硬兜底。
+    """
+    from app.service import media as media_module
+    from app.service.notes_edit import _iter_images
+    from app.service.rewrite.organizer import organize_note
+
+    monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
+    video_images = _make_video_images(tmp_path)
+
+    pr = _make_parse_result(_VIDEO_MD)
+    client = FakeClient([_VIDEO_DUPE_JSON])
+    result = organize_note(
+        pr, filename="v.md", ext=".md", client=client, video_images=video_images
+    )
+    assert result.organizable and result.blocks
+
+    imgs = _iter_images(result.blocks["content"])
+    medias = [i["attrs"]["media"] for i in imgs]
+    assert len(medias) == len(set(medias)), f"同帧重复嵌入: {medias}"
+    assert medias.count(video_images[0]["media_key"]) == 1  # 复制的只留第一个
+    assert medias.count(video_images[1]["media_key"]) == 1  # 正常帧不受影响
