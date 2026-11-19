@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-19 · 视频笔记复核批(主人 7 条人工裁决+四把取证铁锤,台账 77→88 八失败模式演进)→ 当天修复三轮:六连修(父块展示序列化+渲染/帧知识相关性+双候选+零帧警告/幂等守卫/标题数量词/灯箱)→ 18:00 定时复跑批次(3B1B 96%✓/39前端网关无罪✓/财富自由 B站风控→抖音版 89%✓,新抓 dedupe 假阳性 A 档)→ 晚间小修(重复帧硬守卫 _dedupe_video_doc+95% 第三采样点)→ **深夜 dedupe 假阳性修复**(`_reset_stale_done_job` 以 source_created 为判据+2 条真 DB 回归,撤修复即 FAIL)→ **主人拍板两件落地**:插图方案 C(按宽高比自适应)+ 生成式结构图「有依据才生」闸;标签审计修正 1 条(87efed→reject,ok 口径误拒率全量 0/47、test 0/17、dev 0/30);基线 **558 passed**
+**最后更新**：2026-11-19 · 视频笔记复核批(主人 7 条人工裁决+四把取证铁锤,台账 77→88 八失败模式演进)→ 当天修复三轮:六连修(父块展示序列化+渲染/帧知识相关性+双候选+零帧警告/幂等守卫/标题数量词/灯箱)→ 18:00 定时复跑批次(3B1B 96%✓/39前端网关无罪✓/财富自由 B站风控→抖音版 89%✓,新抓 dedupe 假阳性 A 档)→ 晚间小修(重复帧硬守卫 _dedupe_video_doc+95% 第三采样点)→ **深夜 dedupe 假阳性修复**(`_reset_stale_done_job` 以 source_created 为判据+2 条真 DB 回归,撤修复即 FAIL)→ **主人拍板两件落地**:插图方案 C(按宽高比自适应)+ 生成式结构图「有依据才生」闸→ 标签审计修正 1 条(87efed→reject,ok 口径误拒率全量 0/47、test 0/17、dev 0/30)→ **bootstrap 统计修复**(比例指标统一 CP 精确区间:0/47 从谎报 `[0%,0%]` 改为诚实 `[0%,7.5%]`);基线 **573 passed**
 
 ### 已完成模块
 
@@ -50,7 +50,7 @@
 | **笔记删除** | `DELETE /api/notes/{id}` + `NotesRepo.delete_active` + 书架/详情删除入口 | ✅ 真删除:chunks/embeddings DB 级联清(ON DELETE CASCADE,实测孤儿向量/切块=0);孤儿 source 连行带 blob 删(1:N 防护);确认弹窗;7 测试;**书架删除乐观移除(API 成功后本地 filter+total-1,不重 load,瞬时生效不闪);LibraryView keep-alive 加 onActivated 兜底(详情页删完跳回不再 stale)** |
 | **CSV 导入** | `app/service/parse/csv_parser.py` + PARSERS | ✅ 整篇表格、首行表头、分隔符嗅探(逗号/分号/制表符/竖线)、GB18030 兼容、>200 行分表;9 测试;xlsx 提示话术成真 |
 | **评测候选自动归档(C 路线)** | `app/service/eval_capture.py` + pipeline 接线 | ✅ 真实导入(非 dedupe)完成→原文件副本进 `eval/inputs/candidates/`(gitignore)+登记 `eval/inputs/candidates_log.csv`;best-effort 不影响导入;`EVAL_CAPTURE_ENABLED` 开关;主人复核后挪 samples 转正 |
-| **bootstrap 置信区间(D 路线)** | `eval/scripts/bootstrap.py` + `ci_g12_*.md`/`ci_retrieval.md` | ✅ B=2000/seed=42/百分位法;误拒率 10% CI [0%,33.3%](test)、R@5 94.4% CI [83.3%,100%]——n 小的诚实表述;test/dev 交叉视角;⚠️ q10 语料漂移(rank 12,回填改标题所致,待主人复核) |
+| **bootstrap 置信区间(D 路线)** | `eval/scripts/bootstrap.py` + `ci_ok_*.md` | ✅ **比例类指标一律 Clopper-Pearson 精确区间**（误拒率/误丢率/话题召回率/判定准确率/Recall@k）；macro-F1、MRR 仍用 B=2000/seed=42 百分位 bootstrap。**2026-11-19 修**：百分位法在零事件时报 `[0%,0%]`（宣称「必然是 0」，不成立）、全事件顶 `[100%,100%]`——统一改 CP 后 0/47 → `[0%,7.5%]`、35/35 → `[85%,100%]`；新增 `--ok-only` 与 metrics.py 同口径；15 测试（4 条验过「退回旧行为即 FAIL」） |
 | **边界测试批** | `tests/service/parse/test_edge_cases.py` 等 | ✅ 混合 PDF 阈值行为/容器内嵌套图往返(**抓到并修复 2 个真 bug**)/CSV RFC4180/media 孤儿语义钉住/dedupe×附件语义钉住 |
 | **含图笔记可编辑** | `notes_edit` 位置标记往返 + `PUT /api/notes/{id}` 解除 400 | ✅ 图片经 `![alt](baleen-image:N)` 往返,保存按 N 重关联原节点;删标记=删图;旧 400 分支移除 |
 | **md 带图片导入** | `parse/md_parser.py` + `service/media.py` + `POST /api/sources attachments` + `GET /api/media/{key}` | ✅ 图片按相对路径随主文件上传→内容寻址存 `storage/media/`;doc 只留 `media` key;缺文件退 alt 并警告;外链不抓;暂存改每上传一目录(worker 清理兼容) |
@@ -70,7 +70,7 @@
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  558 passed
+cd backend && uv run pytest -q     →  573 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -104,6 +104,7 @@ cd backend && uv run pytest -q     →  558 passed
 → **539**（晚间小修:重复帧硬守卫(organizer 复制标记→同 media key 只留第一个) 1;2026-11-19 晚）
 → **541**（dedupe 假阳性修复:删笔记重导被旧 done job 静默跳过→source_created 判据重置重跑,2 条真 DB 回归(撤修复即 FAIL);2026-11-19 深夜）
 → **558**（插图方案 C 按宽高比自适应 + 生成式结构图「有依据才生」闸 17 测;2026-11-19 深夜）
+→ **573**（bootstrap 零事件区间退化修复:比例指标统一改 CP 精确区间 15 测;2026-11-19 深夜）
 
 **任何新任务都不许把这个数降下来。**
 
