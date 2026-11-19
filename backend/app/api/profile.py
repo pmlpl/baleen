@@ -52,6 +52,7 @@ class ProfileSettings(BaseModel):
     tavily_tail: str
     llm_context_tokens: int | None  # 与 SettingsOut 同口径
     llm_max_output_tokens: int | None
+    allow_diagrams: bool  # 与 SettingsOut 同口径
 
 
 class ProfileOut(BaseModel):
@@ -102,5 +103,8 @@ async def read_profile(
             tavily_tail=tavily_tail,
             llm_context_tokens=row.llm_context_tokens if row else None,
             llm_max_output_tokens=row.llm_max_output_tokens if row else None,
+            allow_diagrams=(
+                True if (row is None or row.allow_diagrams is None) else bool(row.allow_diagrams)
+            ),
         ),
     )

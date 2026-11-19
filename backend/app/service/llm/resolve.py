@@ -74,7 +74,21 @@ async def resolve_llm_budgets(
     return ctx, out
 
 
+async def resolve_allow_diagrams(session: AsyncSession, owner_id: int) -> bool:
+    """是否允许 organizer 生成结构图(主人 2026-11-19 拍板:全局默认开)。
+
+    注意这只是「允许」——真正该不该画由 ``rewrite/diagram_basis.py`` 用代码
+    算结构依据(并列清单 ≥5 项 / 流程阶段 ≥3 个),命中才注入 prompt。
+    行不存在或字段为 NULL → True(默认开)。
+    """
+    row = await _row(session, owner_id)
+    if row is None or row.allow_diagrams is None:
+        return True
+    return bool(row.allow_diagrams)
+
+
 __all__ = [
+    "resolve_allow_diagrams",
     "resolve_charter",
     "resolve_llm_budgets",
     "resolve_llm_config",

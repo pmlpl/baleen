@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Integer, Text, UniqueConstraint, func, text
+from sqlalchemy import BigInteger, Boolean, DateTime, Integer, Text, UniqueConstraint, func, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.models.base import Base
@@ -37,6 +37,11 @@ class AppSettings(Base):
     # 不预设模型表:用户在设置页填自己模型/厂商的上限即可覆盖。
     llm_context_tokens: Mapped[int | None] = mapped_column(Integer)
     llm_max_output_tokens: Mapped[int | None] = mapped_column(Integer)
+    # 结构图开关(主人 2026-11-19 拍板:全局默认开,但必须「有依据才生」)
+    #   NULL / true = 允许生成(仍由 diagram_basis 的结构依据闸把关)
+    #   false       = 一律不生成
+    # 「该不该画」不在这里决定——是代码算出来的(并列清单/流程阶段),不靠 LLM 自觉。
+    allow_diagrams: Mapped[bool | None] = mapped_column(Boolean, server_default=text("true"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

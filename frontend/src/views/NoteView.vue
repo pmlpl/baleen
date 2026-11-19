@@ -17,6 +17,7 @@ import { RouterLink, useRouter } from 'vue-router'
 import { describeApiError } from '../api/http'
 import { deleteNote, getNote, updateNote } from '../api/notes'
 import type { NoteDetail, NoteParent } from '../api/notes'
+import { applyFigureLayout } from '../utils/figure-layout'
 import { renderMermaidIn } from '../utils/mermaid'
 import { renderSectionText, collectCitationTargets } from '../utils/section'
 import { renderSvgsIn } from '../utils/svg'
@@ -248,6 +249,8 @@ async function load(): Promise<void> {
   if (contentEl.value !== null) {
     void renderMermaidIn(contentEl.value)
     void renderSvgsIn(contentEl.value)
+    // 插图按宽高比分类(窄图左浮动文字环绕,宽图保持居中限宽;见 figure-layout.ts)
+    applyFigureLayout(contentEl.value)
   }
   restoreScroll()
   computeActive()
@@ -763,6 +766,55 @@ async function removeNote(): Promise<void> {
   border-radius: 8px;
   background: var(--panel);
   cursor: zoom-in;
+}
+
+/*
+ * 方案 C(2026-11-19 主人拍板):按图片原始宽高比自适应。
+ * figure-layout.ts 在 img 载入后给 figure 打 is-narrow / is-wide:
+ *   窄图(w/h ≤ 4/3:竖图/方图/课件竖版) → 左浮动小图,文字环绕,不浪费整行
+ *   宽图(16:9 视频帧/屏幕截图)         → 保持上面那条居中限宽(该大就大)
+ * 阈值与 class 名在 figure-layout.ts,这里只管样式。
+ * 注意:不要给后续 <p> 加 overflow:hidden —— 那会让每段都变成 BFC,
+ * 文字永远挤在窄列里回不到整行。浮动下文字本来就会自然环绕,
+ * 只需在父块末尾清浮动(.sec::after),保证下一节不从图上骑过去。
+ */
+.sec :deep(.note-img.is-narrow) {
+  float: left;
+  width: 38%;
+  max-width: 300px;
+  margin: 4px 20px 12px 0;
+  text-align: left;
+}
+
+.sec :deep(.note-img.is-narrow img) {
+  max-width: 100%;
+  display: block;
+}
+
+.sec :deep(.note-img.is-narrow figcaption) {
+  text-align: left;
+}
+
+/* 父块末尾清浮动:浮动图不越界到下一节 */
+.sec::after {
+  content: '';
+  display: table;
+  clear: both;
+}
+
+/* 窄屏(900px 以下,与阅读区两栏→单栏同断点):浮动取消,恢复居中整行 */
+@media (max-width: 900px) {
+  .sec :deep(.note-img.is-narrow) {
+    float: none;
+    width: 100%;
+    max-width: 100%;
+    margin: 0 0 16px;
+    text-align: center;
+  }
+
+  .sec :deep(.note-img.is-narrow figcaption) {
+    text-align: center;
+  }
 }
 
 /* 图片灯箱:点图放大,点击任意处关闭 */

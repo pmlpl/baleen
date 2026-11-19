@@ -23,6 +23,13 @@ from app.service.llm import LLMClient, LLMError, estimate_tokens, truncate_to_to
 from app.service.parse.blocks import flatten_text
 from app.service.parse.md_parser import parse_md_text
 from app.service.parse.types import ParseResult
+from app.service.rewrite.diagram_basis import (
+    DiagramBasis,
+    build_diagram_prompt,
+    detect_diagram_basis,
+    extract_mermaid_blocks,
+    validate_diagram,
+)
 from app.service.rewrite.outline import CN_NUMBERS, NUMBER_PREFIX
 
 # ---- 预算兜底 ----
@@ -468,6 +475,32 @@ def _dedupe_video_doc(doc: dict | None) -> dict | None:
     return doc
 
 
+def _strip_mermaid_blocks(doc: dict | None) -> dict | None:
+    """摘掉 doc 里所有 mermaid codeBlock（结构图未通过依据校验时用）。
+
+    主人拍板「怕 AI 乱生图/生无意义的图」：编造的图**整块丢弃**，不退化显示
+    （退化显示等于把编造的结构留在笔记里，读者照样会看）。连同紧邻的引导段/
+    解读段一起删？——不删：那两段是正文的一部分，图没了句子仍然通顺。
+    """
+    if doc is None:
+        return doc
+
+    def prune(blocks: list) -> list:
+        out = []
+        for b in blocks or []:
+            if b.get("type") == "codeBlock":
+                lang = str((b.get("attrs") or {}).get("language") or "").lower()
+                if lang == "mermaid":
+                    continue
+            if isinstance(b.get("content"), list):
+                b["content"] = prune(b["content"])
+            out.append(b)
+        return out
+
+    doc["content"] = prune(doc.get("content") or [])
+    return doc
+
+
 def organize_note(
     parse_result: ParseResult,
     *,
@@ -479,6 +512,7 @@ def organize_note(
     prompt_budget: int | None = None,
     output_budget: int | None = None,
     video_images: list[dict] | None = None,
+    allow_diagram: bool = False,
 ) -> OrganizeResult:
     """AI 笔记整理：读契约 → LLM 重写 markdown → 返回 blocks。
 
@@ -488,6 +522,9 @@ def organize_note(
     ``max_tokens``:测试直接传的输出上限,优先级高于 output_budget。
     ``video_images``:视频关键帧清单([{index, media_key, alt, text_layer, timestamp}]);给了就走
       视频多模态模式(帧图 base64 附进 user 消息 + 视频专用 prompt 约束保留图片标记)。
+    ``allow_diagram``:是否允许生成结构图(主人 2026-11-19 拍板:**全局默认开,但必须有依据**)。
+      开启时也**不是想说就画**:先由 ``detect_diagram_basis`` 用代码算出结构依据,命中才把
+      节点清单注入 prompt;产出后 ``validate_diagram`` 校验节点有原文出处,编造的图直接丢弃。
     ⚠️ 同步函数：async 调用方必须用 ``asyncio.to_thread`` 包装。
     """
     cli = client or LLMClient.from_settings()
@@ -504,6 +541,14 @@ def organize_note(
         video_images=video_images,
     )
     system_prompt = _SYSTEM + (_video_rules_text() if video_images else "")
+
+    # 结构图依据闸(主人 2026-11-19 拍板:全局默认开,但必须有依据才画)
+    # 依据由代码算(不是 LLM 自己觉得该画);没命中就完全不提画图,不给自由发挥空间
+    basis = DiagramBasis(kind="")
+    if allow_diagram:
+        basis = detect_diagram_basis((parse_result.blocks or {}).get("content") or [])
+        if basis.kind:
+            system_prompt += build_diagram_prompt(basis)
 
     # 视频多模态：正文文本 + 关键帧图（严格按 index 顺序附上，模型按对照表理解）
     if video_images:
@@ -613,6 +658,40 @@ def organize_note(
             model=cli.model,
         )
 
+    # 结构图产出后校验(主人:怕 AI 乱生图/生无意义的图)
+    # 编造的图(节点没有原文出处)直接从 doc 里摘掉——不留"半可信"的图,宁可没有
+    diagram_meta: dict = {}
+    if allow_diagram and basis.kind:
+        markdown_diagrams = extract_mermaid_blocks(markdown)
+        diagram_meta = {
+            "basis_kind": basis.kind,
+            "basis_evidence": basis.evidence,
+            "diagrams_found": len(markdown_diagrams),
+            "diagrams_kept": 0,
+            "diagrams_dropped": 0,
+        }
+        if markdown_diagrams:
+            all_passed = True
+            details = []
+            for code in markdown_diagrams:
+                ok, why = validate_diagram(code, basis)
+                details.append({"ok": ok, "why": why})
+                if not ok:
+                    all_passed = False
+            if all_passed:
+                diagram_meta["diagrams_kept"] = len(markdown_diagrams)
+            else:
+                # 有一张不通过 → 全摘(同篇多张里混假图比没有更糟)
+                bad = [d["why"] for d in details if not d["ok"]]
+                diagram_meta["diagrams_dropped"] = len(markdown_diagrams)
+                diagram_meta["dropped_reason"] = bad[:2]
+                doc = _strip_mermaid_blocks(doc)
+                reasons.append(
+                    "结构图已丢弃：" + (bad[0] if bad else "未通过依据校验")
+                )
+        elif basis.kind:
+            diagram_meta["note"] = "有结构依据但模型未生成图"
+
     return OrganizeResult(
         organizable=True,
         blocks=doc,
@@ -627,6 +706,7 @@ def organize_note(
             "truncated": stats.get("truncated", False),
             "original_chars": stats.get("original_chars", 0),
             "kept_chars": stats.get("kept_chars", 0),
+            **({"diagram": diagram_meta} if diagram_meta else {}),
         },
     )
 

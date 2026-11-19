@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-19 · 视频笔记复核批(主人 7 条人工裁决+四把取证铁锤,台账 77→88 八失败模式演进)→ 当天修复三轮:六连修(父块展示序列化+渲染/帧知识相关性+双候选+零帧警告/幂等守卫/标题数量词/灯箱)→ 18:00 定时复跑批次(3B1B 96%✓/39前端网关无罪✓/财富自由 B站风控→抖音版 89%✓,新抓 dedupe 假阳性 A 档)→ 晚间小修(重复帧硬守卫 _dedupe_video_doc+95% 第三采样点)→ **深夜 dedupe 假阳性修复**(`_reset_stale_done_job` 以 source_created 为判据+2 条真 DB 回归,撤修复即 FAIL);基线 **541 passed**
+**最后更新**：2026-11-19 · 视频笔记复核批(主人 7 条人工裁决+四把取证铁锤,台账 77→88 八失败模式演进)→ 当天修复三轮:六连修(父块展示序列化+渲染/帧知识相关性+双候选+零帧警告/幂等守卫/标题数量词/灯箱)→ 18:00 定时复跑批次(3B1B 96%✓/39前端网关无罪✓/财富自由 B站风控→抖音版 89%✓,新抓 dedupe 假阳性 A 档)→ 晚间小修(重复帧硬守卫 _dedupe_video_doc+95% 第三采样点)→ **深夜 dedupe 假阳性修复**(`_reset_stale_done_job` 以 source_created 为判据+2 条真 DB 回归,撤修复即 FAIL)→ **主人拍板两件落地**:插图方案 C(按宽高比自适应)+ 生成式结构图「有依据才生」闸;标签审计修正 1 条(87efed→reject,ok 口径误拒率全量 0/47、test 0/17、dev 0/30);基线 **558 passed**
 
 ### 已完成模块
 
@@ -58,18 +58,19 @@
 | **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
 | **对话附件（v17→v28）** | `app/api/parse.py` + `service/qa/file_analyzer.py` + `service/parse/html_parser.py` + QaView 📎 | ✅ v28 起 📎 文档类统一走 `POST /api/parse`（复用 G0 不入库，HTML/docx/pdf/pptx/md/csv/txt 一套口径）；正文 > 40000 字符 map-reduce 分层分析（`mode=analyzed`，20 块上限→422）；`attachments[].text` 上限 20000→40000；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级 |
 | **冻结分段摘要 digest（v28）** | `app/service/qa/digest.py` + `answerer.py`(`HISTORY_TOKEN_BUDGET`) | ✅ 老对话压成不可变「第二条 system」+ 近窗 append-only，**保前缀缓存**、止静默丢失、砍二次式成本；token > 100K 触发 / 200K 安全网；异步 arq 触发，旧消息不删、前端零改 |
-| **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底；**格式渲染（2026-11-19）**：父块围栏代码块/列表/粗体/引用（chunker 父块 display 序列化 + 围栏/列表/引用/行内渲染,老笔记行为不变）;插图限宽 640px+点击灯箱 |
+| **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底；**格式渲染（2026-11-19）**：父块围栏代码块/列表/粗体/引用（chunker 父块 display 序列化 + 围栏/列表/引用/行内渲染,老笔记行为不变）;插图限宽 640px+点击灯箱;**插图按宽高比自适应（方案 C,主人拍板）**：`utils/figure-layout.ts` 在 img load 后按 naturalWidth/Height 分类——窄图(w/h ≤ 4/3,如 6015 的 1080×1920 竖屏帧)左浮动小图文字环绕,宽图(16:9 视频帧)保持居中限宽 640px,900px 以下回落单栏居中 |
 | **数学公式渲染** | `frontend/src/utils/math.ts` + `markdown.ts` | ✅ KaTeX 行内 `$...$`/块级 `$$...$$`,NoteView/QaView 共用;原文级占位保护(公式里 `[1]`/`**` 不被行内替换吃);pandoc 式启发式防美元价签误判;块级收集不越空行/标题/自闭合行(防吞正文成烂公式报红);20 边界用例探针(`scripts/probe_math_render.mjs`,含 QA 真实消息回归)全过 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
 | **视频笔记页 + whisper（v22→v26）** | `app/service/video_extractor.py` + `douyin_extractor.py` + `VideoView.vue` | ✅ whisper 异步（API 立即 201，worker 2h 超时，video_stage/progress 进度）；**faster-whisper small**（GPU float16 实测 15x 实时，构造失败/推理失败双重退 CPU int8）；B 站 yt-dlp 路径；**抖音 Playwright 免 cookie**（系统 Edge 拦截详情接口，用户零配置）；前端进度条（whisper 阶段按视频时长插值） |
 | **视频→笔记升级·真嵌图（v27→v28）** | `video_extractor.py` + `organizer.py` + `pipeline.py` + `worker.py` | ✅ **PySceneDetect 场景抽帧**(threshold=27 HSV)每场景中点 + **dHash 去重**(裁底部25%——字幕逐句变会把同一白板判成多帧,实测距离8→1) + 上限30帧。**DeepSeek-flash 视觉逐字转录**(保留缩进/符号;格式失败用纯描述 prompt 重试)+帧字节 `store_media` **真嵌图** `![alt](baleen-image:N)`。**organizer 视频多模态**:标记不删/不汇总文末/图随章走 + 标记→画面对照表 + 帧图 base64;输出按帧清单还原 image 块。worker 写 `<md>.frames.json` sidecar,pipeline G0 读它还原。**v28 质量修正(主人 22 分钟真实视频反馈)**:① **帧信息密度筛选** `INFO: high|low`——low(表情包/黑屏/纯标题卡/转场/纯人物特写)丢弃**不落盘**,实测 30→22 张,丢的正是挠头表情包/建议收藏爱心/4张纯标题卡;② **标题层级硬约束**——总标题不当章、**10+ 条目清单禁止一条一章**(显式覆盖「3+大主题必须多章」),H1 **17→4~5**、H2 31→17~19、H3 0→31~39,15 热词归组为基础层/连接层/执行层/业务层;③ **图片扎堆规则**——同小节≤2张、连续3+张须分散(改前 6 张连甩在导读,改后各节 1~2 张、图跟内容走);**493 passed**|
 | **视频导入白盒日志（v27）** | `pipeline.py` + `worker.py` + `upload.py` + `sources.ts` + `VideoView.vue` | ✅ `GET /api/sources/{id}` 响应新增 `video_log`（提取+整理全程 `{ts,stage,pct}` 数组，非视频导入为 null）；worker `_update_video_stage`/`_fail_video_job` 每次埋点追加（去重守卫：同 stage 只刷新 pct；截断保留最近 50 条）；pipeline G0 后追加「解析完成」、organizer 前后追加「AI 整理笔记中」/「AI 整理完成」（`SourcesRepo.get_parse_meta` 绕 ORM 缓存读最新值，顺带修 `pipeline.py` headings_rewritten 覆盖过时 parse_meta 的隐患）；前端 `.progress-card` 内滚动日志区渲染时间戳+阶段+百分比；复用 2s 轮询+`parse_meta` 持久化，刷新页面日志仍在；**497 passed** |
+| **生成式结构图（有依据才生）** | `app/service/rewrite/diagram_basis.py` + `organizer.py` + 设置页 | ✅ 主人 2026-11-19 拍板「全局默认开,但必须有依据,不然怕 AI 乱生图」——**不靠 LLM 自觉**:代码先算结构依据(并列清单:同级标题≥5 个且每节≤600 字;流程阶段:≥3 种顺序词+≥3 个阶段标题),命中才把「必须用到的节点清单(**全部来自原文标题**)」注入 prompt(没命中就完全不提画图),产出后校验节点 ≥50% 能溯源否则**整块摘掉**并在 reasons 留痕;`app_settings.allow_diagrams`(0014,默认 true)+设置页复选框;17 测试(13 判定 + 4 端到端),验过「撤掉校验即 FAIL」。⚠️仅新导入生效,存量笔记不自动变好 |
 | **个人中心** | `app/api/profile.py` + `frontend/src/views/ProfileView.vue` | ✅ GET /api/profile 聚合（用户信息/使用统计/章程预览前 300 字/配置掩码,六字段同设置页口径）；前端 /profile 页导航入口,只读展示,编辑跳章程/设置页;6 测试;真后端+浏览器双冒烟通过 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  541 passed
+cd backend && uv run pytest -q     →  558 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -102,6 +103,7 @@ cd backend && uv run pytest -q     →  541 passed
 → **538**（复核批六连修:父块 display 序列化 3+帧知识相关性/双候选/零帧警告 2+worker 幂等守卫 1;2026-11-19）
 → **539**（晚间小修:重复帧硬守卫(organizer 复制标记→同 media key 只留第一个) 1;2026-11-19 晚）
 → **541**（dedupe 假阳性修复:删笔记重导被旧 done job 静默跳过→source_created 判据重置重跑,2 条真 DB 回归(撤修复即 FAIL);2026-11-19 深夜）
+→ **558**（插图方案 C 按宽高比自适应 + 生成式结构图「有依据才生」闸 17 测;2026-11-19 深夜）
 
 **任何新任务都不许把这个数降下来。**
 

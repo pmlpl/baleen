@@ -27,6 +27,8 @@ class SettingsOut(BaseModel):
     # LLM 预算(per-user 自适应;None = 走兜底)
     llm_context_tokens: int | None  # None = 不截断,整篇喂模型
     llm_max_output_tokens: int | None  # None = 用 organizer 兜底(131072)
+    # 结构图开关(默认 True)。True 也只是「允许」——真正该不该画由结构依据闸判定
+    allow_diagrams: bool
 
 
 class SettingsUpdate(BaseModel):
@@ -39,6 +41,8 @@ class SettingsUpdate(BaseModel):
     # LLM 预算:None/缺省 = 保持不变;0 = 清空(回退兜底)。用户填自己模型/厂商的上限。
     llm_context_tokens: int | None = Field(default=None, ge=0, le=2_000_000)
     llm_max_output_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
+    # 结构图开关:None = 保持不变
+    allow_diagrams: bool | None = None
 
 
 def _tail(secret: str | None) -> tuple[bool, str]:
@@ -61,6 +65,9 @@ async def read_settings(session: SessionDep, owner_id: CurrentOwnerDep) -> Setti
         tavily_tail=tavily_tail,
         llm_context_tokens=row.llm_context_tokens if row else None,
         llm_max_output_tokens=row.llm_max_output_tokens if row else None,
+        allow_diagrams=(
+            True if (row is None or row.allow_diagrams is None) else bool(row.allow_diagrams)
+        ),
     )
 
 
@@ -75,6 +82,7 @@ async def update_settings(
         tavily_api_key=payload.tavily_api_key,
         llm_context_tokens=payload.llm_context_tokens,
         llm_max_output_tokens=payload.llm_max_output_tokens,
+        allow_diagrams=payload.allow_diagrams,
     )
     await session.commit()
     return await read_settings(session, owner_id)

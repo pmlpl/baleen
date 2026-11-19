@@ -434,3 +434,123 @@ def test_organize_video_dedupes_duplicate_frame_marker(tmp_path, monkeypatch) ->
     assert len(medias) == len(set(medias)), f"同帧重复嵌入: {medias}"
     assert medias.count(video_images[0]["media_key"]) == 1  # 复制的只留第一个
     assert medias.count(video_images[1]["media_key"]) == 1  # 正常帧不受影响
+
+
+# ==================== 结构图依据闸（主人 2026-11-19 拍板：有依据才生） ====================
+
+_LISTY_MD = (
+    "# AI 入门地图\n\n"
+    "本笔记按学习阶段分组介绍 AI 核心概念。\n\n"
+    "## 模型层\n\n大模型的基本概念与原理。\n\n"
+    "## 工具层\n\n各类 AI 工具产品。\n\n"
+    "## 场景层\n\n视频生成与编程等场景。\n\n"
+    "## 概念层\n\n从模型到 Skill 的概念梳理。\n\n"
+    "## 执行层\n\n让 AI 真正做事的工程实践。\n"
+)
+
+# 节点全部来自原文标题 → 应保留
+_LISTY_GOOD_JSON = "{\"organizable\": true, \"markdown\": \"# AI 入门地图\\n\\n本笔记按学习阶段分组。\\n\\n下图把 5 个层次归为一张地图。\\n\\n```mermaid\\nmindmap\\n  root((AI 入门))\\n    模型层\\n    工具层\\n    场景层\\n    概念层\\n    执行层\\n```\\n\\n从上到下是学习的推荐顺序。\\n\\n## 模型层\\n\\n大模型的基本概念与原理。\\n\\n## 工具层\\n\\n各类 AI 工具产品。\\n\\n## 场景层\\n\\n视频生成与编程等场景。\\n\\n## 概念层\\n\\n从模型到 Skill 的概念梳理。\\n\\n## 执行层\\n\\n让 AI 真正做事的工程实践。\", \"quality\": \"normal\", \"note_type\": \"concept\", \"reasons\": [\"整理了清单\"]}"
+
+# 节点是模型自己编的概念 → 必须被摘掉
+_LISTY_FAKE_JSON = "{\"organizable\": true, \"markdown\": \"# AI 入门地图\\n\\n本笔记按学习阶段分组。\\n\\n```mermaid\\nmindmap\\n  root((AI 全景))\\n    量子计算\\n    脑机接口\\n    可控核聚变\\n    太空电梯\\n```\\n\\n## 模型层\\n\\n大模型的基本概念与原理。\\n\\n## 工具层\\n\\n各类 AI 工具产品。\\n\\n## 场景层\\n\\n视频生成与编程等场景。\\n\\n## 概念层\\n\\n从模型到 Skill 的概念梳理。\\n\\n## 执行层\\n\\n让 AI 真正做事的工程实践。\", \"quality\": \"normal\", \"note_type\": \"concept\", \"reasons\": [\"整理了清单\"]}"
+
+
+def _make_listy_parse_result() -> ParseResult:
+    """清单型笔记的 ParseResult——必须有真实 heading 块。
+
+    ⚠️ 不能复用 _make_parse_result：它把整段文本塞进一个 paragraph，
+    没有 heading，结构依据闸当然判定不出「清单」。生产路径里 G0 会把 md
+    解析成带 heading 的 blocks，这里要模拟那一步。
+    """
+
+    def h(text: str, level: int) -> dict:
+        return {"type": "heading", "attrs": {"level": level},
+                "content": [{"type": "text", "text": text}]}
+
+    def para(text: str) -> dict:
+        return {"type": "paragraph", "content": [{"type": "text", "text": text}]}
+
+    blocks = {"type": "doc", "content": [
+        h("AI 入门地图", 1),
+        para("本笔记按学习阶段分组介绍 AI 核心概念。"),
+        h("模型层", 2), para("大模型的基本概念与原理。"),
+        h("工具层", 2), para("各类 AI 工具产品。"),
+        h("场景层", 2), para("视频生成与编程等场景。"),
+        h("概念层", 2), para("从模型到 Skill 的概念梳理。"),
+        h("执行层", 2), para("让 AI 真正做事的工程实践。"),
+    ]}
+    return ParseResult(parse_status=ParseStatus.OK, blocks=blocks, meta={"chars": 200})
+
+
+def _has_mermaid_block(blocks: list) -> bool:
+    def walk(items: list) -> bool:
+        for b in items or []:
+            if b.get("type") == "codeBlock":
+                if str((b.get("attrs") or {}).get("language") or "").lower() == "mermaid":
+                    return True
+            if isinstance(b.get("content"), list) and walk(b["content"]):
+                return True
+        return False
+
+    return walk(blocks)
+
+
+def test_diagram_kept_when_nodes_traceable_to_source() -> None:
+    """有结构依据 + 图里的节点全部来自原文 → 图保留，meta 记 basis 依据。"""
+    from app.service.rewrite.organizer import organize_note
+
+    pr = _make_listy_parse_result()
+    result = organize_note(
+        pr, filename="ai.md", ext=".md", client=FakeClient([_LISTY_GOOD_JSON]),
+        allow_diagram=True,
+    )
+    assert result.organizable and result.blocks
+    assert _has_mermaid_block(result.blocks["content"]), "有依据的好图不该被删"
+    diagram = result.meta.get("diagram") or {}
+    assert diagram.get("basis_kind") == "list"
+    assert diagram.get("diagrams_kept") == 1
+
+
+def test_diagram_dropped_when_nodes_fabricated() -> None:
+    """图里节点是模型编的（量子计算/脑机接口不在原文）→ 整块摘掉并在 reasons 留痕。
+
+    主人拍板原话:「怕 AI 乱生图、生无意义的图」——编造的图比没有图更糟。
+    """
+    from app.service.rewrite.organizer import organize_note
+
+    pr = _make_listy_parse_result()
+    result = organize_note(
+        pr, filename="ai.md", ext=".md", client=FakeClient([_LISTY_FAKE_JSON]),
+        allow_diagram=True,
+    )
+    assert result.organizable and result.blocks
+    assert not _has_mermaid_block(result.blocks["content"]), "编造的图必须被摘掉"
+    diagram = result.meta.get("diagram") or {}
+    assert diagram.get("diagrams_dropped") == 1
+    assert any("结构图已丢弃" in r for r in result.reasons)
+
+
+def test_diagram_not_requested_when_no_basis() -> None:
+    """没有结构依据（普通单主题笔记）→ prompt 里根本不出现画图任务。"""
+    from app.service.rewrite.organizer import organize_note
+
+    pr = _make_parse_result("这是一段关于闭包的技术内容,讲定义和用途。")
+    client = FakeClient([_SUCCESS_JSON])
+    result = organize_note(pr, filename="c.md", ext=".md", client=client, allow_diagram=True)
+    assert result.organizable
+    system_msg = client.received_messages[0][0]["content"]
+    assert "结构图任务" not in system_msg, "没有依据就不该给 LLM 画图任务"
+    assert not (result.meta.get("diagram") or {})
+
+
+def test_diagram_disabled_by_default() -> None:
+    """不传 allow_diagram（默认 False）→ 完全走老行为，不提画图。"""
+    from app.service.rewrite.organizer import organize_note
+
+    pr = _make_parse_result(_LISTY_MD)
+    client = FakeClient([_LISTY_GOOD_JSON])
+    result = organize_note(pr, filename="ai.md", ext=".md", client=client)
+    assert result.organizable
+    system_msg = client.received_messages[0][0]["content"]
+    assert "结构图任务" not in system_msg
+    assert not (result.meta.get("diagram") or {})

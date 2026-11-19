@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>方案 C 生产效果验证 · baleen</title>
+<style>
+  /* ===== 以下变量与 frontend/src/styles.css 一致 ===== */
+  :root {
+    --bg: #f4f2ec; --panel: #fffdf8;
+    --ink: #211f1c; --ink-2: #5f594e; --ink-3: #9c9484;
+    --line: #e6e1d3; --radius: 12px;
+    --font-serif: 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 26px 22px 70px; background: var(--bg); color: var(--ink);
+    font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-size: 15px; line-height: 1.9; word-break: break-word;
+  }
+  .wrap { max-width: 800px; margin: 0 auto; }
+  h1 { font-family: var(--font-serif); font-size: 19px; margin: 0 0 6px; }
+  .lead { color: var(--ink-2); font-size: 13px; margin: 0 0 20px; }
+  .label { display:inline-block; margin: 20px 0 8px; padding: 1px 9px; border-radius: 999px;
+           background: #e8eef2; color: #2e4559; font-size: 11.5px; }
+  .sec {
+    padding: 20px 24px; border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel); overflow: hidden;
+  }
+  .sec p { margin: 0 0 14px; }
+  .sec p:last-child { margin-bottom: 0; }
+  h3 { font-family: var(--font-serif); font-size: 16px; margin: 0 0 12px; }
+
+  /* ===== 以下与 NoteView.vue scoped 样式一字不差 ===== */
+  .sec .note-img { margin: 0 0 16px; text-align: center; }
+  .sec .note-img img {
+    max-width: min(100%, 640px);
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); cursor: zoom-in;
+  }
+  .sec .note-img.is-narrow {
+    float: left; width: 38%; max-width: 300px;
+    margin: 4px 20px 12px 0; text-align: left;
+  }
+  .sec .note-img.is-narrow img { max-width: 100%; display: block; }
+  .sec .note-img.is-narrow figcaption { text-align: left; }
+  .sec::after { content: ''; display: table; clear: both; }
+
+  .sec .note-img figcaption { margin-top: 6px; color: var(--ink-3); font-size: 12.5px; }
+
+  @media (max-width: 900px) {
+    .sec .note-img.is-narrow {
+      float: none; width: 100%; max-width: 100%;
+      margin: 0 0 16px; text-align: center;
+    }
+    .sec .note-img.is-narrow figcaption { text-align: center; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>方案 C 生产效果验证</h1>
+  <p class="lead">
+    窄图用真实素材（笔记 6015 国债视频帧 1080×1920 竖屏，比例 0.56），宽图用 6009 的
+    EC2 帧（1280×720，比例 1.78）。CSS 从 NoteView.vue 原样复制。
+  </p>
+
+  <span class="label">窄图（w/h = 0.56 ≤ 4/3）→ 左浮动，文字环绕</span>
+  <div class="sec">
+    <h3>1.1 国债的定义与由来</h3>
+    <p>国债是国家以其信用为基础，按照债券的一般原则，通过向社会筹集资金所形成的债权债务关系。政府发行国债的目的是为了筹集财政资金，用于弥补财政赤字、建设基础设施、应对突发事件等。</p>
+    <figure class="note-img is-narrow">
+      <img src="narrow.jpg" alt="国债讲解画面（竖屏 1080×1920）" />
+      <figcaption>国债讲解画面（竖屏）</figcaption>
+    </figure>
+    <p>从历史看，国债最早出现在中世纪的意大利，当时城邦国家为了战争融资而向商人借款。现代国债体系则形成于 17 世纪的英国，英格兰银行成立后开始系统发行政府债券。</p>
+    <p>国债按期限可分为短期（1 年以内）、中期（1~10 年）和长期（10 年以上）。按发行主体可分为中央国债和地方政府债。按付息方式可分为附息国债和贴现国债。</p>
+  </div>
+
+  <span class="label">宽图（w/h = 1.78 &gt; 4/3）→ 保持居中限宽 640px</span>
+  <div class="sec">
+    <h3>1.2 实验环境</h3>
+    <p>实验环境是 AWS EC2 上的实例，通过 EC2 Instance Connect 在浏览器里打开终端操作。</p>
+    <figure class="note-img is-wide">
+      <img src="frame.jpg" alt="EC2 控制台（1280×720 横屏）" />
+      <figcaption>EC2 控制台（横屏，保持原样）</figcaption>
+    </figure>
+    <p>课程目标是快速上手 Docker 常用命令，重心放在后续 Kubernetes 学习。</p>
+  </div>
+</div>
+</body>
+</html>

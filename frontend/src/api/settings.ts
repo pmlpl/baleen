@@ -15,6 +15,12 @@ export interface AppSettingsView {
   llm_context_tokens: number | null
   /** null = 用 organizer 兜底(131072) */
   llm_max_output_tokens: number | null
+  /**
+   * 结构图开关(默认 true)。
+   * true 也只是「允许」——真正该不该画由后端结构依据闸判定(并列清单≥5项/流程阶段≥3个),
+   * 没依据根本不会让模型画;编造出来的图还会被摘掉。
+   */
+  allow_diagrams: boolean
 }
 
 export interface SettingsUpdate {
@@ -26,6 +32,8 @@ export interface SettingsUpdate {
   /** null/缺省 = 保持不变;0 = 清空回退兜底 */
   llm_context_tokens?: number | null
   llm_max_output_tokens?: number | null
+  /** 结构图开关:null/缺省 = 保持不变 */
+  allow_diagrams?: boolean | null
 }
 
 export function getSettings(): Promise<AppSettingsView> {

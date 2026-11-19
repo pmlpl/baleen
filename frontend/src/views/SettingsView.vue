@@ -23,6 +23,8 @@ const tavilyTail = ref('')
 const tavilySet = ref(false)
 const contextTokens = ref('')
 const outputTokens = ref('')
+const allowDiagrams = ref(true)
+
 const loading = ref(false)
 const saving = ref(false)
 const errorText = ref('')
@@ -41,6 +43,7 @@ async function load(): Promise<void> {
     tavilySet.value = s.tavily_set
     contextTokens.value = s.llm_context_tokens != null ? String(s.llm_context_tokens) : ''
     outputTokens.value = s.llm_max_output_tokens != null ? String(s.llm_max_output_tokens) : ''
+    allowDiagrams.value = s.allow_diagrams
   } catch (error) {
     errorText.value = describeApiError(error)
   } finally {
@@ -64,6 +67,7 @@ async function save(): Promise<void> {
       // 空 = 保持不变;0 = 清空回退兜底;正数 = 用户填的上限
       llm_context_tokens: ctx === '' ? null : Number(ctx),
       llm_max_output_tokens: out === '' ? null : Number(out),
+      allow_diagrams: allowDiagrams.value,
     })
     keyTail.value = s.api_key_tail
     keySet.value = s.api_key_set
@@ -152,6 +156,16 @@ onMounted(() => {
         />
         <span class="muted key-hint">填你模型的最大输出;留空默认 131072</span>
       </label>
+
+      <label class="field field--switch">
+        <input v-model="allowDiagrams" type="checkbox" class="switch" />
+        <span class="field-label">导入时生成结构图</span>
+        <span class="muted key-hint">
+          只在内容确实是「并列清单」或「流程阶段」时才画(由系统按标题结构判定，不是让
+          AI 自由发挥)；画出来的图若节点对不上原文会被自动丢弃。关掉则一律不生成。
+        </span>
+      </label>
+
       <button class="btn btn--primary" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : '保存' }}
       </button>
@@ -171,6 +185,20 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.field--switch {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.field--switch .switch {
+  align-self: flex-start;
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
 .form {
   max-width: 560px;
   padding: 20px 24px;

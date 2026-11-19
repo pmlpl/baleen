@@ -2,7 +2,7 @@
 
 split 版本：stratified-v3（分层粒度：slot_verdict）
 
-**误拒率 1/48 = 2.1%　|　误丢率 0/1 = 0.0%**
+**误拒率 0/47 = 0.0%　|　误丢率 0/1 = 0.0%**
 
 ---
 
@@ -79,15 +79,15 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 | 12 | reject | 0 | 1 | ✅ |
 | 13 | reject | 2 | 1 | ✅ |
 | 14 | accept | 0 | 1 | ✅ |
-| 未填 | accept | 24 | 8 | ✅ |
+| 未填 | accept | 23 | 8 | ✅ |
 | 未填 | partial | 0 | 1 | ✅ |
-| 未填 | reject | 2 | 1 | ✅ |
+| 未填 | reject | 3 | 1 | ✅ |
 
 合计：21 个组合，test 覆盖 21 / 21。
 
 ## 2. 🔴 误拒率
 
-**误拒率 = 1/48 = 2.1%**（human ∈ {accept, partial} 中 pred = reject 的比例）—— 好笔记被扔了。
+**误拒率 = 0/47 = 0.0%**（human ∈ {accept, partial} 中 pred = reject 的比例）—— 好笔记被扔了。
 
 ## 3. 🔴 误丢率
 
@@ -103,20 +103,20 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | human \ pred | accept | partial | reject |
 |---|---|---|---|
-| accept | 44 | 1 | 1 |
+| accept | 44 | 1 | 0 |
 | partial | 2 | 0 | 0 |
-| reject | 2 | 0 | 7 |
+| reject | 2 | 0 | 8 |
 
 ## 6. 判定准确率与各类 P / R / F1
 
-- 判定准确率：51/57 = 89.5%
-- macro-F1：0.59
+- 判定准确率：52/57 = 91.2%
+- macro-F1：0.61
 
 | 类别 | support | precision | recall | F1 |
 |---|---|---|---|---|
-| accept | 46 | 0.92 | 0.96 | 0.94 |
+| accept | 45 | 0.92 | 0.98 | 0.95 |
 | partial | 2 | 0.00 | 0.00 | 0.00 |
-| reject | 9 | 0.88 | 0.78 | 0.82 |
+| reject | 10 | 1.00 | 0.80 | 0.89 |
 
 ## 7. 质量分级被低估清单
 
@@ -124,7 +124,6 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | rel_path | human_quality | pred_quality |
 |---|---|---|
-| _inbox/087efedeca46_手测导入测试.md | core | junk |
 | _inbox/a975b09e7859_你需要多少钱，才能财富自由？ - 你需要多少钱，才能财富自由？.md | core | reference |
 
 ## 8. 全错样本清单（mining list）
@@ -136,7 +135,6 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 | _inbox/软件开发项目大综合实训实践授课进度计划表.docx | reject / drop | accept / index | 抽取全文仅8行，全部是授课进度计划表的空白表头与签名栏，没有任何实际进度内容 |
 | _inbox/项目实施记录（一）.md | reject / topic_dialog | accept / index | 实训模板填出来的过程记录，全是按流程执行的汇报，没有技术判断或踩坑结论 |
 | _inbox/软件开发项目大综合实训实践项目指导书.docx | partial / extract_spans | accept / index | 全文约七成是教学安排（适用专业、场地、指导团队、评分要求、预习思考题），可用内容集中在第四部分 |
-| _inbox/087efedeca46_手测导入测试.md | accept /  | reject / drop | 来源=文档导入;转正:机器判定+AI盲审一致,主人2026-11-18批量批准;AI:虽自称测试笔记，但正文含可独立复用 |
 | _inbox/4b577ec72ee8_三分钟学会git和github.md | partial /  | accept / index | 来源=视频转写;转正:AI复核partial采纳(口语转写含概念性结论),主人2026-11-18批准;AI:B站视频的 |
 | _inbox/a975b09e7859_你需要多少钱，才能财富自由？ - 你需要多少钱，才能财富自由？.md | accept /  | partial / extract_spans | 来源=视频转写;转正:机器判定+AI盲审一致,主人2026-11-18批量批准;AI:文件名严重误导（标题写财富自由，实 |
 
@@ -153,7 +151,7 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 合法映射只有 `accept→index`、`partial→extract_spans`、`reject→topic_dialog`、`reject→drop`；其余组合说明预测器自相矛盾，**计入错误数**。
 
-**非法组合 = 0 条；判定错误 = 6 条；去重后唯一错误 = 6 条（两类可能重叠）。**
+**非法组合 = 0 条；判定错误 = 5 条；去重后唯一错误 = 5 条（两类可能重叠）。**
 
 无。
 

@@ -24,6 +24,7 @@ class SettingsRepo(Repo):
         charter: str | None = None,
         llm_context_tokens: int | None = None,
         llm_max_output_tokens: int | None = None,
+        allow_diagrams: bool | None = None,
     ) -> AppSettings:
         """按传入字段更新;None = 保持不变,空串/0 = 清空(回退默认/兜底)。api_key 仅非空时更新。"""
         row = await self.get()
@@ -47,5 +48,7 @@ class SettingsRepo(Repo):
             row.llm_max_output_tokens = (
                 llm_max_output_tokens if llm_max_output_tokens > 0 else None
             )
+        if allow_diagrams is not None:
+            row.allow_diagrams = allow_diagrams
         await self.session.flush()
         return row

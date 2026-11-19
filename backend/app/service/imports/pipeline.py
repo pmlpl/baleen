@@ -256,6 +256,7 @@ async def run_import_async(
     client: LLMClient | None = None,
     prompt_budget: int | None = None,
     output_budget: int | None = None,
+    allow_diagrams: bool = False,
     embed_func: EmbedFunc | None = None,
     token_counter: TokenCounter | None = None,
     worker: str = WORKER,
@@ -525,6 +526,7 @@ async def run_import_async(
                             prompt_budget=prompt_budget,
                             output_budget=output_budget,
                             video_images=video_images,  # 视频:多模态喂帧图 + 视频 prompt 约束
+                            allow_diagram=allow_diagrams,  # 结构图(仍需依据闸命中才画)
                         )
                     except Exception as exc:  # noqa: BLE001 — LLM 网络异常，降级原文入库
                         log.warning("AI 笔记整理异常(降级原文入库): %s", exc)

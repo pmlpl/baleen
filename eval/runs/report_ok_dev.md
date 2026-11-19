@@ -2,7 +2,7 @@
 
 split 版本：stratified-v3（分层粒度：slot_verdict）
 
-**误拒率 1/31 = 3.2%　|　误丢率 N/A（无该组样本）**
+**误拒率 0/30 = 0.0%　|　误丢率 N/A（无该组样本）**
 
 ---
 
@@ -69,15 +69,15 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 | 12 | reject | 0 | 1 | ✅ |
 | 13 | reject | 2 | 1 | ✅ |
 | 14 | accept | 0 | 1 | ✅ |
-| 未填 | accept | 24 | 8 | ✅ |
+| 未填 | accept | 23 | 8 | ✅ |
 | 未填 | partial | 0 | 1 | ✅ |
-| 未填 | reject | 2 | 1 | ✅ |
+| 未填 | reject | 3 | 1 | ✅ |
 
 合计：21 个组合，test 覆盖 21 / 21。
 
 ## 2. 🔴 误拒率
 
-**误拒率 = 1/31 = 3.2%**（human ∈ {accept, partial} 中 pred = reject 的比例）—— 好笔记被扔了。
+**误拒率 = 0/30 = 0.0%**（human ∈ {accept, partial} 中 pred = reject 的比例）—— 好笔记被扔了。
 
 ## 3. 🔴 误丢率
 
@@ -93,20 +93,20 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | human \ pred | accept | partial | reject |
 |---|---|---|---|
-| accept | 29 | 1 | 1 |
+| accept | 29 | 1 | 0 |
 | partial | 0 | 0 | 0 |
-| reject | 0 | 0 | 4 |
+| reject | 0 | 0 | 5 |
 
 ## 6. 判定准确率与各类 P / R / F1
 
-- 判定准确率：33/35 = 94.3%
-- macro-F1：0.62
+- 判定准确率：34/35 = 97.1%
+- macro-F1：0.66
 
 | 类别 | support | precision | recall | F1 |
 |---|---|---|---|---|
-| accept | 31 | 1.00 | 0.94 | 0.97 |
+| accept | 30 | 1.00 | 0.97 | 0.98 |
 | partial | 0 | 0.00 | 0.00 | 0.00 |
-| reject | 4 | 0.80 | 1.00 | 0.89 |
+| reject | 5 | 1.00 | 1.00 | 1.00 |
 
 ## 7. 质量分级被低估清单
 
@@ -114,7 +114,6 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | rel_path | human_quality | pred_quality |
 |---|---|---|
-| _inbox/087efedeca46_手测导入测试.md | core | junk |
 | _inbox/a975b09e7859_你需要多少钱，才能财富自由？ - 你需要多少钱，才能财富自由？.md | core | reference |
 
 ## 8. 全错样本清单（mining list）
@@ -123,7 +122,6 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 | rel_path | human | pred | human_reason |
 |---|---|---|---|
-| _inbox/087efedeca46_手测导入测试.md | accept /  | reject / drop | 来源=文档导入;转正:机器判定+AI盲审一致,主人2026-11-18批量批准;AI:虽自称测试笔记，但正文含可独立复用 |
 | _inbox/a975b09e7859_你需要多少钱，才能财富自由？ - 你需要多少钱，才能财富自由？.md | accept /  | partial / extract_spans | 来源=视频转写;转正:机器判定+AI盲审一致,主人2026-11-18批量批准;AI:文件名严重误导（标题写财富自由，实 |
 
 ## 9. 成本
@@ -139,7 +137,7 @@ v3 的分层粒度就是这张表：**每个组合在 test 里至少 1 条**，�
 
 合法映射只有 `accept→index`、`partial→extract_spans`、`reject→topic_dialog`、`reject→drop`；其余组合说明预测器自相矛盾，**计入错误数**。
 
-**非法组合 = 0 条；判定错误 = 2 条；去重后唯一错误 = 2 条（两类可能重叠）。**
+**非法组合 = 0 条；判定错误 = 1 条；去重后唯一错误 = 1 条（两类可能重叠）。**
 
 无。
 
