@@ -65,10 +65,11 @@ WHISPER_MODEL = "small"
 class FrameContent:
     """一个关键帧的提取结果（场景检测 + 视觉转录 + 真嵌图）。"""
 
-    timestamp: float  # 秒（场景中点）
+    timestamp: float  # 秒（场景内采样点）
     alt: str  # 画面简短描述（当图片 alt）
     text_layer: str  # 逐字转录的屏幕代码/文字（保留缩进/符号；无则空）
     media_key: str  # store_media 存的帧字节 key（内容寻址）
+    scene_idx: int = -1  # 来源场景序号（-1=无场景信息，不参与同场景择优）
 
 
 @dataclass
@@ -86,6 +87,9 @@ class VideoContent:
     # 关键帧元信息（供下游 G0/organizer 把 baleen-image:N 还原成 image 块）：
     # [{"index": N, "media_key": str, "alt": str, "text_layer": str, "timestamp": float}]
     frame_images: list[dict] = field(default_factory=list)
+    # 抽出的候选帧数（去重后、视觉筛选前）：>0 但 frame_images 空 = 全被筛除/失败,
+    # worker 依此显式告警（2026-11-19 P1a）
+    frame_candidates: int = 0
 
 
 def _load_whisper(device: str):
@@ -392,21 +396,24 @@ def _hamming(a: int, b: int) -> int:
 
 
 def _dedup_by_dhash(
-    frames: list[tuple[float, Path]],
+    frames: list[tuple],
     *,
     threshold: int = DHASH_DEDUP_THRESHOLD,
     crop_bottom: float = DHASH_CROP_BOTTOM,
-) -> list[tuple[float, Path]]:
+) -> list[tuple]:
     """近重复（汉明距离 ≤ threshold）只留第一个——同一幻灯片讲半天只留 1 帧。
 
-    ``crop_bottom`` 裁掉底部字幕条再算 hash：实际视频字幕逐句变但画面没变，
-    不裁的话同一白板会被判成多帧（SpaceX 样本实测：帧1/帧2 距离 8→裁 25% 后 1）。
+    元组不定长（中点/75% 候选带场景序号，旧调用方是二元组）：只取 [0]=时间戳
+    [1]=路径参与判定，整个元组原样保留。``crop_bottom`` 裁掉底部字幕条再算 hash：
+    实际视频字幕逐句变但画面没变，不裁的话同一白板会被判成多帧（SpaceX 样本实测：
+    帧1/帧2 距离 8→裁 25% 后 1）。
     """
     if len(frames) <= 1:
         return frames
-    kept: list[tuple[float, Path]] = []
+    kept: list[tuple] = []
     hashes: list[int] = []
-    for ts, path in frames:
+    for frame in frames:
+        path = frame[1]
         try:
             h = _dhash(path, crop_bottom=crop_bottom)
         except Exception:  # noqa: BLE001 —— 读图失败按「独一无二」处理，不丢帧
@@ -414,7 +421,7 @@ def _dedup_by_dhash(
         if any(h != -1 and _hamming(h, h2) <= threshold for h2 in hashes):
             continue
         hashes.append(h)
-        kept.append((ts, path))
+        kept.append(frame)
     return kept
 
 
@@ -424,30 +431,33 @@ def extract_scene_frames(
     output_dir: Path,
     *,
     max_frames: int = MAX_SCENE_FRAMES,
-) -> list[tuple[float, Path]]:
-    """每个场景中点抽 1 帧（ffmpeg -ss seek）+ dHash 去重 + 超上限均匀采样。
+) -> list[tuple[float, Path, int]]:
+    """每场景抽中点+75% 两个候选（ffmpeg -ss seek）+ dHash 去重 + 超上限均匀采样。
 
-    替换旧的固定间隔抽帧：场景切换点才是画面真正变化的地方，固定间隔会漏掉短画面、
-    重复抽同一静止幻灯片。
+    双候选（2026-11-19 复核批）：场景中点常截在动画淡入淡出过程上（豆包淡帧/NestJS
+    错位帧实证）。75% 点是画面稳定后的位置；静止场景两候选 dHash 近似会自动去重，
+    不涨视觉成本——只有动画/过渡场景多一次机会。同场景两个候选都活过视觉筛选时，
+    ``transcribe_frames`` 末尾同场景择优只留时间靠后的一帧。
     """
     frames_dir = output_dir / "frames"
     frames_dir.mkdir(exist_ok=True)
 
-    result: list[tuple[float, Path]] = []
+    result: list[tuple[float, Path, int]] = []
     for i, (start, end) in enumerate(scenes):
-        mid = (start + end) / 2
-        frame_path = frames_dir / f"frame_{i:04d}.jpg"
-        # -ss 放在 -i 前是 fast seek（跳到最近 keyframe），单帧抽取足够快且准
-        subprocess.run(
-            [
-                "ffmpeg", "-ss", f"{mid:.3f}", "-i", str(video_path),
-                "-frames:v", "1", "-q:v", "2", "-y", str(frame_path),
-            ],
-            capture_output=True,
-            check=True,
-        )
-        if frame_path.is_file():
-            result.append((mid, frame_path))
+        span = end - start
+        for j, ts in enumerate(((start + end) / 2, start + span * 0.75)):
+            frame_path = frames_dir / f"frame_{i:04d}_{j}.jpg"
+            # -ss 放在 -i 前是 fast seek（跳到最近 keyframe），单帧抽取足够快且准
+            subprocess.run(
+                [
+                    "ffmpeg", "-ss", f"{ts:.3f}", "-i", str(video_path),
+                    "-frames:v", "1", "-q:v", "2", "-y", str(frame_path),
+                ],
+                capture_output=True,
+                check=True,
+            )
+            if frame_path.is_file():
+                result.append((ts, frame_path, i))
 
     result = _dedup_by_dhash(result)
     if len(result) > max_frames:
@@ -492,14 +502,19 @@ def _parse_frame_output(content: str) -> tuple[str, str, bool]:
     return text_layer, desc, is_informative
 
 
-# 视觉逐字转录 prompt：从「描述画面」升级为「逐字转录屏幕代码 + 信息密度判定」
+# 视觉逐字转录 prompt：逐字转录屏幕代码 + 知识相关性判定（2026-11-19 从「信息密度」升级：
+# 原标准判「画面有没有字」——搜索框/互动引导页/主播口播帧因为有字幕文本全被判 high 混进
+# 笔记（6009 一箭三连帧/6011 点赞收藏帧/6015 主播字幕帧实证）；且讲解动画的美术帧被
+# 「转场动画」误伤整类丢光（6014 零图实证））
 _FRAME_TRANSCRIBE_PROMPT = (
     "这是视频的一个关键画面截图。请做三件事：\n"
-    "1. 【信息密度】判断这个画面值不值得放进笔记：\n"
-    "   - high：画面有实质可读内容——代码、命令行、幻灯片要点、表格、图表、架构图、"
-    "流程示意、软件界面（这些值得截图保留）\n"
-    "   - low：画面几乎没有信息——表情包/梗图、纯黑屏/纯色背景、纯标题卡"
-    "（只有视频标题或一句口号）、转场动画、纯人物说话的特写\n"
+    "1. 【知识相关性】判断这个画面该不该放进笔记（标准是「画面是否承载正文讲解的"
+    "知识内容」，不是「画面里有没有字」）：\n"
+    "   - high：画面承载知识——代码、命令行、幻灯片要点、表格、图表、架构图、流程示意、"
+    "软件操作/演示界面、讲解动画的完整关键帧（有图形结构或文字标注的动画画面）\n"
+    "   - low：与知识无关——互动引导画面（点赞/收藏/关注/一键三连/评论区）、搜索框/"
+    "地址栏自动补全、片头片尾包装、纯人物口播的特写（**即使画面有字幕，字幕内容口播里"
+    "已经说了**）、转场动画的过渡帧、表情包/梗图、纯黑屏/纯标题卡\n"
     "2. 【逐字转录】画面里如果有代码/命令行/终端/幻灯片文字/表格，逐字转录出来，"
     "严格保留缩进、符号、大小写、表格结构，不要改写或修正，不要添加解释。"
     "是代码就用代码块包裹（标注语言，如 ```python）；表格用 markdown 表格；是纯文字就直接给。\n"
@@ -520,17 +535,18 @@ _FRAME_DESC_ONLY_PROMPT = (
 
 
 def transcribe_frames(
-    frames: list[tuple[float, Path]],
+    frames: list[tuple],
     *,
     client,
     deadline_s: float = 600,
 ) -> list[FrameContent]:
-    """DeepSeek-flash 视觉：逐字转录屏幕代码 + 信息密度判定 + 描述画面；帧字节 store_media 存库。
+    """DeepSeek-flash 视觉：逐字转录屏幕代码 + 知识相关性判定 + 描述画面；帧字节 store_media 存库。
 
-    替换旧的 describe_frames（只描述成文字）：现在是逐字转录（保留缩进）+ 真嵌图（media_key）。
-    **信息密度筛选**（2026-11-16 主人反馈后加）：模型判 INFO=low 的帧（表情包/黑屏/纯标题卡/
-    转场/纯人物特写）直接丢弃，不存 media、不进笔记——否则 22 分钟视频 30 帧里有 5-6 张
-    零信息装饰图，笔记被撑得又长又水。
+    **知识相关性筛选**（2026-11-19 从「信息密度」升级）：模型判 INFO=low 的帧直接丢弃，
+    不存 media、不进笔记。判定标准是「画面是否承载知识」，不是「有没有字」——原标准下
+    搜索框/互动引导/主播口播帧靠字幕文本豁免混进笔记，讲解动画帧反被整类误杀。
+    ⚠️ 同场景双候选（中点+75%）都活过筛选时只留时间靠后的一帧：中点常截在淡入淡出上，
+    后段画面已稳定（2026-11-19 复核批：豆包淡帧/NestJS 错位帧）。
     ⚠️ 带总时限 deadline_s：LLM 网关挂起时单帧最多等满 client 超时，N 帧×超时=假死，
     超过总时限放弃剩余帧（帧是锦上添花，不能拖死导入）。
     ⚠️ 模型偶尔不守 TEXT_LAYER/DESC 格式（只回一句描述/废话）→ 兜底用纯描述 prompt
@@ -543,7 +559,9 @@ def transcribe_frames(
     results: list[FrameContent] = []
     started = _time.monotonic()
     kept = dropped = 0
-    for timestamp, frame_path in frames:
+    for frame in frames:
+        timestamp, frame_path = frame[0], frame[1]
+        scene_idx = frame[2] if len(frame) > 2 else -1
         if _time.monotonic() - started > deadline_s:
             break  # 总时限到，放弃剩余帧
         try:
@@ -559,8 +577,10 @@ def transcribe_frames(
                 max_tokens=get_settings().llm_max_output_tokens,
             )
             text_layer, desc, is_informative = _parse_frame_output(chat.content)
-            if not is_informative and not text_layer:
-                # 低信息帧且无可转录文字 → 丢弃（装饰图不嵌进笔记，也不存 blob）
+            if not is_informative:
+                # 与知识无关的帧 → 丢弃（不嵌进笔记，也不存 blob）。
+                # 低信息帧上的字幕文本=口播内容,whisper 早已转写,保留零增益
+                # （2026-11-19 前旧规则「low 且无 text_layer 才丢」放过了一箭三连/主播字幕帧）。
                 dropped += 1
                 continue
             if not desc and not text_layer:
@@ -575,33 +595,51 @@ def transcribe_frames(
             kept += 1
             results.append(
                 FrameContent(
-                    timestamp=timestamp, alt=desc or "画面截图", text_layer=text_layer, media_key=media_key
+                    timestamp=timestamp, alt=desc or "画面截图", text_layer=text_layer,
+                    media_key=media_key, scene_idx=scene_idx,
                 )
             )
         except Exception:
             continue  # 单帧失败跳过（不丢其他帧）
 
+    # 同场景双候选都存活 → 只留时间靠后的一帧（后段画面更可能已稳定）。
+    # scene_idx=-1（无场景信息/旧调用方）不参与分组,原样保留。
+    grouped = [fc for fc in results if fc.scene_idx >= 0]
+    if grouped:
+        by_scene: dict[int, FrameContent] = {}
+        for fc in grouped:
+            prev = by_scene.get(fc.scene_idx)
+            if prev is None or fc.timestamp > prev.timestamp:
+                by_scene[fc.scene_idx] = fc
+        if len(by_scene) != len(grouped):
+            results = (
+                [fc for fc in results if fc.scene_idx < 0]
+                + sorted(by_scene.values(), key=lambda f: f.timestamp)
+            )
+            log.info("同场景双候选择优：%d → %d 帧", len(grouped), len(by_scene))
+
     if dropped:
-        log.info("帧信息密度筛选：保留 %d / 丢弃 %d 张低信息帧", kept, dropped)
+        log.info("帧知识相关性筛选：保留 %d / 丢弃 %d 张无关帧", kept, dropped)
     return results
 
 
-def _extract_frames(video_path: Path | None, output_dir: Path, client) -> list[FrameContent]:
-    """公共帧逻辑：场景检测抽帧 + dHash 去重 + 视觉逐字转录 + store_media 真嵌图。
+def _extract_frames(video_path: Path | None, output_dir: Path, client) -> tuple[list[FrameContent], int]:
+    """公共帧逻辑：场景检测双候选抽帧 + dHash 去重 + 视觉转录 + store_media 真嵌图。
 
-    douyin / B站兜底 / yt-dlp 三条路径共用（替换各路径里重复的
-    extract_key_frames+describe_frames 调用）。任何一步失败返回 []，不阻塞转写。
+    douyin / B站兜底 / yt-dlp 三条路径共用。返回 ``(存活的帧, 候选帧数)``——候选数
+    供 worker 做「全部帧被筛除」的显式警告（6014 零图零警告教训：静默降级不可接受）。
+    任何一步失败返回 ([], 0)，不阻塞转写。
     """
     if video_path is None:
-        return []
+        return [], 0
     try:
         scenes = detect_scenes(video_path)
         frames = extract_scene_frames(video_path, scenes, output_dir)
         if not frames:
-            return []
-        return transcribe_frames(frames, client=client)
+            return [], 0
+        return transcribe_frames(frames, client=client), len(frames)
     except Exception:  # noqa: BLE001 —— 帧提取失败不影响转写（与旧逻辑一致）
-        return []
+        return [], 0
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -731,7 +769,7 @@ def _content_from_media(
         if progress_cb:
             progress_cb("识别画面中…", 72)
 
-        frame_contents: list[FrameContent] = _extract_frames(video_path, output_dir, client)
+        frame_contents, frame_candidates = _extract_frames(video_path, output_dir, client)
 
         markdown = build_video_markdown(
             title=title,
@@ -753,6 +791,7 @@ def _content_from_media(
         transcript_segments=transcript_segments,
         frame_contents=frame_contents,
         markdown=markdown,
+        frame_candidates=frame_candidates,
         frame_images=[
             {
                 "index": i,

@@ -270,6 +270,40 @@ function looksLikeCode(line: string): boolean {
   return false
 }
 
+// ---------------- md 格式渲染(2026-11-19 复核批 P0) ----------------
+// 后端父块序列化已保留围栏/列表标记/引用前缀/强调格式(backend chunker._block_display_text)。
+// 老笔记(改造前的存量 chunks)没有这些标记,走不进这些分支,渲染行为不变。
+// mermaid / svg 围栏与普通围栏同形输出 pre>code:renderMermaidIn / renderSvgsIn
+// 按内容识别,普通代码块不受影响。
+
+/** 围栏行:```、```bash、```mermaid…(display 序列化的代码块边界) */
+const FENCE_RE = /^\s*```/
+
+/** 无序列表项:- 后必须跟空格,防「3-4 个」这类连字符误伤 */
+const UL_ITEM_RE = /^\s*[-] +(.*)$/
+
+/** 有序列表项:1. 后必须跟空格 */
+const OL_ITEM_RE = /^\s*\d+\. +(.*)$/
+
+/** 引用行:> 后可跟空格也可直接接内容 */
+const QUOTE_RE = /^\s*?> ?(.*)$/
+
+/**
+ * 行内 md:**粗体** / `行内代码` / *斜体*(输入必须已 HTML 转义)。
+ *
+ * 斜体保守匹配:开头 * 前面必须是行首/空白/开括号/标点,结尾 * 后面必须是标点/空白/结尾,
+ * 且内容不以空白开头——「3 * 4 * 5」这类算式不会被误渲染成斜体(内容以空格开头即失配)。
+ */
+function renderInlineMd(escaped: string): string {
+  return escaped
+    .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/`([^`\n]+)`/g, '<code class="sec-code-inline">$1</code>')
+    .replace(
+      /(^|[\s(（[【,，;；:：、。])\*([^\s*][^*\n]*?)\*(?=$|[\s)）\]】。;,.!?、:…])/g,
+      '$1<em>$2</em>',
+    )
+}
+
 export function renderSectionText(
   raw: string,
   images: SectionImage[] = [],
@@ -294,8 +328,11 @@ export function renderSectionText(
     if (bufferIsCode === true) {
       out.push(`<pre class="sec-code"><code>${escapeHtml(buffer.join('\n'))}</code></pre>`)
     } else {
-      // 段落内单换行保留为 <br>(父块的换行本身有语义:步骤、条件列举)
-      out.push(`<p>${buffer.map((l) => renderRefs(escapeHtml(l), targets)).join('<br>')}</p>`)
+      // 段落内单换行保留为 <br>(父块的换行本身有语义:步骤、条件列举);
+      // 行内 md(粗体/行内代码/斜体)先于出处引用渲染
+      out.push(
+        `<p>${buffer.map((l) => renderRefs(renderInlineMd(escapeHtml(l)), targets)).join('<br>')}</p>`,
+      )
     }
     buffer = []
     bufferIsCode = null
@@ -303,6 +340,23 @@ export function renderSectionText(
 
   for (let i = 0; i < lines.length; i++) {
     const line = (lines[i] as string)!
+    // 围栏代码块(display 序列化)优先:```lang 开、``` 收;未闭合吃到结尾也不吞后续输入
+    if (FENCE_RE.test(line)) {
+      flush()
+      const lang = line.trim().slice(3).trim()
+      const codeLines: string[] = []
+      let j = i + 1
+      while (j < lines.length && !FENCE_RE.test(lines[j] as string)) {
+        codeLines.push(lines[j] as string)
+        j += 1
+      }
+      i = Math.min(j, lines.length - 1)
+      const attrs = lang === '' ? '' : ` data-lang="${escapeHtml(lang)}"`
+      out.push(
+        `<pre class="sec-code"${attrs}><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`,
+      )
+      continue
+    }
     // 图片标记优先:原位替换成真实插图
     const imgHtml = renderImageMarker(line)
     if (imgHtml !== null) {
@@ -387,6 +441,62 @@ export function renderSectionText(
       }
       i = j - 1
       out.push(`<pre><code>${escapeHtml(block.join('\n'))}</code></pre>`)
+      continue
+    }
+    // 列表(display 序列化):- / 1. 开头的连续行;两格缩进续行并入上一条
+    const ulm = UL_ITEM_RE.exec(line)
+    const olm = ulm === null ? OL_ITEM_RE.exec(line) : null
+    if (ulm !== null || olm !== null) {
+      flush()
+      const itemRe = ulm !== null ? UL_ITEM_RE : OL_ITEM_RE
+      const items: string[][] = []
+      let j = i
+      while (j < lines.length) {
+        const cur = lines[j] as string
+        const m = itemRe.exec(cur)
+        if (m !== null) {
+          items.push([(m[1] as string).trim()])
+          j += 1
+          continue
+        }
+        if (
+          items.length > 0 &&
+          !FENCE_RE.test(cur) &&
+          /^\s+\S/.test(cur)
+        ) {
+          (items[items.length - 1] as string[]).push(cur.trim())
+          j += 1
+          continue
+        }
+        break
+      }
+      const lis = items
+        .map(
+          (it) =>
+            `<li>${it.map((l) => renderRefs(renderInlineMd(escapeHtml(l)), targets)).join('<br>')}</li>`,
+        )
+        .join('')
+      out.push(
+        ulm !== null ? `<ul class="sec-list">${lis}</ul>` : `<ol class="sec-list">${lis}</ol>`,
+      )
+      i = j - 1
+      continue
+    }
+    // 引用块(display 序列化):> 开头的连续行;内容递归渲染(引用内列表/表格照常成立)
+    if (QUOTE_RE.test(line)) {
+      flush()
+      const inner: string[] = []
+      let j = i
+      while (j < lines.length) {
+        const m = QUOTE_RE.exec(lines[j] as string)
+        if (m === null) break
+        inner.push(m[1] as string)
+        j += 1
+      }
+      out.push(
+        `<blockquote class="sec-quote">${renderSectionText(inner.join('\n'), images, cursor, targets)}</blockquote>`,
+      )
+      i = j - 1
       continue
     }
     const isCode = looksLikeCode(line)

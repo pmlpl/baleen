@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-17 · 问答页五连修(picker遮罩/Backspace删chip/草稿按会话localStorage/422三根因:截断marker算长度+MAX_QUERY_CHARS→200000+附件≤5)+📎附件统一后端解析(POST /api/parse复用G0不入库收编HTML/docx/pdf/pptx,大文件>40000 map-reduce分层,AttachmentInput.text→40000);**冻结分段摘要digest(老对话压成不可变第二条system,近窗append-only保前缀缓存;token>100K触发/安全网HISTORY_TOKEN_BUDGET→200K;止静默丢失+砍二次式成本)**;基线 **532 passed**
+**最后更新**：2026-11-19 · 视频笔记复核批(主人 7 条人工裁决+四把取证铁锤:拍平/6014 零图/6010 丢"23"/arq 重投递,台账 77→84 六失败模式)→ 当天六连修(P0 父块展示序列化保留围栏/列表/粗体/引用+section.ts 补渲染;P1 帧筛选改知识相关性判定+去 text_layer 豁免+零帧显式警告+场景双候选(mid+75%)同场景取后+worker 幂等守卫拦 arq 重投递;P2 标题数量词规则+插图限宽 640px+灯箱);基线 **538 passed**
 
 ### 已完成模块
 
@@ -58,7 +58,7 @@
 | **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
 | **对话附件（v17→v28）** | `app/api/parse.py` + `service/qa/file_analyzer.py` + `service/parse/html_parser.py` + QaView 📎 | ✅ v28 起 📎 文档类统一走 `POST /api/parse`（复用 G0 不入库，HTML/docx/pdf/pptx/md/csv/txt 一套口径）；正文 > 40000 字符 map-reduce 分层分析（`mode=analyzed`，20 块上限→422）；`attachments[].text` 上限 20000→40000；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级 |
 | **冻结分段摘要 digest（v28）** | `app/service/qa/digest.py` + `answerer.py`(`HISTORY_TOKEN_BUDGET`) | ✅ 老对话压成不可变「第二条 system」+ 近窗 append-only，**保前缀缓存**、止静默丢失、砍二次式成本；token > 100K 触发 / 200K 安全网；异步 arq 触发，旧消息不删、前端零改 |
-| **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底 |
+| **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底；**格式渲染（2026-11-19）**：父块围栏代码块/列表/粗体/引用（chunker 父块 display 序列化 + 围栏/列表/引用/行内渲染,老笔记行为不变）;插图限宽 640px+点击灯箱 |
 | **数学公式渲染** | `frontend/src/utils/math.ts` + `markdown.ts` | ✅ KaTeX 行内 `$...$`/块级 `$$...$$`,NoteView/QaView 共用;原文级占位保护(公式里 `[1]`/`**` 不被行内替换吃);pandoc 式启发式防美元价签误判;块级收集不越空行/标题/自闭合行(防吞正文成烂公式报红);20 边界用例探针(`scripts/probe_math_render.mjs`,含 QA 真实消息回归)全过 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
 | **视频笔记页 + whisper（v22→v26）** | `app/service/video_extractor.py` + `douyin_extractor.py` + `VideoView.vue` | ✅ whisper 异步（API 立即 201，worker 2h 超时，video_stage/progress 进度）；**faster-whisper small**（GPU float16 实测 15x 实时，构造失败/推理失败双重退 CPU int8）；B 站 yt-dlp 路径；**抖音 Playwright 免 cookie**（系统 Edge 拦截详情接口，用户零配置）；前端进度条（whisper 阶段按视频时长插值） |
@@ -69,7 +69,7 @@
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  532 passed
+cd backend && uv run pytest -q     →  538 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -99,6 +99,7 @@ cd backend && uv run pytest -q     →  532 passed
 → **497**（视频导入白盒进度日志 video_log:提取+整理全程滚动日志区;2026-11-16）
 → **515**（问答页五连修+📎附件统一后端解析与大文件分层分析;2026-11-17）
 → **532**（冻结分段摘要digest:token触发100K+安全网200K,保前缀缓存止静默丢失;2026-11-17）
+→ **538**（复核批六连修:父块 display 序列化 3+帧知识相关性/双候选/零帧警告 2+worker 幂等守卫 1;2026-11-19）
 
 **任何新任务都不许把这个数降下来。**
 

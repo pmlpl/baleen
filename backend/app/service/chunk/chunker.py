@@ -95,6 +95,68 @@ def _block_text(block: dict) -> str:
     return ""
 
 
+def _inline_nodes_text(nodes: list) -> str:
+    """行内节点 → 带 md 标记的文本(粗体/斜体/行内代码;链接/删除线退化为纯文本)。
+
+    与 `_block_text` 只取裸 text 相对:这里保留 marks,父块展示文本靠它还原强调格式。
+    """
+    out: list[str] = []
+    for n in nodes or []:
+        ntype = n.get("type")
+        if ntype == "text":
+            t = n.get("text", "")
+            marks = [m.get("type") for m in n.get("marks") or []]
+            if t.strip():
+                if "code" in marks:
+                    t = f"`{t}`"
+                if "bold" in marks:
+                    t = f"**{t}**"
+                elif "italic" in marks:
+                    t = f"*{t}*"
+            out.append(t)
+        elif ntype == "hardBreak":
+            out.append("\n")
+    return "".join(out)
+
+
+def _block_display_text(block: dict) -> str:
+    """父块展示文本:保留代码围栏/列表标记/引用前缀/强调格式(笔记页按它渲染)。
+
+    只用于 flush_section 的 sec_text(parent chunk / GET /api/notes 展示)。
+    父块不进向量(pipeline 只 embed 子块),加格式标记不影响检索;
+    喂 embedding 的子块文本仍走 `_block_text` 纯文本口径。
+    """
+    t = block.get("type")
+    if t in ("paragraph", "heading"):
+        return _inline_nodes_text(block.get("content") or [])
+    if t == "codeBlock":
+        lang = (block.get("attrs") or {}).get("language") or ""
+        code = "".join(n.get("text", "") for n in block.get("content") or [])
+        return f"```{lang}\n{code}\n```"
+    if t == "image":
+        return _block_text(block)  # [图片] alt 标记,前端渲染时原位还原成插图
+    if t == "table":
+        return _table_to_text(block)
+    if t in ("bulletList", "orderedList"):
+        lines: list[str] = []
+        for i, item in enumerate(block.get("content") or [], 1):
+            inner = _block_display_text(item).strip()
+            if not inner:
+                continue
+            marker = "- " if t == "bulletList" else f"{i}. "
+            # 多行 item:首行挂标记,续行缩进两格(渲染端按行还原)
+            lines.append(marker + inner.replace("\n", "\n  "))
+        return "\n".join(lines)
+    if t == "listItem":
+        return "\n".join(_block_display_text(b) for b in block.get("content") or []).strip()
+    if t == "blockquote":
+        inner = "\n".join(
+            _block_display_text(b) for b in block.get("content") or []
+        ).strip()
+        return "\n".join(f"> {ln}" if ln else ">" for ln in inner.splitlines())
+    return _block_text(block)
+
+
 def _table_rows(block: dict) -> tuple[list[str], list[list[str]]]:
     """返回 (表头单元格, 数据行单元格列表)。无 thead 时表头为空。"""
     header: list[str] = []
@@ -472,8 +534,9 @@ def chunk(
         ) and _looks_like_toc("\n".join(_block_text(b) for b in cur_section_blocks))
         ord_n = flush_pending(ord_start, is_toc)
         cur_pending_text = ""
+        # 展示文本走 display 口径(围栏/列表/粗体);embedding 子块在 flush_pending 已按纯文本产完
         sec_text = "\n".join(
-            _block_text(b) for b in cur_section_blocks if b.get("type") != "heading"
+            _block_display_text(b) for b in cur_section_blocks if b.get("type") != "heading"
         ).strip()
         # 有子块或父块文本才建 section;子块存在时即便父文本空也给它们一个家,避免孤儿
         if not cur_chunk_indices and not sec_text:

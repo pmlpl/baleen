@@ -320,3 +320,104 @@ class TestMergeAntiFragmentation:
             for ci in sec.chunk_indices:
                 assert r.chunks[ci].heading_path == sec.heading_path
         _assert_hard_metrics(r)
+
+
+class TestParentDisplayText:
+    """父块展示序列化(2026-11-19 复核批 P0):围栏/列表标记/引用/粗体保留。
+
+    背景:笔记页渲染走父块文本,此前复用检索的纯文本口径把格式全拍平
+    (6009 代码纯文本/6013 列表无标记/6011 6015 零粗体——主人复核实锤)。
+    约束:喂 embedding 的子块必须保持纯文本,只有父块(sec_text)走 display 口径。
+    """
+
+    @staticmethod
+    def _parent_text(r) -> str:
+        parents = [c for c in r.chunks if c.is_parent]
+        assert parents, "至少一个父块"
+        return parents[0].text
+
+    def test_parent_keeps_code_fence_child_plain(self):
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "Docker 命令"),
+                {
+                    "type": "codeBlock",
+                    "attrs": {"language": "bash"},
+                    "content": [{"type": "text", "text": "docker run -d --name web -p 8080:80 nginx"}],
+                },
+                _text("上面是启动命令的示例,直接复制即可使用。但说明文字要足够长," * 5),
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        ptext = self._parent_text(r)
+        assert "```bash\ndocker run -d --name web -p 8080:80 nginx\n```" in ptext, (
+            "父块文本必须带完整围栏(语言标注+内容+闭合),否则前端渲染不出代码框"
+        )
+        # 子块(代码块拆分/embedding 路径)保持纯文本,不得混入围栏标记
+        for c in r.chunks:
+            if not c.is_parent and c.meta.get("block_type") == "code":
+                assert "```" not in c.text
+
+    def test_parent_keeps_list_markers(self):
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "PPO 闭环"),
+                _text("整个闭环可以概括为五个阶段:"),
+                {
+                    "type": "bulletList",
+                    "content": [
+                        {"type": "listItem", "content": [_text("感知:观察环境。")]},
+                        {"type": "listItem", "content": [_text("决策:输出动作分布。")]},
+                    ],
+                },
+                {
+                    "type": "orderedList",
+                    "content": [
+                        {"type": "listItem", "content": [_text("第一步")]},
+                        {"type": "listItem", "content": [_text("第二步")]},
+                    ],
+                },
+                _text("结尾段落补足长度。" * 10),
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        ptext = self._parent_text(r)
+        assert "- 感知:观察环境。" in ptext, "bulletList 父块必须带 - 标记"
+        assert "- 决策:输出动作分布。" in ptext
+        assert "1. 第一步" in ptext and "2. 第二步" in ptext, "orderedList 必须编号"
+
+    def test_parent_keeps_bold_inline_code_blockquote(self):
+        para = {
+            "type": "paragraph",
+            "content": [
+                {"type": "text", "text": "重要概念", "marks": [{"type": "bold"}]},
+                {"type": "text", "text": " 与行内命令 "},
+                {"type": "text", "text": "docker ps", "marks": [{"type": "code"}]},
+                {"type": "text", "text": " 的说明文字。这句要足够长才能不触发合并边界。" * 3},
+            ],
+        }
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "强调格式"),
+                para,
+                {
+                    "type": "blockquote",
+                    "content": [_text("引用块:给策略更新加限速的核心思想。" * 5)],
+                },
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        ptext = self._parent_text(r)
+        assert "**重要概念**" in ptext, "粗体 mark 必须序列化成 **"
+        assert "`docker ps`" in ptext, "行内 code mark 必须序列化成反引号"
+        assert "> 引用块:" in ptext, "blockquote 必须带 > 前缀"
+        # embedding 子块仍是纯文本
+        plain_children = [
+            c for c in r.chunks
+            if not c.is_parent and c.meta.get("block_type") == "text"
+        ]
+        for c in plain_children:
+            assert "**" not in c.text and "```" not in c.text

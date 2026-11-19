@@ -48,6 +48,21 @@ const tocEl = ref<HTMLElement | null>(null)
 /** 右栏滚动容器(正文在这里滚,不是整页滚) */
 const contentEl = ref<HTMLElement | null>(null)
 
+/** 图片灯箱(2026-11-19 复核批 P2):正文插图限宽后,点图放大看细节 */
+const lightboxSrc = ref<string | null>(null)
+
+function onContentClick(event: MouseEvent): void {
+  const img = (event.target as HTMLElement).closest<HTMLImageElement>('.note-img img')
+  if (img !== null && img.src !== '') {
+    event.preventDefault()
+    lightboxSrc.value = img.src
+  }
+}
+
+function closeLightbox(): void {
+  lightboxSrc.value = null
+}
+
 /** 目录条目:章节名 + 缩进层级 + 原块 */
 interface TocEntry {
   parent: NoteParent
@@ -413,8 +428,8 @@ async function removeNote(): Promise<void> {
           </div>
         </aside>
 
-        <!-- 右栏:整篇连续正文,每节一个锚点 -->
-        <article ref="contentEl" class="content">
+        <!-- 右栏:整篇连续正文,每节一个锚点;插图点击委托到灯箱 -->
+        <article ref="contentEl" class="content" @click="onContentClick">
           <section
             v-for="entry in toc"
             :id="`sec-${entry.parent.chunk_id}`"
@@ -434,6 +449,11 @@ async function removeNote(): Promise<void> {
         </article>
       </div>
     </template>
+
+    <!-- 图片灯箱:点图放大,点击任意处关闭 -->
+    <div v-if="lightboxSrc !== null" class="img-lightbox" @click="closeLightbox">
+      <img :src="lightboxSrc" alt="放大查看" />
+    </div>
   </section>
 </template>
 
@@ -686,6 +706,50 @@ async function removeNote(): Promise<void> {
   white-space: pre;
 }
 
+/* 围栏代码块的语言角标(display 序列化 2026-11-19;mermaid 块被渲染成图后此样式自然消失) */
+.sec :deep(.sec-code[data-lang])::before {
+  content: attr(data-lang);
+  display: block;
+  margin-bottom: 6px;
+  color: var(--ink-3);
+  font-size: 11px;
+  text-align: right;
+}
+
+/* 行内代码:轻底色等宽,长命令可折行 */
+.sec :deep(.sec-code-inline) {
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--neutral-soft);
+  font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+  font-size: 0.92em;
+}
+
+/* 列表(display 序列化):与段落拉开层级,行距略密 */
+.sec :deep(.sec-list) {
+  margin: 0 0 14px;
+  padding-left: 1.8em;
+  line-height: 1.75;
+}
+
+.sec :deep(.sec-list li) {
+  margin: 0 0 6px;
+}
+
+.sec :deep(.sec-list li:last-child) {
+  margin-bottom: 0;
+}
+
+/* 引用块(display 序列化):左边线 + 次级墨色,视觉上与正文分层 */
+.sec :deep(.sec-quote) {
+  margin: 0 0 14px;
+  padding: 6px 14px;
+  border-left: 3px solid var(--accent-soft);
+  border-radius: 0 8px 8px 0;
+  background: var(--panel);
+  color: var(--ink-2);
+}
+
 /* 笔记插图:md 导入时随笔记存字节,阅读页按原位渲染 */
 .sec :deep(.note-img) {
   margin: 0 0 16px;
@@ -693,10 +757,31 @@ async function removeNote(): Promise<void> {
 }
 
 .sec :deep(.note-img img) {
-  max-width: 100%;
+  /* 限宽:1280px 视频帧不再撑满整行,两侧留白(2026-11-19 复核批 P2);细节点开灯箱看 */
+  max-width: min(100%, 640px);
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
+  cursor: zoom-in;
+}
+
+/* 图片灯箱:点图放大,点击任意处关闭 */
+.img-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(15, 15, 15, 0.82);
+  cursor: zoom-out;
+}
+
+.img-lightbox img {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: 6px;
 }
 
 .sec :deep(.note-img figcaption) {

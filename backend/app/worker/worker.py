@@ -263,8 +263,29 @@ async def extract_and_import_video(
     import uuid
 
     from app.service.imports import run_import_async
-    from app.service.imports.pipeline import VIDEO_FRAMES_SUFFIX
+    from app.service.imports.pipeline import DEDUPE_PREFIX, VIDEO_FRAMES_SUFFIX
     from app.service.llm.resolve import resolve_charter, resolve_llm_budgets, resolve_llm_config
+
+    # ---- Phase 0: 幂等守卫(2026-11-19) ----
+    # arq 对非正常关机残留 in-progress 的 job 重启即重投递(实测:11-18 晚完成的
+    # 6014/6015 在 11-19 早被整套重跑约 29 分钟,白烧下载+whisper+视觉)。导入已完成
+    # (source ok 且笔记还在)直接标 done 返回。笔记被删时孤儿 source 会连带清理
+    # (DELETE notes 级联),所以「source ok 但无笔记」不拦,照常重跑。
+    async with session_factory() as session:
+        repos = Repos(session, owner_id=owner_id)
+        source = await repos.sources.get(source_id)
+        if source is not None and source.parse_status == "ok":
+            note = await repos.notes.get_by_source(source_id)
+            if note is not None:
+                job = await repos.jobs.get_by_dedupe_key(DEDUPE_PREFIX + source.sha256)
+                if job is not None:
+                    await repos.jobs.update_status(
+                        job.id, "done",
+                        payload={"deduped": True, "source_id": source_id, "note_id": note.id},
+                    )
+                await session.commit()
+                log.info("视频 job 重投递被幂等守卫拦截: source=%s note=%s", source_id, note.id)
+                return {"deduped": True, "source_id": source_id, "note_id": note.id}
 
     # 解析 LLM 配置（同 import_file）
     async with session_factory() as session:
@@ -297,6 +318,14 @@ async def extract_and_import_video(
             )
             markdown_content = vc.markdown
             video_title = vc.title
+            if not vc.frame_images:
+                # 6014 教训:帧全军覆没不能静默——候选>0 全被筛除/提取失败/场景数为 0,
+                # 都写进白盒日志(video_log 持久化在 parse_meta,导入完成后仍可见)
+                await _update_video_stage(
+                    source_id,
+                    f"⚠️ 画面帧未进入笔记(候选 {vc.frame_candidates} 张,全部被筛除或提取失败)",
+                    owner_id,
+                )
         else:
             from app.service.bilibili import fetch_bilibili, sanitize_filename
 

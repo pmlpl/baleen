@@ -131,7 +131,12 @@ def test_extract_video_success_calls_pipeline_with_source_id(
     monkeypatch.setattr(worker_module, "session_factory", _stub_factory)
 
     # fake extraction
-    fake_vc = type("VC", (), {"markdown": "# 测试视频\n\n内容", "title": "测试视频"})()
+    fake_vc = type(
+        "VC",
+        (),
+        {"markdown": "# 测试视频\n\n内容", "title": "测试视频",
+         "frame_images": [{"index": 0}], "frame_candidates": 1},
+    )()
 
     def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None):
         return fake_vc
@@ -171,7 +176,12 @@ def test_extract_video_writes_markdown_to_staging(tmp_path: Path, monkeypatch) -
     monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path)
     monkeypatch.setattr(worker_module, "session_factory", _stub_factory)
 
-    fake_vc = type("VC", (), {"markdown": "# 测试\n\n内容", "title": "测试"})()
+    fake_vc = type(
+        "VC",
+        (),
+        {"markdown": "# 测试\n\n内容", "title": "测试",
+         "frame_images": [{"index": 0}], "frame_candidates": 1},
+    )()
     monkeypatch.setattr(vextract, "extract_video_content", lambda *a, **kw: fake_vc)
 
     staging_info: list[dict[str, Any]] = []
@@ -652,7 +662,7 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
     monkeypatch.setattr(ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "内容"}])
     monkeypatch.setattr(
         ve, "_extract_frames",
-        lambda vp, od, cli: frame_calls.append({"video_path": vp, "client": cli}) or [],
+        lambda vp, od, cli: frame_calls.append({"video_path": vp, "client": cli}) or ([], 0),
     )
     monkeypatch.setattr("app.service.douyin_extractor.fetch_douyin_video", fake_fetch)
 
@@ -710,3 +720,125 @@ def db_scope(db_url: str):
             await engine.dispose()
 
     return scenario
+
+
+def test_low_info_frame_with_text_layer_also_dropped(monkeypatch, tmp_path) -> None:
+    """2026-11-19 规则收紧:INFO=low 即丢,不再豁免有 text_layer 的帧。
+
+    旧规则「low 且无 text_layer 才丢」让主播口播帧(自带字幕文本)混进笔记——
+    字幕内容 whisper 早已转写,保留零增益(6009 一箭三连/6015 主播字幕帧实证)。
+    """
+    from PIL import Image
+
+    import app.service.media as media_module
+    from app.service.video_extractor import transcribe_frames
+
+    monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
+    p = tmp_path / "f0.jpg"
+    Image.new("RGB", (16, 16), (100, 0, 0)).save(p)
+
+    class FakeClient:
+        def chat(self, _messages, **_kw):
+            from types import SimpleNamespace
+
+            # 主播口播帧:low + 字幕文本非空(旧规则下会保留)
+            return SimpleNamespace(
+                content="INFO: low\n\nTEXT_LAYER:\n通货膨胀会影响生活\n\nDESC:\n主播口播特写"
+            )
+
+    out = transcribe_frames([(33.9, p)], client=FakeClient())
+    assert out == []
+    media_files = [q for q in (tmp_path / "media").rglob("*") if q.is_file()]
+    assert media_files == []  # 字节也不落盘
+
+
+def test_same_scene_dual_candidates_keep_latest(monkeypatch, tmp_path) -> None:
+    """同场景双候选(中点+75%)都活过筛选 → 只留时间靠后的一帧。
+
+    中点常截在动画淡入淡出上(豆包淡帧/NestJS 错位帧),后段画面更可能已稳定。
+    """
+    from PIL import Image
+
+    import app.service.media as media_module
+    from app.service.video_extractor import transcribe_frames
+
+    monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
+    frames = []
+    for j in range(2):
+        p = tmp_path / f"f{j}.jpg"
+        Image.new("RGB", (16, 16), (j * 90, 0, 0)).save(p)
+        frames.append((100.0 + j * 25.0, p, 7))  # 场景 7:中点 100s / 75% 点 125s
+
+    class FakeClient:
+        def __init__(self):
+            self.i = 0
+
+        def chat(self, _messages, **_kw):
+            from types import SimpleNamespace
+
+            r = f"INFO: high\n\nTEXT_LAYER:\n无\n\nDESC:\n幻灯片第{self.i}张"
+            self.i += 1
+            return SimpleNamespace(content=r)
+
+    out = transcribe_frames(frames, client=FakeClient())
+    assert len(out) == 1
+    assert out[0].timestamp == 125.0  # 留后弃中
+    assert out[0].scene_idx == 7
+
+
+def test_completed_import_redelivery_short_circuits(
+    db_scope, tmp_path: Path, monkeypatch
+) -> None:
+    """幂等守卫(2026-11-19):source ok + 笔记在 → 重投递直接标 done,不重跑提取。
+
+    背景:arq 对非正常关机残留 in-progress 的 job 重启即重投递——11-19 早晨
+    6014/6015 被整套重跑约 29 分钟白烧算力(笔记靠 pipeline dedupe 幸存)。
+    """
+    import app.service.video_extractor as vextract
+
+    async def scenario(factory) -> None:
+        async with factory() as session:
+            repos = Repos(session, 1)
+            source, _ = await repos.sources.create_or_get_by_sha256(
+                sha256="video:BVdone:whisper",
+                filename="BVdone.md",
+                ext=".md",
+                size_bytes=10,
+                storage_path="",
+                mime="text/markdown",
+                parse_status="ok",
+            )
+            note = await repos.notes.create(
+                source_id=source.id,
+                title="已完成的视频笔记",
+                doc={"type": "doc", "content": []},
+            )
+            job, _ = await repos.jobs.create_or_get(
+                dedupe_key="import:video:BVdone:whisper",
+                payload={"url": "x", "mode": "whisper"},
+                kind="import",
+            )
+            await session.commit()
+            source_id, note_id, job_id = source.id, note.id, job.id
+
+        monkeypatch.setattr(worker_module, "session_factory", factory)
+
+        def boom(url, **_kw):
+            raise AssertionError("已完成导入被重投递时不应重跑提取")
+
+        monkeypatch.setattr(vextract, "extract_video_content", boom)
+
+        result = await extract_and_import_video(
+            {}, "https://www.bilibili.com/video/BVdone/",
+            owner_id=1, source_id=source_id, mode="whisper",
+        )
+
+        assert result == {"deduped": True, "source_id": source_id, "note_id": note_id}
+        async with factory() as session:
+            repos = Repos(session, 1)
+            job = await repos.jobs.get(job_id)
+            assert job is not None
+            assert job.status == "done"
+            assert job.payload.get("deduped") is True
+
+    asyncio.run(db_scope(scenario))
