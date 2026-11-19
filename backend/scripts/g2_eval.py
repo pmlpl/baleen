@@ -68,7 +68,13 @@ def predict_one(
 ) -> dict:
     """一个样本走完整条产品判定链,返回 preds.csv 的一行。"""
     t0 = time.perf_counter()
-    pr = parse_file(path)
+    # ⚠️ 必须把 client 传给 G0（2026-11-19 修）:不传时纯图片扩展名和扫描件 PDF
+    # 会降级成 no_text_expected → 被当成「G0 确定性拒收」计入误拒率。
+    # 但生产环境配了视觉模型时这些样本是**能读的**（走视觉转写 / 150dpi 栅格化 OCR），
+    # 拿评测口径的降级去算「系统会不会误拒好笔记」是错的口径 —— 那是评测条件缺失，
+    # 不是产品能力缺失。修复前 71 条里有 14 条被打到 G0，其中 9 条（5 图 + 3 扫描 PDF
+    # + 1 jpeg）就是这一条造成的。
+    pr = parse_file(path, client=client)
     if pr.parse_status.value != "ok":
         # 产品真行为:非 ok 不进任何闸、不产笔记 → 确定性拒收
         return _row(
