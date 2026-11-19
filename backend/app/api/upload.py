@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
 import mimetypes
 import shutil
 import time
@@ -52,6 +53,34 @@ ATTACHMENT_EXTS = set(IMAGE_EXTS)
 router = APIRouter(prefix="/api", tags=["sources"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+log = logging.getLogger(__name__)
+
+
+async def _reset_stale_done_job(repos: Repos, job, *, source_created: bool) -> bool:
+    """dedupe 假阳性守卫(2026-11-19 复跑批次实锤的 A 档缺陷)。
+
+    「删笔记 → 重导同一内容」原先被静默跳过:DELETE notes 级联清了 sources 行
+    (孤儿时连行带 blob 删),但 jobs 行残留 status=done;重导时
+    ``create_or_get_by_sha256`` 新建了 source(``source_created=True``),而
+    ``create_or_get`` 按 dedupe_key 命中旧 done 行 → API 返回 deduped=True、
+    arq 队列空,新 source 永远卡「排队中」。
+
+    判定依据只用 ``source_created``:它由 sources 表的唯一约束与本次插入决定,
+    **本次确实新建了 source** 就说明旧产物已不存在、旧 done 行是孤儿——标 stale。
+    不拿「source 还在但笔记没了」当条件:那是另一回事(G0/G1 拒收的源本就
+    可能没有笔记,重导时应当复用旧 job 结论而不是重跑)。
+
+    返回 True 表示已把 job 重置为 queued(调用方按「非 dedupe」继续入队)。
+    """
+    if job is None or job.status != "done" or not source_created:
+        return False
+    log.info("dedupe 假阳性:source 已重建(job=%s 仍 done)→ 重置 queued 重新入队", job.id)
+    await repos.jobs.update_status(job.id, "queued", last_error=None)
+    # update_status 是 Core UPDATE,不保证刷新 identity map;显式同步,后续判定和响应体都读这个值
+    job.status = "queued"
+    job.last_error = None
+    return True
 
 
 class UploadResponse(BaseModel):
@@ -222,7 +251,7 @@ async def upload_source(
     blob = _store_blob(staging.read_bytes(), sha)  # 内容寻址只有这一个实现(pipeline 私有函数)
 
     repos = Repos(session, owner_id=owner_id)
-    source, _ = await repos.sources.create_or_get_by_sha256(
+    source, source_created = await repos.sources.create_or_get_by_sha256(
         sha256=sha,
         filename=raw_name,
         ext=ext,
@@ -235,6 +264,8 @@ async def upload_source(
         dedupe_key=DEDUPE_PREFIX + sha,
         payload={"filename": raw_name, "via": "api"},
     )
+    # 删笔记重导同一文件:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
+    await _reset_stale_done_job(repos, job, source_created=source_created)
     await session.commit()
 
     # 只有真完成过(done)才算去重;failed/queued 的重试要返回 deduped=False 让前端继续轮询
@@ -352,6 +383,8 @@ async def import_from_url(
             payload={"url": body.url, "mode": "whisper", "source_id": source.id},
             kind="import",
         )
+        # 删笔记重导同一视频:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
+        await _reset_stale_done_job(repos, job, source_created=source_created)
         await session.commit()
 
         # 只有真完成过(done)才算去重;failed/queued 的重试返回 deduped=False 让前端继续轮询
@@ -419,7 +452,7 @@ async def import_from_url(
     blob = _store_blob(staging.read_bytes(), sha)
 
     repos = Repos(session, owner_id=owner_id)
-    source, _ = await repos.sources.create_or_get_by_sha256(
+    source, source_created = await repos.sources.create_or_get_by_sha256(
         sha256=sha,
         filename=filename,
         ext=".md",
@@ -432,6 +465,8 @@ async def import_from_url(
         dedupe_key=DEDUPE_PREFIX + sha,
         payload={"filename": filename, "via": "url"},
     )
+    # 删笔记重导同一字幕:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
+    await _reset_stale_done_job(repos, job, source_created=source_created)
     await session.commit()
 
     # 只有真完成过(done)才算去重;failed/queued 的重试要返回 deduped=False 让前端继续轮询

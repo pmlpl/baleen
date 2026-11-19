@@ -281,3 +281,56 @@ def test_upload_attachment_path_traversal_blocked(env) -> None:
     staging_dir = Path(env.calls[-1]["file_path"]).parent
     assert (staging_dir / "escape.png").is_file(), "剥离 .. 后落在暂存目录内"
     assert not (staging_dir.parent.parent / "escape.png").exists(), "不许穿出暂存根"
+
+
+def test_upload_same_file_after_note_delete_enqueues_again(env) -> None:
+    """删笔记 → 重导同一文件 → 正常入队（dedupe 假阳性回归,2026-11-19）。
+
+    文件上传路径同一坑:DELETE 级联清 source 但 jobs 行残留 done。
+    """
+    first = _upload(env)
+    assert first.status_code == 201
+    source_id = first.json()["source_id"]
+    job_id = first.json()["job_id"]
+    sha = env.calls[0]["dedupe_key"].removeprefix("import:")
+
+    async def finish_and_attach_note() -> int:
+        async with env.shared["factory"]() as session:
+            repos = Repos(session, 1)
+            job = await repos.jobs.get(job_id)
+            assert job is not None
+            await repos.jobs.update_status(job.id, "done")
+            note = await repos.notes.create(
+                source_id=source_id,
+                title="upload dedupe 假阳性回归",
+                doc={"type": "doc", "content": [{"type": "p", "text": "正文。"}]},
+            )
+            await session.commit()
+            return note.id
+
+    note_id = _portal_call(env, finish_and_attach_note)
+    assert env.client.delete(f"/api/notes/{note_id}").status_code == 204
+
+    async def source_gone() -> bool:
+        async with env.shared["factory"]() as session:
+            return await Repos(session, 1).sources.get(source_id) is None
+
+    assert _portal_call(env, source_gone), "前置:删笔记后 source 必须已级联删除"
+
+    second = _upload(env)
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["deduped"] is False, "source 已重建,旧 done job 是孤儿,不许报『之前导入过』"
+    assert body["job_status"] == "queued"
+    assert body["source_id"] != source_id
+    assert len(env.calls) == 2, "重导必须真的入队"
+    assert env.calls[1]["dedupe_key"] == "import:" + sha, "同内容 dedupe_key 不变"
+
+    async def job_requeued() -> None:
+        async with env.shared["factory"]() as session:
+            repos = Repos(session, 1)
+            job = await repos.jobs.get(job_id)
+            assert job is not None
+            assert job.status == "queued", "旧 done 行必须被重置回 queued"
+
+    _portal_call(env, job_requeued)

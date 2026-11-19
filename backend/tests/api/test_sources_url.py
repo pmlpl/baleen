@@ -515,3 +515,74 @@ def test_douyin_full_url_whisper(env) -> None:
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["source_id"] > 0
+
+# ==================== dedupe 假阳性回归（2026-11-19 复跑批次实锤） ====================
+
+
+def test_whisper_reimport_after_note_delete_enqueues_again(env) -> None:
+    """删笔记 → 重导同一视频 URL → 新 source 正常入队（不被旧 done job 静默跳过）。
+
+    缺陷现场（2026-11-19 18:00 复跑批次）：DELETE /api/notes/{id} 在有孤儿 source 时
+    连 source 行带 blob 一起删，但 ```jobs``` 行残留 status=done；重导时
+    ``create_or_get_by_sha256`` 新建 source，``jobs.create_or_get`` 却按 dedupe_key
+    命中旧 done 行 → API 返回 deduped=True、arq 队列空、新 source 永远卡「排队中」。
+    """
+    first = _post_url(env, mode="whisper")
+    assert first.status_code == 201
+    source_id = first.json()["source_id"]
+    job_id = first.json()["job_id"]
+    assert len(env.video_calls) == 1
+
+    async def finish_and_attach_note() -> int:
+        from app.repo import Repos
+
+        async with env.shared["factory"]() as session:
+            repos = Repos(session, 1)
+            job = await repos.jobs.get(job_id)
+            assert job is not None
+            await repos.jobs.update_status(job.id, "done")
+            note = await repos.notes.create(
+                source_id=source_id,
+                title="dedupe 假阳性回归",
+                doc={"type": "doc", "content": [{"type": "p", "text": "正文。"}]},
+            )
+            await session.commit()
+            return note.id
+
+    note_id = env.client.portal.call(finish_and_attach_note)
+
+    # 删笔记 → 孤儿 source 连行带 blob 一起删（DELETE 语义）
+    assert env.client.delete(f"/api/notes/{note_id}").status_code == 204
+
+    async def source_gone() -> bool:
+        from app.repo import Repos
+
+        async with env.shared["factory"]() as session:
+            return await Repos(session, 1).sources.get(source_id) is None
+
+    assert env.client.portal.call(source_gone), "前置:删笔记后 source 必须已级联删除"
+
+    # 重导同一 URL:必须重新入队，不许 dedupe 假阳性
+    second = _post_url(env, mode="whisper")
+    assert second.status_code == 200, second.text
+    body = second.json()
+    assert body["deduped"] is False, "source 已重建,旧 done job 是孤儿,不许报『之前导入过』"
+    assert body["job_status"] == "queued"
+    assert body["source_id"] != source_id, "重导必须建新 source(旧行已随笔记删除)"
+
+    assert len(env.video_calls) == 2, "重导必须真的入队,否则新 source 永远卡「排队中」"
+    assert env.video_calls[1]["source_id"] == body["source_id"]
+
+    async def job_requeued() -> None:
+        from app.repo import Repos
+
+        async with env.shared["factory"]() as session:
+            repos = Repos(session, 1)
+            source = await repos.sources.get(body["source_id"])
+            assert source is not None
+            job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
+            assert job is not None
+            assert job.id == job_id, "同 dedupe_key 复用同一 job 行(唯一约束),不新建"
+            assert job.status == "queued", "旧 done 行必须被重置回 queued"
+
+    env.client.portal.call(job_requeued)

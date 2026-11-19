@@ -366,7 +366,13 @@ async def edit_note(
 
 
 def _unlink_blob(path: str) -> None:
-    """删原文件 blob(best-effort):文件没了不影响删除结果,失败记日志不抛。"""
+    """删原文件 blob(best-effort):文件没了不影响删除结果,失败记日志不抛。
+
+    ``path`` 为空时直接跳过:视频 whisper 的 stub source 存的就是空串,
+    ``Path("").unlink()`` 会去删**当前目录**,Windows 上抛 WinError 5(拒绝访问)。
+    """
+    if not path:
+        return
     try:
         Path(path).unlink(missing_ok=True)
     except OSError as exc:
