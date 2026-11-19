@@ -260,7 +260,15 @@ const svgish = (line: string): boolean => line.includes('<') || line.includes('/
 function looksLikeCode(line: string): boolean {
   if (line.trim() === '') return false
   if (/^\s{4,}\S/.test(line)) return true
-  if (/^\s*(\/\/|\/\*|\*)/.test(line)) return true
+  // 注释行:`//`、`/*`、以及多行注释的续行 `* xxx`。
+  //
+  // ⚠️ 2026-11-19 修:原规则是 `/^\s*(\/\/|\/\*|\*)/`——**任何以 `*` 开头的行**
+  // 都判代码。那会把「以粗体开头的段落」整个吞进代码块:
+  // `**重点内容**`、`**重点内容** 后面还有字` 都渲染成 <pre>,粗体丢失。
+  // 多行注释续行的实际形态是「单个星号 + 空格/内容」,所以改成要求
+  // `*` 后面不是另一个 `*`(排除 **粗体**),并保留 `/^\*` 单独星号的情形。
+  if (/^\s*(\/\/|\/\*)/.test(line)) return true
+  if (/^\s*\*(?!\*)(?:\s|$)/.test(line)) return true
   if (/^\s*[})\]];?\s*$/.test(line)) return true
   if (/[;{]\s*$/.test(line)) return true
   if (/^\s*(function|const|let|var|return|if|for|while|class|import|export|def|async|await)\b/.test(line)) {

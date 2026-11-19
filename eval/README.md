@@ -34,6 +34,14 @@ uv run python ..\eval\scripts\<脚本名>
 | 6 | `uv run python ..\eval\scripts\negative_eval.py` | `runs\negative_report.md`：负例行为表 | PASS/FAIL（全 PASS=正常） | 免费；`--live` 要后端+token |
 | 7 | `uv run python ..\eval\scripts\review_agent.py` | `runs\ai_review.csv` + `runs\ai_agreement.md`：**AI 盲审 35 样本 + 一致率 + 分歧裁决单** | 一致率行 + 分歧裁决单（你只裁决分歧） | 花 LLM token（用你设置页配的模型；`--mode candidates` 盲审候选池，`--compare` 免费重算一致率） |
 
+**渲染回归探针（前端，不在上面 6 步里）**：
+```
+node scripts\probe_section_render.mjs
+```
+看到什么算对：最后一行 `全部通过`、退出码 0。覆盖 11-19 修的 6 个父块渲染分支
+（围栏/无序/有序/引用/粗体/行内代码）+ 老笔记兼容 + XSS 底线，共 35 条断言。
+**改 `frontend/src/utils/section.ts` 后必须跑这个**——否则渲染拍平类问题会静默回归。
+
 **依赖关系**：步 3 吃步 1/2 的 preds；步 4 吃步 2 或 3；步 1、5、6、7 互相独立。
 步 3 的报告默认用步 1 的占位 preds——**要看真成绩，用步 2 的**：
 `uv run python ..\eval\scripts\metrics.py --preds ..\eval\runs\preds_live.csv`
