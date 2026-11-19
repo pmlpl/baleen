@@ -47,6 +47,17 @@ def quantile(values: list[int], q: float) -> str:
     ordered = sorted(values)
     return f"{ordered[min(len(ordered) - 1, max(0, int(round(q * (len(ordered) - 1)))))]} ms"
 
+
+def _g0_note(pred: dict[str, str]) -> str:
+    """G0 拒收行的可读说明:parse_status + message 前 60 字。"""
+    try:
+        raw = json.loads(pred.get("raw_json") or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return "（raw_json 不可解析）"
+    status = raw.get("parse_status") or "?"
+    message = (raw.get("message") or "").strip()
+    return f"{status}：{message[:60]}" if message else status
+
 def write_blank_report(out_path: Path, split: str, scope: list[dict[str, str]],
                        blank: list[dict[str, str]]) -> None:
     lines = [f"# 评测报告 · split={split}（未计算）", "",
@@ -64,6 +75,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--preds", default=str(EVAL_DIR / "runs" / "preds.csv"))
     parser.add_argument("--out", default=str(EVAL_DIR / "runs" / "report.md"))
     parser.add_argument("--split", choices=("all", "dev", "test"), default="test")
+    parser.add_argument(
+        "--ok-only",
+        action="store_true",
+        help=(
+            "ok 口径：剔除 G0 解析失败的样本（preds 的 raw_json 里 stage=G0）再算指标。"
+            "论文口径——G0 失败是「这个格式读不了」（已知限制），不是判定闸判错，"
+            "算进误拒率会污染「该收的被扔了」这个考核面。"
+        ),
+    )
     args = parser.parse_args(argv)
 
     labels_path, preds_path, out_path = Path(args.labels), Path(args.preds), Path(args.out)
@@ -90,6 +110,20 @@ def main(argv: list[str] | None = None) -> int:
 
     missing_pred = [row for row in scope if row["rel_path"] not in preds]
     rows = [(row, preds[row["rel_path"]]) for row in scope if row["rel_path"] in preds]
+
+    # ok 口径：G0 解析失败（stage=G0）不是判定闸的错，剔出去单独认账
+    def _is_g0(pred: dict[str, str]) -> bool:
+        try:
+            return json.loads(pred.get("raw_json") or "{}").get("stage") == "G0"
+        except (json.JSONDecodeError, TypeError):
+            return False
+
+    g0_rows = [(lab, pred) for lab, pred in rows if _is_g0(pred)]
+    if args.ok_only:
+        rows = [(lab, pred) for lab, pred in rows if not _is_g0(pred)]
+        if not rows:
+            print("[error] ok 口径下没有样本（全部被 G0 剔除）", file=sys.stderr)
+            return 2
 
     def pf(pred: dict[str, str], key: str) -> str:
         return (pred.get(key) or "").strip()
@@ -164,7 +198,8 @@ def main(argv: list[str] | None = None) -> int:
         split_version, split_granularity, split_ratio_actual = "未记录", "未记录", None
 
     # --- 报告 -------------------------------------------------------------
-    lines = [f"# 评测报告 · split={args.split}", "",
+    scope_label = f"split={args.split}" + ("，ok 口径（剔除 G0 解析失败）" if args.ok_only else "")
+    lines = [f"# 评测报告 · {scope_label}", "",
              f"split 版本：{split_version}（分层粒度：{split_granularity}）", "",
              f"**误拒率 {ratio(false_reject, len(good))}　|　"
              f"误丢率 {ratio(false_drop, len(topic))}**", "", "---", "",
@@ -173,12 +208,23 @@ def main(argv: list[str] | None = None) -> int:
         ["本 split 样本数", len(scope)],
         ["标注完成度", f"{len(scope)} / {len(scope)}"],
         ["参与计算的样本", len(rows)],
+        ["G0 解析失败（剔出口径外）" if args.ok_only else "其中 G0 解析失败", len(g0_rows)],
         ["缺失预测（preds 无此 rel_path）", len(missing_pred)],
         ["dev / test 分布（全库）", f"{split_counts.get('dev', 0)} / {split_counts.get('test', 0)}"],
         ["test 实际占比（split_meta.json）",
          f"{split_ratio_actual:.1%}" if isinstance(split_ratio_actual, (int, float)) else "未记录"],
         ["(槽位, 判定) 组合数 / test 已覆盖", f"{len(pair_keys)} / {pairs_in_test}"],
     ])
+    if g0_rows:
+        lines += ["", "### 1.0 G0 解析失败清单", ""]
+        if args.ok_only:
+            lines += ["这些样本**不计入本报告的误拒率**（G0 是格式读取能力问题，不是判定闸判错）；"
+                      "它们单列在此，作为 G0 格式覆盖缺口的认账：", ""]
+        else:
+            lines += ["这些样本会以「确定性拒收」参与计算——这是**全口径**与 ok 口径的差异来源：", ""]
+        lines += table(["rel_path", "parse_status / 说明"], [
+            [lab["rel_path"], _g0_note(pred)] for lab, pred in g0_rows
+        ])
     lines += ["", "槽位分布：", ""]
     lines += table(["slot", "样本数"], [[slot, n] for slot, n in sorted(
         slot_counts.items(), key=lambda kv: (kv[0] == "未填", int(kv[0]) if kv[0].isdigit() else 99))])
@@ -244,7 +290,8 @@ def main(argv: list[str] | None = None) -> int:
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print(f"[ok] {len(rows)} 条参与计算 → {out_path}（误拒率 {ratio(false_reject, len(good))}，"
+    print(f"[ok] {len(rows)} 条参与计算{f'（ok 口径，剔除 G0 {len(g0_rows)} 条）' if args.ok_only else ''}"
+          f" → {out_path}（误拒率 {ratio(false_reject, len(good))}，"
           f"误丢率 {ratio(false_drop, len(topic))}，非法组合 {len(illegal)}）")
     return 0
 

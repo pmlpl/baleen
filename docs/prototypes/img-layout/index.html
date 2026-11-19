@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<title>插图排版三方案对比 · baleen</title>
+<style>
+  :root {
+    --bg: #f4f2ec; --bg-soft: #ece9e0; --panel: #fffdf8;
+    --ink: #211f1c; --ink-2: #5f594e; --ink-3: #9c9484;
+    --line: #e6e1d3; --line-strong: #d8d2c2;
+    --accent: #3d5a73; --accent-ink: #2e4559; --accent-soft: #e8eef2;
+    --seal: #b03a2e; --neutral-soft: #efece4;
+    --radius: 12px;
+    --font-serif: 'Noto Serif SC', 'Songti SC', 'SimSun', serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 28px 24px 80px;
+    background: var(--bg); color: var(--ink);
+    font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+    font-size: 15px; line-height: 1.9; word-break: break-word;
+  }
+  .page-head { max-width: 1200px; margin: 0 auto 26px; }
+  .page-head h1 {
+    margin: 0 0 6px; font-family: var(--font-serif);
+    font-size: 22px; font-weight: 600; letter-spacing: .02em;
+  }
+  .page-head p { margin: 0; color: var(--ink-2); font-size: 13.5px; }
+
+  .variant { max-width: 1200px; margin: 0 auto 40px; }
+  .variant-head {
+    display: flex; align-items: baseline; gap: 12px;
+    margin: 0 0 4px; padding-bottom: 8px;
+    border-bottom: 1px solid var(--line);
+  }
+  .variant-head h2 { margin: 0; font-family: var(--font-serif); font-size: 17px; font-weight: 600; }
+  .variant-head .tag {
+    padding: 1px 8px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent-ink);
+    font-size: 11.5px; letter-spacing: .04em;
+  }
+  .variant-note { margin: 8px 0 16px; color: var(--ink-2); font-size: 13px; }
+  .variant-note b { color: var(--ink); }
+
+  /* 模拟真实阅读区(右栏 content)的实际可用宽度 */
+  .mock-reader {
+    max-width: 760px; padding: 22px 26px;
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel);
+  }
+  .mock-reader h3 {
+    margin: 0 0 14px; font-family: var(--font-serif);
+    font-size: 17px; font-weight: 600;
+  }
+  .sec p { margin: 0 0 14px; }
+  .sec p:last-child { margin-bottom: 0; }
+
+  .note-img { margin: 0 0 16px; text-align: center; }
+  .note-img img {
+    max-width: min(100%, 640px);
+    border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); cursor: zoom-in; display: block; margin: 0 auto;
+  }
+  .note-img figcaption { margin-top: 6px; color: var(--ink-3); font-size: 12.5px; }
+
+  /* ============ 方案 A:浮动环绕(float) ============ */
+  .a .note-img {
+    float: right; width: 44%; margin: 4px 0 14px 22px;
+  }
+  .a .note-img img { max-width: 100%; }
+  .a .clearfix::after { content: ''; display: table; clear: both; }
+
+  /* ============ 方案 B:两栏 grid(图左文右) ============ */
+  .b .figure-row {
+    display: grid; grid-template-columns: minmax(0, 0.95fr) minmax(0, 1fr);
+    gap: 22px; align-items: start; margin: 0 0 16px;
+  }
+  .b .figure-row .note-img { margin: 0; }
+  .b .figure-row .side-text p { margin: 0 0 12px; }
+  .b .figure-row .side-text p:last-child { margin-bottom: 0; }
+
+  /* ============ 方案 C:宽图居中 + 窄图侧挂(auto) ============ */
+  .c .note-img.is-wide { max-width: 100%; }
+  .c .note-img.is-wide img { max-width: min(100%, 720px); }
+  .c .note-img.is-narrow {
+    float: left; width: 38%; margin: 4px 20px 12px 0;
+  }
+  .c .note-img.is-narrow img { max-width: 100%; }
+  .c .clearfix::after { content: ''; display: table; clear: both; }
+
+  @media (max-width: 720px) {
+    .a .note-img, .c .note-img.is-narrow { float: none; width: 100%; margin: 0 0 16px; }
+    .b .figure-row { grid-template-columns: minmax(0, 1fr); }
+  }
+</style>
+</head>
+<body>
+
+<div class="page-head">
+  <h1>插图排版三方案对比</h1>
+  <p style="color:#b03a2e">
+    ⚠️ 待主人拍板：本页只是原型，生产代码未改（NoteView 仍是现状的「居中限宽 640」）。
+    直接双击本文件即可在浏览器打开对比。
+  </p>
+  <p>
+    真实素材：笔记 6009「Docker 常用命令实战」的 EC2 控制台帧（1280×720）+ 该节原文。
+    阅读区按真实宽度（右栏约 760px）模拟。缩到窗口 720px 以下可看窄屏表现。
+  </p>
+</div>
+
+<!-- ==================== 现状 ==================== -->
+<div class="variant">
+  <div class="variant-head"><h2>现状（基线）</h2><span class="tag">max-width 640 居中</span></div>
+  <p class="variant-note">图片独占一行居中，<b>上下文被图片切断</b>——这是主人 11-19 说的「图片太大占满整行，应该留白/左右布局」的现状。</p>
+  <div class="mock-reader sec">
+    <h3>1.1 实验环境搭建</h3>
+    <p>本笔记整理自「用圖片高效學程式」的 Docker 入门视频，围绕常用命令做一次完整演示。实验环境是 AWS EC2 上的实例，通过 EC2 Instance Connect 在浏览器里打开终端操作。示例实例 ID 为 i-0679bd2a5f3870ca5（k8s-local-ec2-001），公网 IP 为 54.186.61.160，私有 IP 为 172.31.11.141，登录用户为 ec2-user，区域为 us-west-2（Oregon）。图1展示了控制台 Connect to instance 页面中的连接信息。</p>
+    <figure class="note-img">
+      <img src="frame.jpg" alt="EC2 Connect to instance 页面" />
+      <figcaption>EC2 Connect to instance 页面显示实例 ID、公网 IP 和用户名</figcaption>
+    </figure>
+    <p>课程目标是快速上手 Docker 常用命令，重心放在后续 Kubernetes 学习，不深入 Docker 底层实现。下面先给出命令总览，再按实际操作顺序展开。</p>
+  </div>
+</div>
+
+<!-- ==================== 方案 A ==================== -->
+<div class="variant a">
+  <div class="variant-head"><h2>方案 A · 图文环绕（float）</h2><span class="tag">改动最小</span></div>
+  <p class="variant-note">
+    <b>做法</b>：图片 float 到右侧占 44% 宽，后面的文字自然绕到左边继续读，图下方文字自动回到全宽。<br>
+    <b>优点</b>：CSS 改动 <b>≈12 行</b>，不碰渲染层与数据结构；文字与图并置，阅读流不断。<br>
+    <b>代价</b>：文字绕着不规则形状走，长段落读起来略跳；段落很长时会「骑」在图上很多行。
+  </p>
+  <div class="mock-reader sec clearfix">
+    <h3>1.1 实验环境搭建</h3>
+    <p>本笔记整理自「用圖片高效學程式」的 Docker 入门视频，围绕常用命令做一次完整演示。实验环境是 AWS EC2 上的实例，通过 EC2 Instance Connect 在浏览器里打开终端操作。示例实例 ID 为 i-0679bd2a5f3870ca5（k8s-local-ec2-001），公网 IP 为 54.186.61.160，私有 IP 为 172.31.11.141，登录用户为 ec2-user，区域为 us-west-2（Oregon）。图1展示了控制台 Connect to instance 页面中的连接信息。</p>
+    <figure class="note-img">
+      <img src="frame.jpg" alt="EC2 Connect to instance 页面" />
+      <figcaption>EC2 Connect to instance 页面显示实例 ID、公网 IP 和用户名</figcaption>
+    </figure>
+    <p>课程目标是快速上手 Docker 常用命令，重心放在后续 Kubernetes 学习，不深入 Docker 底层实现。下面先给出命令总览，再按实际操作顺序展开。</p>
+  </div>
+</div>
+
+<!-- ==================== 方案 B ==================== -->
+<div class="variant b">
+  <div class="variant-head"><h2>方案 B · 图文两栏（grid）</h2><span class="tag">界限最清</span></div>
+  <p class="variant-note">
+    <b>做法</b>：图片与它<b>紧接着的一段</b>文字左右分栏（左图右文），这一对结束后恢复全宽。<br>
+    <b>优点</b>：文字仍是完整矩形，不绕行；图与解释严格对齐，适合「这张图在解释这段」。<br>
+    <b>代价</b>：要在渲染层把「图 + 下一段」<b>配对成一组</b>（section.ts 改动中等）；配错段就会图文错位；<b>窄屏必须回落单栏</b>。
+  </p>
+  <div class="mock-reader sec">
+    <h3>1.1 实验环境搭建</h3>
+    <div class="figure-row">
+      <figure class="note-img">
+        <img src="frame.jpg" alt="EC2 Connect to instance 页面" />
+        <figcaption>EC2 Connect to instance 页面</figcaption>
+      </figure>
+      <div class="side-text">
+        <p>实验环境是 AWS EC2 上的实例，通过 EC2 Instance Connect 在浏览器里打开终端操作。示例实例 ID 为 i-0679bd2a5f3870ca5（k8s-local-ec2-001），公网 IP 为 54.186.61.160。</p>
+        <p>登录用户为 ec2-user，区域为 us-west-2（Oregon）。</p>
+      </div>
+    </div>
+    <p>课程目标是快速上手 Docker 常用命令，重心放在后续 Kubernetes 学习，不深入 Docker 底层实现。下面先给出命令总览，再按实际操作顺序展开。</p>
+  </div>
+</div>
+
+<!-- ==================== 方案 C ==================== -->
+<div class="variant c">
+  <div class="variant-head"><h2>方案 C · 按图宽自适应（混合）</h2><span class="tag">最贴合内容</span></div>
+  <p class="variant-note">
+    <b>做法</b>：按图片<b>原始宽高比</b>分两档——宽图/表格截图（≥ 16:9 或面积大）走现居中限宽；<b>竖图/窄图</b>（≤ 4:3）float 到左侧小尺寸，文字环绕。<br>
+    <b>优点</b>：视频帧（16:9 全画面）本就该大；课件竖版/手机截图才适合小图绕排——<b>不用改渲染层</b>，纯 CSS + 一个 class。<br>
+    <b>代价</b>：需要前端在图片 onload 后判定比例并加 class（十几行 JS）；两种形态并存，视觉上不完全统一。
+  </p>
+  <div class="mock-reader sec clearfix">
+    <h3>1.1 实验环境搭建</h3>
+    <p>本笔记整理自「用圖片高效學程式」的 Docker 入门视频，围绕常用命令做一次完整演示。实验环境是 AWS EC2 上的实例，通过 EC2 Instance Connect 在浏览器里打开终端操作。</p>
+    <figure class="note-img is-wide">
+      <img src="frame.jpg" alt="EC2 Connect to instance 页面" />
+      <figcaption>宽图（16:9）：保持居中限宽 720px —— 视频帧本来就该大</figcaption>
+    </figure>
+    <p>课程目标是快速上手 Docker 常用命令，重心放在后续 Kubernetes 学习，不深入 Docker 底层实现。下面先给出命令总览，再按实际操作顺序展开。</p>
+    <figure class="note-img is-narrow">
+      <img src="frame.jpg" alt="示例窄图" />
+      <figcaption>窄图（&lt; 4:3）时自动 float 左侧，文字环绕</figcaption>
+    </figure>
+    <p>（示意）当图片是竖版课件或手机截图时，它会被缩到左侧 38% 宽，右侧文字继续往下读——既不浪费整行，也不把文字挤成一条缝。这段文字就是在演示环绕效果，可以看右侧有没有被挤得过窄。</p>
+  </div>
+</div>
+
+</body>
+</html>
