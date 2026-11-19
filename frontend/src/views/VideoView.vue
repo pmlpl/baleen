@@ -11,6 +11,8 @@ import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
+import { getBiliLoginStatus, startBiliLogin } from '../api/bilibili'
+import type { BiliLoginStatus } from '../api/bilibili'
 import { createSourceFromUrl, getSource } from '../api/sources'
 import type { SourceDetail, VideoLogEntry } from '../api/sources'
 
@@ -61,6 +63,40 @@ const canPreview = computed(() => bvid.value !== null || isDouyin.value)
 watch(isDouyin, (douyin) => {
   if (douyin) mode.value = 'whisper'
 })
+
+// ---- B 站登录（扫码半自动获取 SESSDATA，导入被风控时的兜底门票）----
+// 手动入口：提前扫好/过期重扫；被风控的导入也会在 worker 里自动弹扫码窗
+const biliStatus = ref<BiliLoginStatus | null>(null)
+const biliLogging = ref(false)
+const biliError = ref('')
+
+function formatBiliAt(iso: string): string {
+  const d = new Date(iso)
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
+async function loadBiliStatus(): Promise<void> {
+  try {
+    biliStatus.value = await getBiliLoginStatus()
+  } catch {
+    // 状态加载失败不打扰（按钮点了才报错）
+  }
+}
+
+async function doBiliLogin(): Promise<void> {
+  if (biliLogging.value) return
+  biliLogging.value = true
+  biliError.value = ''
+  try {
+    // 后端弹真浏览器（Edge）出二维码，同步阻塞等扫码（最长约 3.5 分钟）
+    biliStatus.value = await startBiliLogin()
+  } catch (error) {
+    biliError.value = describeApiError(error)
+  } finally {
+    biliLogging.value = false
+  }
+}
 
 // ---- 导入进度 ----
 
@@ -233,6 +269,7 @@ async function importVideo(): Promise<void> {
 
 // 刷新/重开页面 → 恢复进行中的导入：进度面板【和链接/播放器】全部回来
 onMounted(async () => {
+  void loadBiliStatus()
   const saved = readActive()
   if (saved === null) return
   urlInput.value = saved.url // 恢复链接 → 播放器/抖音预览/模式判定全部跟着恢复
@@ -336,6 +373,26 @@ onMounted(async () => {
           >
             {{ importing ? '导入中…' : '导入笔记' }}
           </button>
+
+          <!-- B 站登录：SESSDATA 是被风控时浏览器兜底的门票；不登录平时也能用 -->
+          <div class="bili-login">
+            <span class="bili-login-state muted">
+              <template v-if="biliStatus?.logged_in">
+                B 站已登录{{ biliStatus.uid ? `（${biliStatus.uid}）` : ''
+                }}<template v-if="biliStatus.logged_at">· 上次扫码 {{ formatBiliAt(biliStatus.logged_at) }}</template>
+              </template>
+              <template v-else>B 站未登录（平时不用登录，被风控时导入会自动弹出扫码）</template>
+            </span>
+            <button
+              class="btn bili-login-btn"
+              type="button"
+              :disabled="biliLogging"
+              @click="doBiliLogin"
+            >
+              {{ biliLogging ? '等待扫码中…' : biliStatus?.logged_in ? '重新扫码' : 'B 站登录（扫码）' }}
+            </button>
+          </div>
+          <p v-if="biliError" class="bili-login-error">❌ {{ biliError }}</p>
         </div>
 
         <!-- 导入进度 -->
@@ -547,6 +604,36 @@ onMounted(async () => {
 
 .import-btn {
   width: 100%;
+}
+
+.bili-login {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.bili-login-state {
+  font-size: 12px;
+  line-height: 1.6;
+  min-width: 0;
+}
+
+.bili-login-btn {
+  flex-shrink: 0;
+  font-size: 12.5px;
+  padding: 5px 12px;
+  white-space: nowrap;
+}
+
+.bili-login-error {
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--err);
+  line-height: 1.6;
 }
 
 .progress-card {

@@ -906,6 +906,7 @@ def extract_video_content(
     cookies_str: str = "",
     client=None,
     progress_cb=None,
+    bilibili_login_cb=None,
 ) -> VideoContent:
     """主入口：路由平台 → 提取 → whisper 转写 →（可选）帧 → markdown。
 
@@ -916,6 +917,9 @@ def extract_video_content(
 
     sessdata 用于 B站（SESSDATA cookie）；cookies_str 用于抖音等需要 cookie 字符串的平台。
     progress_cb(stage, pct, est_seconds=None)：提取阶段进度回调（worker 写 DB 供前端进度条）。
+    bilibili_login_cb：B站兜底缺登录态（未配置/SESSDATA 已过期）时调用的钩子，无参，
+    返回扫码登录抓到的新 SESSDATA（worker 注入：弹窗+落库；API 手动入口不用）。
+    钩子自己负责失败时抛翻译好的中文错误；None = 不半自动，直接报错指引。
     """
     # 用户可能粘贴整段分享文本（"8.48 复制打开抖音… https://v.douyin.com/xxx/ 复制此链接"），
     # 提取出真正的 URL 再交给提取器
@@ -947,10 +951,30 @@ def extract_video_content(
     # 风控兜底（2026-11-14 深夜）：Playwright + SESSDATA 过挑战，从页面里直接提取。
     # cookie 收获重试被否——B站对 TLS 指纹打分，浏览器 cookie 迁给 yt-dlp 仍概率性 412；
     # 浏览器内提取（INITIAL_STATE + __playinfo__ + CDN 直连）才是确定性的。
-    from app.service.bilibili_extractor import fetch_bilibili_media
+    from app.service.bilibili_extractor import BilibiliAuthRequired, fetch_bilibili_media
 
     try:
         media = fetch_bilibili_media(url, sessdata=sessdata)
+    except BilibiliAuthRequired as auth_err:
+        # ⚠️ except as 的名字块尾被 Python 自动删除——块内先取字符串
+        auth_msg = str(auth_err)
+        if bilibili_login_cb is None:
+            raise RuntimeError(
+                f"{first_err_msg}；{auth_msg}。"
+                "请重新导入一次——会自动弹出 B 站扫码登录窗口"
+                "（或提前到「视频笔记」页点「B站登录」扫码）"
+            ) from auth_err
+        # 扫码登录半自动获取（bilibili_login.py，2026-11-19）：弹真浏览器→扫码→落库，
+        # 钩子返回新 SESSDATA → 原地重试兜底一次
+        new_sessdata = bilibili_login_cb()
+        try:
+            media = fetch_bilibili_media(url, sessdata=new_sessdata)
+        except Exception as retry_err:  # noqa: BLE001
+            raise RuntimeError(
+                f"{first_err_msg}；扫码登录后浏览器兜底仍未通过: {retry_err}。"
+                "当前网络对 B 站的信誉可能已耗尽——换个网络（手机热点）或稍后再试；"
+                "同主题视频换抖音链接导入通常最快"
+            ) from retry_err
     except Exception as browser_err:
         raise RuntimeError(
             f"{first_err_msg}；浏览器兜底也失败: {browser_err}"

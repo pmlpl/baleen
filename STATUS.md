@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-19 · 视频笔记复核批(主人 7 条人工裁决+四把取证铁锤,台账 77→88 八失败模式演进)→ 当天修复三轮:六连修(父块展示序列化+渲染/帧知识相关性+双候选+零帧警告/幂等守卫/标题数量词/灯箱)→ 18:00 定时复跑批次(3B1B 96%✓/39前端网关无罪✓/财富自由 B站风控→抖音版 89%✓,新抓 dedupe 假阳性 A 档)→ 晚间小修(重复帧硬守卫 _dedupe_video_doc+95% 第三采样点)→ **深夜 dedupe 假阳性修复**(`_reset_stale_done_job` 以 source_created 为判据+2 条真 DB 回归,撤修复即 FAIL)→ **主人拍板两件落地**:插图方案 C(按宽高比自适应)+ 生成式结构图「有依据才生」闸→ 标签审计修正 1 条(87efed→reject,ok 口径误拒率全量 0/47、test 0/17、dev 0/30)→ **bootstrap 统计修复**(比例指标统一 CP 精确区间:0/47 从谎报 `[0%,0%]` 改为诚实 `[0%,7.5%]`);基线 **585 passed**
+**最后更新**：2026-11-20 · （11-19 深夜批:视频笔记复核/六连修/dedupe 假阳性修复/插图方案C+结构图闸/bootstrap 统计修复）B站扫码登录半自动获取 SESSDATA(主人 7 条人工裁决+四把取证铁锤,台账 77→88 八失败模式演进)→ 当天修复三轮:六连修(父块展示序列化+渲染/帧知识相关性+双候选+零帧警告/幂等守卫/标题数量词/灯箱)→ 18:00 定时复跑批次(3B1B 96%✓/39前端网关无罪✓/财富自由 B站风控→抖音版 89%✓,新抓 dedupe 假阳性 A 档)→ 晚间小修(重复帧硬守卫 _dedupe_video_doc+95% 第三采样点)→ **深夜 dedupe 假阳性修复**(`_reset_stale_done_job` 以 source_created 为判据+2 条真 DB 回归,撤修复即 FAIL)→ **主人拍板两件落地**:插图方案 C(按宽高比自适应)+ 生成式结构图「有依据才生」闸→ 标签审计修正 1 条(87efed→reject,ok 口径误拒率全量 0/47、test 0/17、dev 0/30)→ **bootstrap 统计修复**(比例指标统一 CP 精确区间:0/47 从谎报 `[0%,0%]` 改为诚实 `[0%,7.5%]`);→ **B站扫码登录半自动获取 SESSDATA**(主人深夜立项三拍板:app_settings DB 落盘+视频页手动按钮+180s 超时;迁移 0015 三列/resolve 现读热生效/bilibili_login.py 探针验证链路 hover→立即登录→QR/worker 兜底缺凭证自动弹窗+原地重试/POST+GET /api/bilibili/login/VideoView 按钮;顺手修 bilibili_extractor re.sub 潜伏 NameError——SESSDATA 从未配置过该路径是死代码);基线 **598 passed**
 
 **backlog #1/#3/#6 全部落地(2026-11-19 深夜续)**：#3 渲染回归探针 35 断言(探针当天抓出 `looksLikeCode` 把 `**粗体**` 开头段落吞成代码的真缺陷,400 父块对拍只 4 处变化全是修复)+ g2_eval 视觉通道修复(9 条 G0 假缺口)+ #6 帧选择评测(16 条题集,首跑 5 FAIL 全对应主人裁决)+ #1 驳回样本筛选工具(发现一个三方标注分歧待裁决)
 
@@ -31,7 +31,7 @@
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
 | **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
 | **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效；**v22 加 llm_context_tokens/llm_max_output_tokens(per-user 预算,没填走兜底)** |
-| **API 端点总览** | `app/main.py` | ✅ 29 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 7 · 问答/会话/导出 8 · 解析 1 · 设置 2 · 个人中心 1（数字由 `scripts/doc_lint.py` 守门） |
+| **API 端点总览** | `app/main.py` | ✅ 31 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 7 · 问答/会话/导出 8 · 解析 1 · 设置 2 · B站登录 2 · 个人中心 1（数字由 `scripts/doc_lint.py` 守门） |
 | **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页/个人中心 + 登录注册 + 书架 + 笔记两栏阅读 |
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
 | **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷 → LLM 生成章程 → 存 DB → G2 热生效；每用户一份 |
@@ -66,13 +66,14 @@
 | **视频笔记页 + whisper（v22→v26）** | `app/service/video_extractor.py` + `douyin_extractor.py` + `VideoView.vue` | ✅ whisper 异步（API 立即 201，worker 2h 超时，video_stage/progress 进度）；**faster-whisper small**（GPU float16 实测 15x 实时，构造失败/推理失败双重退 CPU int8）；B 站 yt-dlp 路径；**抖音 Playwright 免 cookie**（系统 Edge 拦截详情接口，用户零配置）；前端进度条（whisper 阶段按视频时长插值） |
 | **视频→笔记升级·真嵌图（v27→v28）** | `video_extractor.py` + `organizer.py` + `pipeline.py` + `worker.py` | ✅ **PySceneDetect 场景抽帧**(threshold=27 HSV)每场景中点 + **dHash 去重**(裁底部25%——字幕逐句变会把同一白板判成多帧,实测距离8→1) + 上限30帧。**DeepSeek-flash 视觉逐字转录**(保留缩进/符号;格式失败用纯描述 prompt 重试)+帧字节 `store_media` **真嵌图** `![alt](baleen-image:N)`。**organizer 视频多模态**:标记不删/不汇总文末/图随章走 + 标记→画面对照表 + 帧图 base64;输出按帧清单还原 image 块。worker 写 `<md>.frames.json` sidecar,pipeline G0 读它还原。**v28 质量修正(主人 22 分钟真实视频反馈)**:① **帧信息密度筛选** `INFO: high|low`——low(表情包/黑屏/纯标题卡/转场/纯人物特写)丢弃**不落盘**,实测 30→22 张,丢的正是挠头表情包/建议收藏爱心/4张纯标题卡;② **标题层级硬约束**——总标题不当章、**10+ 条目清单禁止一条一章**(显式覆盖「3+大主题必须多章」),H1 **17→4~5**、H2 31→17~19、H3 0→31~39,15 热词归组为基础层/连接层/执行层/业务层;③ **图片扎堆规则**——同小节≤2张、连续3+张须分散(改前 6 张连甩在导读,改后各节 1~2 张、图跟内容走);**493 passed**|
 | **视频导入白盒日志（v27）** | `pipeline.py` + `worker.py` + `upload.py` + `sources.ts` + `VideoView.vue` | ✅ `GET /api/sources/{id}` 响应新增 `video_log`（提取+整理全程 `{ts,stage,pct}` 数组，非视频导入为 null）；worker `_update_video_stage`/`_fail_video_job` 每次埋点追加（去重守卫：同 stage 只刷新 pct；截断保留最近 50 条）；pipeline G0 后追加「解析完成」、organizer 前后追加「AI 整理笔记中」/「AI 整理完成」（`SourcesRepo.get_parse_meta` 绕 ORM 缓存读最新值，顺带修 `pipeline.py` headings_rewritten 覆盖过时 parse_meta 的隐患）；前端 `.progress-card` 内滚动日志区渲染时间戳+阶段+百分比；复用 2s 轮询+`parse_meta` 持久化，刷新页面日志仍在；**497 passed** |
+| **B站扫码登录 SESSDATA（v30）** | `bilibili_login.py` + `bilibili_extractor.py` + `video_extractor.py` + `worker.py` + `api/bilibili.py` + `VideoView.vue` | ✅ 被风控且未配置/过期时**自动弹真浏览器扫码**(hover 登录入口→立即登录→二维码,探针 v4 实测链路)→抓 SESSDATA 落 app_settings(DB 热生效,迁移 0015)→原地重试兜底;视频页手动按钮+状态(uid+上次扫码);`resolve_bilibili_sessdata` DB 优先 .env 回退;红线=SESSDATA 只进 Playwright 上下文不做 HTTP 重放;12 测;**598 passed** |
 | **生成式结构图（有依据才生）** | `app/service/rewrite/diagram_basis.py` + `organizer.py` + 设置页 | ✅ 主人 2026-11-19 拍板「全局默认开,但必须有依据,不然怕 AI 乱生图」——**不靠 LLM 自觉**:代码先算结构依据(并列清单:同级标题≥5 个且每节≤600 字;流程阶段:≥3 种顺序词+≥3 个阶段标题),命中才把「必须用到的节点清单(**全部来自原文标题**)」注入 prompt(没命中就完全不提画图),产出后校验节点 ≥50% 能溯源否则**整块摘掉**并在 reasons 留痕;`app_settings.allow_diagrams`(0014,默认 true)+设置页复选框;17 测试(13 判定 + 4 端到端),验过「撤掉校验即 FAIL」。⚠️仅新导入生效,存量笔记不自动变好 |
 | **个人中心** | `app/api/profile.py` + `frontend/src/views/ProfileView.vue` | ✅ GET /api/profile 聚合（用户信息/使用统计/章程预览前 300 字/配置掩码,六字段同设置页口径）；前端 /profile 页导航入口,只读展示,编辑跳章程/设置页;6 测试;真后端+浏览器双冒烟通过 |
 
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  585 passed
+cd backend && uv run pytest -q     →  598 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -109,6 +110,7 @@ cd backend && uv run pytest -q     →  585 passed
 → **573**（bootstrap 零事件区间退化修复:比例指标统一改 CP 精确区间 15 测;2026-11-19 深夜）
 → **575**（backlog#3 渲染回归探针 35 断言 + g2_eval 视觉通道接线 2 测;2026-11-19 深夜）
 → **585**（backlog#6 帧选择质量评测:题集 16 条期望 + 判定逻辑 10 测;2026-11-19 深夜）
+→ **598**（B站扫码登录半自动获取 SESSDATA:qr_login 3 路+login_cb 重试链 4+API 5+worker cb 1 共 12 测;2026-11-20 凌晨）
 
 **任何新任务都不许把这个数降下来。**
 

@@ -224,6 +224,56 @@ def _make_progress_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEvent
     return cb
 
 
+def _make_bilibili_login_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEventLoop):
+    """B站兜底缺登录态（未配置/SESSDATA 过期）时的钩子（video_extractor 调用，2026-11-19）。
+
+    跑在 to_thread 的工作线程里：写进度「请扫码」→ 弹真浏览器扫码（阻塞 ≤180s，
+    占住 max_jobs=1 队列——数月一次的事件，可接受）→ 扫码结果落 app_settings（热生效）
+    → 返回新 SESSDATA 给原地重试。失败抛翻译好的中文 RuntimeError，走 _fail_video_job
+    常规失败路径（前端 last_error 直接可读）。DB/进度操作用 run_coroutine_threadsafe
+    切回 worker 事件循环（同 _make_progress_cb 的做法）。
+    """
+    async def _stage(text: str) -> None:
+        await _update_video_stage(source_id, text, owner_id)
+
+    def cb() -> str:
+        from app.service.bilibili_login import (
+            BiliLoginCancelled,
+            BiliLoginError,
+            BiliLoginTimeout,
+            qr_login_bilibili,
+            save_bilibili_login,
+        )
+
+        asyncio.run_coroutine_threadsafe(
+            _stage("⏰ 请扫码登录 B 站（浏览器窗口已弹出，180 秒内扫码）"), loop
+        ).result()
+        try:
+            result = qr_login_bilibili(timeout_s=180.0)
+        except BiliLoginCancelled as exc:
+            raise RuntimeError(
+                "B 站扫码登录已取消（浏览器窗口被关闭）。重新导入会再次弹出扫码窗口"
+            ) from exc
+        except BiliLoginTimeout as exc:
+            raise RuntimeError(
+                "等待扫码超时（180 秒）。请在电脑前重新导入（会再次弹出扫码窗口），"
+                "或提前到「视频笔记」页点「B站登录」扫码"
+            ) from exc
+        except BiliLoginError as exc:
+            raise RuntimeError(f"B 站扫码登录失败：{exc}") from exc
+
+        async def _save() -> None:
+            async with session_factory() as session:
+                await save_bilibili_login(session, owner_id, result)
+                await session.commit()
+
+        asyncio.run_coroutine_threadsafe(_save(), loop).result()
+        asyncio.run_coroutine_threadsafe(_stage("扫码成功，继续提取…"), loop).result()
+        return result.sessdata
+
+    return cb
+
+
 async def _fail_video_job(source_id: int, owner_id: int, exc: Exception) -> None:
     """提取阶段失败：标记 job failed + source.parse_meta 显示错误。"""
     from app.service.imports.pipeline import DEDUPE_PREFIX, _append_video_log
@@ -266,6 +316,10 @@ async def extract_and_import_video(
     进度通过 source.parse_meta["video_stage"] 传达给前端轮询。
     提取失败 → 标记 job failed + re-raise（arq 自动重试）。
     pipeline 失败 → pipeline 自己的异常处理器标记 job failed。
+
+    ``sessdata`` 参数已废弃（2026-11-19）：仅为兼容 Redis 里带旧 kwarg 的在途任务保留，
+    实际值在任务入口从 app_settings 现读（resolve_bilibili_sessdata）——扫码落库后
+    下一条任务（含扫码后的原地重试）立即用上新值，无需重启。
     """
     import uuid
 
@@ -273,6 +327,7 @@ async def extract_and_import_video(
     from app.service.imports.pipeline import DEDUPE_PREFIX, VIDEO_FRAMES_SUFFIX
     from app.service.llm.resolve import (
         resolve_allow_diagrams,
+        resolve_bilibili_sessdata,
         resolve_charter,
         resolve_llm_budgets,
         resolve_llm_config,
@@ -299,12 +354,13 @@ async def extract_and_import_video(
                 log.info("视频 job 重投递被幂等守卫拦截: source=%s note=%s", source_id, note.id)
                 return {"deduped": True, "source_id": source_id, "note_id": note.id}
 
-    # 解析 LLM 配置(同 import_file)
+    # 解析 LLM 配置(同 import_file) + B站 SESSDATA(app_settings 现读,扫码落库后热生效)
     async with session_factory() as session:
         charter = await resolve_charter(session, owner_id)
         base_url, api_key, model = await resolve_llm_config(session, owner_id)
         prompt_budget, output_budget = await resolve_llm_budgets(session, owner_id)
         allow_diagrams = await resolve_allow_diagrams(session, owner_id)
+        sessdata = await resolve_bilibili_sessdata(session, owner_id)
     client = (
         LLMClient(
             base_url=base_url,
@@ -328,6 +384,7 @@ async def extract_and_import_video(
             await _update_video_stage(source_id, "获取视频中…", owner_id, progress=8)
             vc = await asyncio.to_thread(
                 extract_video_content, url, sessdata=sessdata, client=client, progress_cb=progress_cb,
+                bilibili_login_cb=_make_bilibili_login_cb(source_id, owner_id, loop),
             )
             markdown_content = vc.markdown
             video_title = vc.title

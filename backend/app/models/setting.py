@@ -29,6 +29,15 @@ class AppSettings(Base):
     # 抖音 cookie 字符串——已废弃：抖音改走 Playwright 免 cookie 提取（douyin_extractor.py）。
     # 列保留不删（避免迁移），此字段不再读写。
     douyin_cookies: Mapped[str | None] = mapped_column(Text)
+    # B 站登录态（扫码登录半自动获取，2026-11-19）：
+    #   bilibili_sessdata —— Playwright 扫码登录抓的 SESSDATA，给浏览器兜底过风控挑战用；
+    #     NULL = 未配置，回退 .env 的 BILIBILI_SESSDATA（从没人配过，纯兼容）
+    #   bilibili_sessdata_at —— 上次扫码时间（UI 显示 + 排查过期）
+    #   bilibili_uid —— 登录用户 DedeUserID（UI 显示已登录谁）
+    # ⚠️ 只给 Playwright 浏览器上下文用（HTTP 重放对 B 站风控无效，TLS 指纹打分，实测过）。
+    bilibili_sessdata: Mapped[str | None] = mapped_column(Text)
+    bilibili_sessdata_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    bilibili_uid: Mapped[str | None] = mapped_column(Text)
     # 知识库章程(问卷生成的自然语言,DB 优先于内置默认;NULL = 回退内置默认章程)
     charter: Mapped[str | None] = mapped_column(Text)
     # LLM 预算(per-user 自适应;NULL = 走兜底):

@@ -138,7 +138,7 @@ def test_extract_video_success_calls_pipeline_with_source_id(
          "frame_images": [{"index": 0}], "frame_candidates": 1},
     )()
 
-    def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None):
+    def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None):
         return fake_vc
 
     monkeypatch.setattr(vextract, "extract_video_content", fake_extract)
@@ -247,7 +247,7 @@ def test_extract_video_failure_marks_job_failed(
         monkeypatch.setattr(worker_module, "session_factory", factory)
 
         # fake extraction raises
-        def boom(url, *, sessdata="", cookies_str="", client=None, progress_cb=None):
+        def boom(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None):
             raise RuntimeError("download failed")
 
         monkeypatch.setattr(vextract, "extract_video_content", boom)
@@ -842,5 +842,60 @@ def test_completed_import_redelivery_short_circuits(
             assert job is not None
             assert job.status == "done"
             assert job.payload.get("deduped") is True
+
+    asyncio.run(db_scope(scenario))
+
+
+def test_bilibili_login_cb_persists_and_reports(db_scope, monkeypatch) -> None:
+    """worker 注入的扫码钩子（2026-11-19）：弹窗进度写入 video_log + SESSDATA 三列
+    落库（热生效）+ 返回新值给兜底重试。cb 在 to_thread 工作线程里调用
+    （run_coroutine_threadsafe 切回事件循环，不能在 loop 线程里同步等）。
+    """
+    from datetime import UTC, datetime
+
+    from app.service.bilibili_login import BiliLoginResult
+    import app.service.bilibili_login as bili_login_mod
+    from app.service.llm.resolve import resolve_bilibili_sessdata
+
+    async def scenario(factory) -> None:
+        async with factory() as session:
+            repos = Repos(session, 1)
+            source, _ = await repos.sources.create_or_get_by_sha256(
+                sha256="video:BVqrcode:whisper",
+                filename="BVqrcode.md",
+                ext=".md",
+                size_bytes=0,
+                storage_path="",
+                mime="text/markdown",
+                parse_status="pending",
+            )
+            await session.commit()
+            source_id = source.id
+
+        monkeypatch.setattr(worker_module, "session_factory", factory)
+        fake_result = BiliLoginResult(
+            sessdata="fresh-sd", uid="777", logged_at=datetime.now(UTC)
+        )
+        monkeypatch.setattr(
+            bili_login_mod, "qr_login_bilibili", lambda timeout_s=180.0: fake_result
+        )
+
+        loop = asyncio.get_running_loop()
+        cb = worker_module._make_bilibili_login_cb(source_id, 1, loop)
+        got = await asyncio.to_thread(cb)  # 工作线程里同步调（真实调用方式）
+        assert got == "fresh-sd"
+
+        # 落库三列（resolve 现读拿到的就是新值——扫码后热生效的关键）
+        async with factory() as session:
+            sessdata = await resolve_bilibili_sessdata(session, 1)
+        assert sessdata == "fresh-sd"
+
+        # 白盒日志：弹窗提示 + 扫码成功两条都写进 video_log
+        async with factory() as session:
+            src = await Repos(session, 1).sources.get(source_id)
+        assert src is not None
+        stages = [e["stage"] for e in src.parse_meta["video_log"]]
+        assert any("请扫码登录" in s for s in stages)
+        assert any("扫码成功" in s for s in stages)
 
     asyncio.run(db_scope(scenario))

@@ -15,6 +15,7 @@ CDN 下载只需 UA + Referer，与客户端指纹无关。
 
 from __future__ import annotations
 
+import re
 import tempfile
 import urllib.request
 from dataclasses import dataclass
@@ -37,6 +38,14 @@ class BilibiliMedia:
     duration_s: int
     audio_path: Path
     video_path: Path | None  # 下载失败时为 None（帧提取跳过）
+
+
+class BilibiliAuthRequired(RuntimeError):
+    """兜底需要登录态门票：未配置 SESSDATA，或已配置但挑战未过（典型=已过期）。
+
+    上层（video_extractor 的 bilibili_login_cb 钩子）捕获它触发扫码登录半自动获取
+    （bilibili_login.py）；没有钩子时按普通错误报告并提示用户去「视频笔记」页扫码。
+    """
 
 
 def _launch_browser(p):
@@ -73,10 +82,8 @@ def _cdn_download(stream_url: str, target: Path) -> None:
 def fetch_bilibili_media(url: str, *, sessdata: str = "", output_dir: Path | None = None) -> BilibiliMedia:
     """打开视频页 → 解析 INITIAL_STATE/playinfo → CDN 下载音频（视频尽力而为）。同步。"""
     if not sessdata:
-        raise RuntimeError(
-            "B 站风控拦截了自动访问，且本账号没配置 SESSDATA。"
-            "请在 .env 的 BILIBILI_SESSDATA 填入登录 cookie"
-            "（bilibili.com → F12 → Application → Cookies → SESSDATA 的值），保存后重试导入。"
+        raise BilibiliAuthRequired(
+            "B 站风控拦截了自动访问，且本账号未配置 SESSDATA（扫码登录可自动获取）"
         )
 
     from app.service.bilibili import extract_bvid
@@ -116,9 +123,8 @@ def fetch_bilibili_media(url: str, *, sessdata: str = "", output_dir: Path | Non
             browser.close()
 
     if not video_data or not playinfo:
-        raise RuntimeError(
-            "B 站风控挑战未通过（可能弹出了验证码）。"
-            "请在自己的浏览器里手动打开该视频页通过一次验证，或稍后重试导入。"
+        raise BilibiliAuthRequired(
+            "B 站风控挑战未通过——SESSDATA 可能已过期（或触发了验证码），重新扫码登录可恢复"
         )
 
     title = re.sub(r"\s+", " ", video_data.get("title") or f"bilibili_{bvid}").strip()
@@ -157,4 +163,4 @@ def fetch_bilibili_media(url: str, *, sessdata: str = "", output_dir: Path | Non
     )
 
 
-__all__ = ["BilibiliMedia", "fetch_bilibili_media"]
+__all__ = ["BilibiliAuthRequired", "BilibiliMedia", "fetch_bilibili_media"]

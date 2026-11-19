@@ -316,13 +316,10 @@ async def import_from_url(
     whisper 模式创建 stub source + job（占位 sha），入队 ``extract_and_import_video``，
     worker 提取完 markdown 后调 ``run_import_async(source_id=...)`` 入库。
     """
-    from app.core.config import get_settings
     from app.service.bilibili import BilibiliError, fetch_bilibili, sanitize_filename
     from app.service.imports.pipeline import DEDUPE_PREFIX, _store_blob
     from app.service.llm.client import LLMClient
-    from app.service.llm.resolve import resolve_llm_config
-
-    settings = get_settings()
+    from app.service.llm.resolve import resolve_bilibili_sessdata, resolve_llm_config
 
     # 预检 API Key(没配 key 不允许导入，防止未整理内容污染知识库)
     _base, api_key, _model = await resolve_llm_config(session, owner_id)
@@ -332,7 +329,7 @@ async def import_from_url(
             detail="这个账号还没配置 API Key,请先到设置页配置后再导入",
         )
 
-    sessdata = settings.bilibili_sessdata
+    sessdata = await resolve_bilibili_sessdata(session, owner_id)
 
     # 平台检测（B站 vs 抖音）
     from app.service.bilibili import extract_bvid
@@ -347,7 +344,6 @@ async def import_from_url(
             video_id = extract_douyin_id(body.url) or "unknown"
             placeholder_sha = f"video:douyin:{video_id}:whisper"
             filename = f"douyin_{video_id}.md"
-            video_sessdata = ""  # 抖音不用 B站 sessdata；cookies 由 worker 从设置页读
         else:
             bvid = extract_bvid(body.url)
             if not bvid:
@@ -357,7 +353,8 @@ async def import_from_url(
                 )
             placeholder_sha = f"video:{bvid}:whisper"
             filename = f"{bvid}.md"
-            video_sessdata = sessdata
+        # B站 SESSDATA 不随任务快照——worker 任务入口从 app_settings 现读
+        # （扫码落库后热生效，含兜底扫码后的原地重试）
 
         repos = Repos(session, owner_id=owner_id)
         source, source_created = await repos.sources.create_or_get_by_sha256(
@@ -402,7 +399,6 @@ async def import_from_url(
                     mode="whisper",
                     source_id=source.id,
                     owner_id=owner_id,
-                    sessdata=video_sessdata,
                 )
             except Exception as exc:
                 raise HTTPException(

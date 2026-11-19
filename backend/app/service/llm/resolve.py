@@ -74,6 +74,19 @@ async def resolve_llm_budgets(
     return ctx, out
 
 
+async def resolve_bilibili_sessdata(session: AsyncSession, owner_id: int) -> str:
+    """B 站 SESSDATA:该用户的扫码登录值优先,回退 .env 的 BILIBILI_SESSDATA。
+
+    DB 值由扫码登录写入(bilibili_login.py),落库即热生效(前后端/worker 现读);
+    .env 回退是纯兼容——历史上没人配过,且 .env 值需重启进程才可见(@lru_cache)。
+    只给 Playwright 浏览器兜底用,绝不做 HTTP 重放(风控对 TLS 指纹打分,实测无效)。
+    """
+    row = await _row(session, owner_id)
+    if row is not None and row.bilibili_sessdata:
+        return row.bilibili_sessdata
+    return get_settings().bilibili_sessdata
+
+
 async def resolve_allow_diagrams(session: AsyncSession, owner_id: int) -> bool:
     """是否允许 organizer 生成结构图(主人 2026-11-19 拍板:全局默认开)。
 
@@ -89,6 +102,7 @@ async def resolve_allow_diagrams(session: AsyncSession, owner_id: int) -> bool:
 
 __all__ = [
     "resolve_allow_diagrams",
+    "resolve_bilibili_sessdata",
     "resolve_charter",
     "resolve_llm_budgets",
     "resolve_llm_config",
