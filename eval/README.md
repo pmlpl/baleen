@@ -34,6 +34,10 @@ uv run python ..\eval\scripts\<脚本名>
 | 6 | `uv run python ..\eval\scripts\negative_eval.py` | `runs\negative_report.md`：负例行为表 | PASS/FAIL（全 PASS=正常） | 免费；`--live` 要后端+token |
 | 7 | `uv run python ..\eval\scripts\review_agent.py` | `runs\ai_review.csv` + `runs\ai_agreement.md`：**AI 盲审 35 样本 + 一致率 + 分歧裁决单** | 一致率行 + 分歧裁决单（你只裁决分歧） | 花 LLM token（用你设置页配的模型；`--mode candidates` 盲审候选池，`--compare` 免费重算一致率） |
 
+**帧选择评测（backlog #6）的题集**在 `queriesrame_selection_expectations.md`——主人 2026-11-19
+对 7 条视频笔记的逐帧裁决。⚠️ **存量笔记是旧筛选规则产物**，跑出来是「旧规则基线」；
+要看新规则成绩必须先删旧笔记重导（防 dedupe）再跑。
+
 **渲染回归探针（前端，不在上面 6 步里）**：
 ```
 node scripts\probe_section_render.mjs
