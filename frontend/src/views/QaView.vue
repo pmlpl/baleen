@@ -3,7 +3,7 @@
  * 问答页(阶段2:聊天式多轮)。
  * 左侧会话列表(历史可重开/删除),中部消息流(用户右/助手左),底部输入。
  * assistant 消息渲染 markdown,出处折叠在消息下方;「缓存 xx%」是 DeepSeek
- * 前缀缓存命中率(hit/(hit+miss)),首问没有缓存数据时不显示。
+ * 前缀缓存的会话平均命中率(Σhit/Σ(hit+miss)),首问没有缓存数据时不显示。
  * 数据全部来自 API(会话/消息已落库),本地 ref 不用 store,不引第三方库。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -548,15 +548,19 @@ const rendered = computed(() =>
   messages.value.map((m) => (m.role === 'assistant' ? renderMarkdown(m.content) : '')),
 )
 
-/** 最近一条「有缓存数据」的助手消息命中率:联网搜索轮没有缓存数据,
- * 若只看最后一条,联网后会把历史命中率抹掉(刷新恢复后也跟着"消失")。
+/** 会话级平均缓存命中率:Σ命中/Σ(命中+未命中),按 token 加权——
+ * 比各轮 rate 的算术平均更贴近真实的 token 级缓存效率(长消息不该被短消息摊薄)。
+ * 联网搜索轮没有缓存数据(双 0),天然不进分母;
  * null = 会话里还没有任何带缓存数据的回答 */
-const lastCacheRate = computed<number | null>(() => {
-  for (let i = messages.value.length - 1; i >= 0; i -= 1) {
-    const m = messages.value[i]
-    if (m.role === 'assistant' && m.cache_hit_rate !== null) return m.cache_hit_rate
+const avgCacheRate = computed<number | null>(() => {
+  let hit = 0
+  let miss = 0
+  for (const m of messages.value) {
+    if (m.role !== 'assistant') continue
+    hit += m.cache_hit_tokens
+    miss += m.cache_miss_tokens
   }
-  return null
+  return hit + miss > 0 ? hit / (hit + miss) : null
 })
 
 const hasAssistantMessage = computed(() => messages.value.some((m) => m.role === 'assistant'))
@@ -715,6 +719,8 @@ async function send(): Promise<void> {
     model: null,
     cost_tokens: 0,
     cache_hit_rate: null,
+    cache_hit_tokens: 0,
+    cache_miss_tokens: 0,
     sent_extras: sentExtras,
   })
   input.value = ''
@@ -746,6 +752,8 @@ async function send(): Promise<void> {
             model: null,
             cost_tokens: 0,
             cache_hit_rate: null,
+            cache_hit_tokens: 0,
+            cache_miss_tokens: 0,
             search_query: meta.search_query,
           })
           streamingIdx = messages.value.length - 1
@@ -854,6 +862,8 @@ async function executeNotePlan(req: SaveNoteRequest): Promise<void> {
       model: null,
       cost_tokens: 0,
       cache_hit_rate: null,
+      cache_hit_tokens: 0,
+      cache_miss_tokens: 0,
     })
     cancelNotePlan()
     scrollBottom()
@@ -898,7 +908,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
     <header class="page-head">
       <h1 class="page-title">问答</h1>
       <p class="page-desc">
-        和笔记库对话:它用笔记内容答、标出处,多轮追问记得上文。「缓存命中率」是模型前缀缓存的命中占比,显示在输入框下方。
+        和笔记库对话:它用笔记内容答、标出处,多轮追问记得上文。「平均缓存命中率」是模型前缀缓存的会话级命中占比,显示在输入框下方。
       </p>
     </header>
 
@@ -1270,9 +1280,9 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
             <span class="model-tag" title="当前使用的模型">{{ displayModel }}</span>
             <span class="status-sep">·</span>
           </template>
-          缓存命中率:
-          <span v-if="lastCacheRate !== null" class="cache-value">
-            {{ (lastCacheRate * 100).toFixed(1) }}%
+          平均缓存命中率:
+          <span v-if="avgCacheRate !== null" class="cache-value">
+            {{ (avgCacheRate * 100).toFixed(1) }}%
           </span>
           <span v-else-if="hasAssistantMessage">—(当前模型未返回缓存数据)</span>
           <span v-else>—</span>

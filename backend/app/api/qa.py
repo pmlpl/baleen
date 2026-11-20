@@ -135,6 +135,10 @@ class MessageOut(BaseModel):
     model: str | None
     cost_tokens: int
     cache_hit_rate: float | None  # None = 该条没有缓存数据(user 消息 / 首调双 0)
+    # 原始计数:前端用来算会话级「平均缓存命中率」Σhit/Σ(hit+miss),
+    # 比按轮次平均各轮 rate 更接近真实的 token 级缓存效率
+    cache_hit_tokens: int
+    cache_miss_tokens: int
 
 
 class ChatResponse(BaseModel):
@@ -326,6 +330,8 @@ def _message_out(m: QaMessage) -> MessageOut:
         model=m.model,
         cost_tokens=m.cost_tokens,
         cache_hit_rate=_cache_hit_rate(m.cache_hit_tokens, m.cache_miss_tokens),
+        cache_hit_tokens=m.cache_hit_tokens,
+        cache_miss_tokens=m.cache_miss_tokens,
     )
 
 

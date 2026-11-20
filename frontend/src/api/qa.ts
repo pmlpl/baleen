@@ -27,6 +27,9 @@ export interface QaMessage {
   cost_tokens: number
   /** prompt 前缀缓存命中率 hit/(hit+miss);null = 该条没有缓存数据(如 user 消息) */
   cache_hit_rate: number | null
+  /** 原始缓存命中/未命中 token 数:前端按 Σhit/Σ(hit+miss) 算会话级平均命中率 */
+  cache_hit_tokens: number
+  cache_miss_tokens: number
 }
 
 /** 对话附件:用户临时上传给 AI 看的参考文件文本(后端 /api/parse 统一解析得到,不入库)。 */

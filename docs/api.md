@@ -1,4 +1,4 @@
-# API 契约 v28
+# API 契约 v30
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -120,8 +120,25 @@ B 站 / 抖音视频链接导入。两种模式：
 - whisper 模式的 source.sha256 是占位值（`"video:{bvid}:whisper"`），真实 sha 存在 `parse_meta.content_sha256`；dedupe 基于 BVID。
 - 400 = URL 无法识别 BV 号 / 视频没有字幕（subtitle 模式）/ 没配 API Key / 视频超过 60 分钟。
 - 502 = B 站接口请求失败（subtitle 模式）/ 视频提取失败（whisper 模式，worker 内部错误）。
-- 字幕来源：B 站 player/v2 接口，需在 `.env` 配置 `BILIBILI_SESSDATA`（登录 bilibili.com → F12 → Cookies → SESSDATA）才能拿到大部分视频的 CC/AI 字幕；未配置时部分视频会报「没有字幕」。
+- 字幕来源：B 站 player/v2 接口，带该用户的 SESSDATA（扫码登录落库，见下方「B 站扫码登录」；历史 `.env` 的 `BILIBILI_SESSDATA` 仅作回退）才能拿到大部分视频的 CC/AI 字幕；未配置时部分视频会报「没有字幕」。
 - 同一视频重复导入 → BVID 去重（whisper 模式）或 sha256 去重（subtitle 模式）。
+
+### B 站扫码登录（v30 新增，半自动获取 SESSDATA）
+
+B 站对匿名自动访问做页面级 412 风控，浏览器兜底（Playwright 过挑战）需要登录态门票
+SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSDATA 落 `app_settings`
+（DB 热生效，全进程现读，无需重启），之后数月免登录、过期重扫。
+
+| 端点 | 说明 |
+|---|---|
+| `POST /api/bilibili/login` | **弹真浏览器**（系统 Edge）打开 bilibili.com → 自动点出二维码 → 等用户扫码 → 抓 SESSDATA 落库。**同步阻塞**，最长约 3.5 分钟（180s 等扫码 + 前置导航，vite proxy 300s 装得下）。200 → `{logged_in: true, uid, logged_at}`；400 = 用户关窗取消 / 等待扫码超时；502 = 打不开页面 / 登录弹窗没出来（风控或结构变化） |
+| `GET /api/bilibili/login` | 当前登录态 `{logged_in, uid, logged_at}`；未登录 `logged_in=false`。**SESSDATA 全文永不回显**（凭证只写不读） |
+
+两个入口：
+- **自动**（worker）：whisper 导入被 B 站风控拦截且未配置/已过期时，兜底触发扫码——`video_stage`/`video_log` 写「⏰ 请扫码登录 B 站（浏览器窗口已弹出，180 秒内扫码）」，扫码成功自动落库并原地重试兜底（导入无感继续）。扫码超时/取消 → job failed，报错文案给指引。
+- **手动**（视频笔记页）：VideoView「B 站登录（扫码）」按钮（已登录显示 uid+上次扫码日期，变「重新扫码」）——提前扫好 / 超时后重扫 / 独立测试口。
+
+⚠️ 红线：SESSDATA **只给 Playwright 浏览器上下文用**（HTTP 重放对 B 站风控无效——TLS 指纹打分，实测过）；既有消费者（兜底浏览器 / 字幕接口 player/v2 / yt-dlp 首选路径 cookie 文件）不变，变的只是值的来源（F12 手抄 → 浏览器扫码）。存储：迁移 0015 `app_settings` 加 `bilibili_sessdata` / `bilibili_sessdata_at` / `bilibili_uid` 三列，DB 优先、`.env` 回退（纯兼容）。
 
 ### `GET /api/sources/{source_id}`
 
@@ -370,8 +387,8 @@ B 站 / 抖音视频链接导入。两种模式：
 ```json
 {
   "session_id": 9, "session_title": "闭包是什么",
-  "user_message": { "id": 1, "role": "user", "content": "…", "citations": [], "model": null, "cost_tokens": 0, "cache_hit_rate": null },
-  "assistant_message": { "id": 2, "role": "assistant", "content": "…[1]", "citations": [{ "n": 1, "note_id": 156, "note_title": "…", "heading_path": "…", "snippet": "…" }], "model": "glm-5.2", "cost_tokens": 2169, "cache_hit_rate": 0.4843 },
+  "user_message": { "id": 1, "role": "user", "content": "…", "citations": [], "model": null, "cost_tokens": 0, "cache_hit_rate": null, "cache_hit_tokens": 0, "cache_miss_tokens": 0 },
+  "assistant_message": { "id": 2, "role": "assistant", "content": "…[1]", "citations": [{ "n": 1, "note_id": 156, "note_title": "…", "heading_path": "…", "snippet": "…" }], "model": "glm-5.2", "cost_tokens": 2169, "cache_hit_rate": 0.4843, "cache_hit_tokens": 15231, "cache_miss_tokens": 16200 },
   "search_query": "Promise 有哪几种状态", "took_ms": 7115
 }
 ```
@@ -416,7 +433,7 @@ B 站 / 抖音视频链接导入。两种模式：
 | `DELETE /api/qa/sessions/{id}` | 删会话（消息 CASCADE），204 |
 | `GET /api/qa/sessions/{id}/export` | 导出 Markdown（浏览器下载；同时在 `tmp/qa_exports/` 落一份） |
 
-**`cache_hit_rate` 口径**：prompt 前缀缓存命中占比 = hit/(hit+miss)；上游未命中时不下发字段 → `null`（前端显示「—」）。字段双格式归一：DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`。
+**`cache_hit_rate` 口径**：prompt 前缀缓存命中占比 = hit/(hit+miss)；上游未命中时不下发字段 → `null`（前端显示「—」）。字段双格式归一：DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`。v29 起消息附带原始计数 `cache_hit_tokens` / `cache_miss_tokens`（双 0 = 该条无缓存数据），前端问答页用它算会话级**平均缓存命中率** Σhit/Σ(hit+miss)（token 加权，比各轮 rate 算术平均更贴近真实缓存效率），替代此前「取最近一条非空 rate」的口径。
 
 **联网兜底**：库内未命中且设置页配了 Tavily key → 自动搜网，回答基于搜索结果、citations 带 `url`（`note_id=null`，前端渲染外链）、`used_web=true`；未配 key 或搜索失败 → 维持「没找到」口径。**挂了图片附件（`images` 非空）时不走联网**——图本身是内容（问的常是「这图讲什么」），搜「图片/内容」只会搜出 OCR 工具之类；让视觉模型直接看图回答（`answer` 路径附图），`[NO_KB]` 兜底也跳过联网、不加「笔记库没有」前缀。
 
@@ -549,6 +566,8 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-20 | v30 | **B 站扫码登录半自动获取 SESSDATA**：§2 新增 `POST /api/bilibili/login`（弹真浏览器扫码，同步阻塞 ≤3.5 分钟，落库返回 uid）+ `GET /api/bilibili/login`（登录态查询，SESSDATA 永不回显）。被风控的 whisper 导入在 worker 兜底自动触发扫码（`video_stage`/`video_log` 提示 + 扫码成功原地重试兜底）；视频笔记页加「B 站登录」手动按钮。迁移 0015：`app_settings` 加 `bilibili_sessdata` / `bilibili_sessdata_at` / `bilibili_uid` 三列（DB 优先热生效，`.env` 的 `BILIBILI_SESSDATA` 仅回退）。**背景**：B 站浏览器兜底需要 SESSDATA 门票但 F12 手抄从未发生过（11-19 财富自由 5583 两次导入死于此）；扫码全程真浏览器（红线：SESSDATA 不做 HTTP 重放——TLS 指纹打分实测无效），既有消费者不变只换值的来源 |
+| 2026-11-18 | v29 | **问答缓存命中率改会话平均**：`§5` 消息响应（`user_message` / `assistant_message` / `GET /api/qa/sessions/{id}` 各消息 / 流式 `done` 事件）新增 `cache_hit_tokens` / `cache_miss_tokens` 原始计数（int，双 0 = 该条无缓存数据，与 `cache_hit_rate: null` 同判）；前端问答页输入框下方的「缓存命中率」（取最近一条非空 rate）改为**「平均缓存命中率」** = Σhit/Σ(hit+miss)，token 加权聚合全会话，联网搜索轮（双 0）天然不进分母。**背景**：按轮次算术平均会把长消息（几十 k 缓存 token、命中率高）和短消息（几百 token、命中率低）等权摊平，偏离真实 token 级缓存效率；`cache_hit_rate` 逐消息字段保留不变 |
 | 2026-11-17 | v28 | **📎 附件统一后端解析 + 大文件分层分析**：①新增 `POST /api/parse`（§5，multipart 单文件 ≤ 10 MB，不入库）——复用 G0 `parse_file`，docx/pdf/pptx/md/csv/txt/html 一套口径；响应 `{status, text, mode, images, warnings, message, truncated}`。②新增 `service/parse/html_parser.py`（标准库 HTMLParser 零新依赖）：剥 style/script/head、块级标签断行、h1-h6 产 heading；`<img src="data:...">` 经 `media_sink` 提取字节（导入路径存库/解析路径回传前端视觉通道），外链不联网抓；`PARSERS` 加 `.html/.htm`（`ALLOWED_EXTS` 自动扩大，导入同步支持 HTML）；`media_sink` 特判从 md 扩到 md/html。③新增 `service/qa/file_analyzer.py`（map-reduce）：正文 > 40000 字符分块（20000/块，重叠 500）并行 LLM 提取 → 合并 ≤ 20000 字符报告（`mode=analyzed`）；20 块上限 → `FileTooLargeError` 422 提示拆分；单块失败降级保留原文头部。④`POST /api/qa/chat` 的 `attachments[].text` 上限 20000 → 40000（与解析分层对齐）。⑤前端 `QaView` 📎 文档类全部走 `/api/parse`（删前端白名单/截断/编码逻辑），`api/parse.ts` 新增；chips 加「已分析」标记；解析中显示进行中提示。**背景**：HTML 简历 18 万字符 90% 是 base64，旧前端读文本被 20000 截断；附件全文进 `llm_content` 每轮重放是硬约束，故分层而非放宽上限 |
 | 2026-11-16 | v27 | **视频导入白盒进度日志**：`GET /api/sources/{id}` 响应新增 `video_log`——提取+整理全程的阶段性日志数组，条目 `{ts, stage, pct}`（时间戳 epoch 秒/阶段文本/百分比，非视频导入为 `null`）。worker `_update_video_stage`/`_fail_video_job` 每次埋点追加一条（去重守卫：同 stage 连续调用只刷新 pct；截断保留最近 50 条）；pipeline 在 G0 落盘后追加「解析完成」、organizer 前后追加「AI 整理笔记中」/「AI 整理完成」（基于 `SourcesRepo.get_parse_meta` 绕过 ORM 缓存读最新值，顺带修 `pipeline.py` headings_rewritten 覆盖过时 parse_meta 的隐患）；前端 VideoView `.progress-card` 内新增滚动日志区渲染时间戳+阶段+百分比。复用现有 2s 轮询与 `parse_meta` 持久化，刷新页面日志仍在；不上 SSE/WebSocket |
 | 2026-11-14 | v26 | **个人中心**:§10 新增 **`GET /api/profile`** 聚合端点——用户信息(id/username/注册时间)+ 使用统计(notes/sources/qa_sessions/qa_messages,owner 隔离,notes 只数 active)+ 章程预览(前 300 字,完整内容仍走 `GET /api/charter`)+ 配置掩码视图(与 `GET /api/settings` 六字段同口径,密钥永不回显全文);纯读聚合,复用现有 repo 与 `resolve_llm_config`,无新表无迁移;前端新增 `/profile` 页(导航加「个人中心」入口),只读展示,编辑动作跳章程/设置页 |

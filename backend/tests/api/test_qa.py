@@ -170,6 +170,10 @@ def test_chat_creates_session_and_persists(env: SimpleNamespace, qa_setup: Simpl
     assert body["search_query"] == "闭包是什么"  # 首轮不改写
     assert body["user_message"]["cache_hit_rate"] is None  # user 消息没有缓存数据
     assert body["assistant_message"]["cache_hit_rate"] == 0.75  # 30/(30+10)
+    # 原始计数随消息透出,前端按 Σhit/Σ(hit+miss) 算会话级平均命中率
+    assert body["assistant_message"]["cache_hit_tokens"] == 30
+    assert body["assistant_message"]["cache_miss_tokens"] == 10
+    assert body["user_message"]["cache_hit_tokens"] == 0
     assert body["assistant_message"]["citations"][0]["note_id"] == 10
     # 首轮只调 1 次 LLM(回答),没有改写调用
     assert len(qa_setup.transports[-1].calls) == 1
@@ -245,6 +249,8 @@ def test_chat_stream_endpoint_metas_deltas_and_persists(
     assert events["delta_text"] == "手写实现的 Promise 有三种状态。[1]"
     # usage 块走 OpenAI 风格 cached_tokens → 归一后 60/(60+40)
     assert events["done"]["assistant_message"]["cache_hit_rate"] == 0.6
+    assert events["done"]["assistant_message"]["cache_hit_tokens"] == 60
+    assert events["done"]["assistant_message"]["cache_miss_tokens"] == 40
     assert events["done"]["assistant_message"]["content"] == "手写实现的 Promise 有三种状态。[1]"
     assert events["done"]["assistant_message"]["citations"][0]["note_id"] == 10
 
