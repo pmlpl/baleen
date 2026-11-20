@@ -114,6 +114,9 @@ class ChatResult(BaseModel):
     # 长文生成(如会话整理笔记)必须看这个字段,否则截断会被当成正常结果静默返回。
     finish_reason: str | None = None
     latency_ms: float = 0.0
+    # function calling:模型发起的工具调用(OpenAI 兼容协议原样,arguments 保持 JSON 字符串;
+    # 调用方自己 json.loads)。没有工具调用的响应 = 空列表(老调用方零改动)。
+    tool_calls: list[dict] = Field(default_factory=list)
 
 
 class LLMCapabilities(BaseModel):
@@ -166,13 +169,24 @@ class LLMClient:
     # ---- 对外:chat ----
     def chat(
         self,
-        messages: list[dict[str, str]],
+        messages: list[dict],
         *,
         temperature: float = 0.0,
         max_tokens: int = DEFAULT_MAX_TOKENS,
         response_format: dict | None = None,
+        tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
+        timeout: float | None = None,
     ) -> ChatResult:
-        """一次 chat completions 调用;失败按错误分类抛异常。"""
+        """一次 chat completions 调用;失败按错误分类抛异常。
+
+        ``tools`` / ``tool_choice``:function calling 透传(OpenAI 兼容协议原样);
+        None = 不带该字段(与现状一致,老调用方零改动)。模型的工具调用从
+        ``ChatResult.tool_calls`` 取(arguments 保持 JSON 字符串)。
+
+        ``timeout``:单次调用超时覆盖;None = 用构造时的 self.timeout。
+        messages 里允许带 tool 轮次的 dict(role=tool / assistant 带 tool_calls)。
+        """
         if not messages:
             raise LLMError("messages 不能为空")
         payload: dict[str, Any] = {
@@ -183,8 +197,12 @@ class LLMClient:
         }
         if response_format is not None:
             payload["response_format"] = response_format
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
         started = time.perf_counter()
-        raw = self._request("POST", "chat/completions", payload)
+        raw = self._request("POST", "chat/completions", payload, timeout=timeout)
         result = self._parse_chat(raw)
         result.latency_ms = round((time.perf_counter() - started) * 1000, 1)
         return result
@@ -226,9 +244,7 @@ class LLMClient:
         status, _headers, resp = cast(Any, stream_fn("POST", url, headers, body, self.timeout))
         if status in (401, 403):
             raw = resp.read() if hasattr(resp, "read") else b""
-            raise LLMAuthError(
-                f"认证失败(HTTP {status}):请检查 LLM_API_KEY", status_code=status
-            )
+            raise LLMAuthError(f"认证失败(HTTP {status}):请检查 LLM_API_KEY", status_code=status)
         if status == 429:
             raise LLMRateLimitError("触发限流(HTTP 429)", status_code=status)
         if not (200 <= status < 300):
@@ -240,7 +256,7 @@ class LLMClient:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data: "):
                     continue
-                data_str = line[len("data: "):]
+                data_str = line[len("data: ") :]
                 if data_str == "[DONE]":
                     break
                 try:
@@ -317,18 +333,21 @@ class LLMClient:
         )
 
     # ---- 内部:HTTP + 重试 + 错误分类 ----
-    def _request(self, method: str, path: str, payload: dict | None) -> bytes:
+    def _request(
+        self, method: str, path: str, payload: dict | None, timeout: float | None = None
+    ) -> bytes:
         url = urljoin(self.base_url, path)
         body = None
         headers = {"Authorization": f"Bearer {self.api_key}"}
         if payload is not None:
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             headers["Content-Type"] = "application/json"
+        effective_timeout = self.timeout if timeout is None else timeout
 
         for attempt in range(self.max_retries + 1):
             try:
                 status, resp_headers, raw = self._transport.request(
-                    method, url, headers, body, self.timeout
+                    method, url, headers, body, effective_timeout
                 )
             except (TimeoutError, urllib.error.URLError) as exc:
                 if isinstance(exc, TimeoutError) or isinstance(exc.reason, TimeoutError):
@@ -379,6 +398,16 @@ class LLMClient:
             content = ""
         if not isinstance(content, str):
             raise LLMResponseError("响应 choices[0].message.content 不是字符串")
+        # function calling:tool_calls 原样透出(缺 id/function.name 的坏条目跳过,
+        # 不让单条坏数据炸整轮);arguments 保持 JSON 字符串由调用方解析
+        tool_calls = [
+            tc
+            for tc in (message.get("tool_calls") or [])
+            if isinstance(tc, dict)
+            and isinstance(tc.get("function"), dict)
+            and tc["function"].get("name")
+            and tc.get("id")
+        ]
         usage = data.get("usage") or {}
         hit, miss = _cache_fields(usage)
         # finish_reason 是 OpenAI 兼容协议的 choices[0].finish_reason;
@@ -396,6 +425,7 @@ class LLMClient:
             prompt_cache_hit_tokens=hit,
             prompt_cache_miss_tokens=miss,
             finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            tool_calls=tool_calls,
         )
 
 

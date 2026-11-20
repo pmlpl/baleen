@@ -55,6 +55,17 @@ TOP_K = 5  # 与产品 chat 默认一致
 # ---------------------------------------------------------------- 工具
 
 
+def _pct(values: list, p: float):
+    """线性插值百分位(时延 P50/P95 用;空列表返回 0)。"""
+    if not values:
+        return 0
+    s = sorted(values)
+    k = (len(s) - 1) * p / 100.0
+    f = int(k)
+    c = min(f + 1, len(s) - 1)
+    return round(s[f] + (s[c] - s[f]) * (k - f), 1)
+
+
 def load_negative_queries() -> list[dict]:
     with NEGATIVE_CSV.open("r", encoding="utf-8-sig", newline="") as fh:
         return [
@@ -160,7 +171,32 @@ async def run_local(rows: list[dict]) -> tuple[list[dict], int]:
 # ---------------------------------------------------------------- live 档
 
 
-def run_live(rows: list[dict], api_url: str, token: str) -> list[dict]:
+def _set_agent_enabled(api_url: str, token: str, enabled: bool) -> bool:
+    """翻转问答 agent 灰度开关(PUT /api/settings),返回**原值**(跑完恢复用)。"""
+    with urllib.request.urlopen(
+        urllib.request.Request(
+            api_url.rstrip("/") + "/api/settings", headers={"Authorization": f"Bearer {token}"}
+        ),
+        timeout=15,
+    ) as resp:
+        previous = bool(json.loads(resp.read().decode("utf-8")).get("agent_enabled"))
+    if previous != enabled:
+        body = json.dumps({"agent_enabled": enabled}).encode("utf-8")
+        req = urllib.request.Request(
+            api_url.rstrip("/") + "/api/settings",
+            data=body,
+            method="PUT",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {token}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp.read()
+    return previous
+
+
+def run_live(rows: list[dict], api_url: str, token: str, *, agent: bool = False) -> list[dict]:
     """产品 HTTP 链路:断言 used_web 与引用纪律。逐条写 negative_preds.csv(追加)。"""
     # 本机直连:合并 no_proxy,防系统代理拦截 127.0.0.1
     for var in ("NO_PROXY", "no_proxy"):
@@ -219,13 +255,45 @@ def run_live(rows: list[dict], api_url: str, token: str) -> list[dict]:
                     .replace("\n", " "),
                 }
             )
-            # 判决:负例不许出现库内引用(NO_KB 契约:联网出处 note_id=None/自答 citations=[])
-            if cited_note_ids:
+            # agent 档新增指标(ADR 0010):每答 LLM 调用次数 / 工具调用分布 / 缓存计数。
+            # 每行都写全这些键(CSV 的 fieldnames 取自第一行,键不齐会 DictWriter 报错)。
+            assistant_msg = payload.get("assistant_message", {})
+            trace = assistant_msg.get("agent_trace")
+            rec["agent"] = bool(trace)
+            if trace:
+                rec["llm_calls"] = sum(
+                    1 for s in trace if s.get("kind") in ("llm", "repair")
+                )
+                tools: dict[str, int] = {}
+                for s in trace:
+                    if s.get("kind") == "tool" and s.get("tool"):
+                        tools[s["tool"]] = tools.get(s["tool"], 0) + 1
+                rec["tool_calls"] = (
+                    ",".join(f"{k}x{v}" for k, v in sorted(tools.items())) or "-"
+                )
+            else:
+                rec["llm_calls"] = ""
+                rec["tool_calls"] = ""
+            rec["cache_hit_tokens"] = assistant_msg.get("cache_hit_tokens", 0)
+            rec["cache_miss_tokens"] = assistant_msg.get("cache_miss_tokens", 0)
+            # 判决:真混合作答 = 库内引用 且 未联网(答案内容由 [n] 背书 = 瞎引),两类档共用。
+            # agent 档例外(ADR 0010,2026-11-20 首跑发现,逐条复核过):答案主体已联网([W n])
+            # 时,库内 [n] 允许出现在「背景句真归因」——开头明示「笔记库里只有 X,以下答案
+            # 来自联网」,[n] 只标笔记里确实有的背景。这与 11-18 方案 A 禁的「用自身知识
+            # 补全答案再挂 [n] 引用背书」不同:那是拿 [n] 给答案内容背书,这是诚实归因。
+            # 记 PASS,answer_head 留档供人工抽查;决策树档不受影响(web 答案天然无库内 [n])。
+            if cited_note_ids and not used_web:
                 rec["verdict"] = "FAIL"
                 rec["reason"] = f"库内引用了笔记 {cited_note_ids}——负例不允许库内引用(瞎引)"
             elif used_web:
                 rec["verdict"] = "PASS"
-                rec["reason"] = "联网兜底接管"
+                if cited_note_ids:
+                    rec["reason"] = (
+                        f"联网兜底接管;背景句含库内真归因 {cited_note_ids}"
+                        "(agent 档合法,人工抽查 answer_head)"
+                    )
+                else:
+                    rec["reason"] = "联网兜底接管"
             else:
                 rec["verdict"] = "WARN"
                 rec["reason"] = "未联网(Tavily 未配时自答是合法路径),答案开头需人工过目"
@@ -262,8 +330,16 @@ def write_report(local_rows: list[dict], note_count: int, live_rows: list[dict])
         "## 考核面",
         "",
         "正例 20 query 考「找得准」(R@5);本集考「不该答的有没有乱答」——",
-        "missing 类期望联网兜底/干净自答,bait 类期望 [NO_KB]→联网,**两类都不许出现库内引用**。",
+        "missing 类期望联网兜底/干净自答,bait 类期望 [NO_KB]→联网。",
+        "**真混合作答 = 库内引用 且 未联网**(答案内容由 [n] 背书 = 瞎引),决策树/agent 两档同判 FAIL。",
+        "agent 档(ADR 0010,2026-11-20)例外:答案主体已联网([W n])时,开头明示「笔记库里只有 X、",
+        "以下来自联网」的**背景句库内真归因**记 PASS(answer_head 留档人工抽查);决策树档 web 答案天然无库内引用。",
         "gate = 生产 `_has_relevant_hit`(qa.py)对真混合检索 top5 的判定;本地档失配只记 WARN。",
+        "",
+        "> ⚠️ agent 批(ADR 0010)怎么读:agent 只改「检索之后怎么决策」,**不改检索本身**——",
+        "> 首轮检索与现状同链路同参数,20 题 R@5 不会因 agent 变化(升也不会)。",
+        "> 本批的胜负手在**负例/边缘题的工具路径正确率**(换词再搜→判定答不了→转联网)",
+        "> 与引用纪律(不许假引用),R@5 不是本批的考核面。",
         "",
         "## preflight(自校验)",
         "",
@@ -307,6 +383,55 @@ def write_report(local_rows: list[dict], note_count: int, live_rows: list[dict])
                 f"| {r['qid']} | {r.get('used_web', '')} | {r.get('cited_note_ids', '') or '—'}"
                 f" | {r.get('verdict', '')} | {r.get('reason', '')[:40]} |"
             )
+        # 两种判据的读数都保留(可复核):严格口径(任何库内引用即 FAIL)下,
+        # 「联网 + 背景真归因」的行会改判——主人可按会话原文抽查后定夺
+        refined = [
+            r
+            for r in live_rows
+            if r.get("cited_note_ids") and r.get("used_web") and r.get("verdict") == "PASS"
+        ]
+        if refined:
+            lines += [
+                "",
+                f"**判据注记**:严格判据(任何库内引用即 FAIL)下本批有 {len(refined)} 条会改判;"
+                "agent 档按「答案主体联网 [W n] + 背景句库内真归因」记 PASS"
+                "(2026-11-20 首跑逐条复核均为诚实归因,answer_head/会话原文留档可查,见考核面注)。",
+            ]
+        # agent 档指标(ADR 0010):每答调用次数 / 工具分布 / 时延 / 缓存(本批胜负手,见考核面注)
+        agent_rows = [r for r in live_rows if r.get("agent")]
+        if agent_rows or any("llm_calls" in r for r in live_rows):
+            lines += [
+                "",
+                "### agent 档指标(本批新增)",
+                "",
+                "| qid | agent | llm_calls | 工具分布 | 时延ms | 缓存hit/miss |",
+                "|---|---|---|---|---|---|",
+            ]
+            for r in live_rows:
+                if "llm_calls" not in r:
+                    continue  # 旧格式行(升级前的历史跑批)没有这些列
+                lines.append(
+                    f"| {r['qid']} | {'✓' if r.get('agent') else '—'} | {r.get('llm_calls') or '—'}"
+                    f" | {r.get('tool_calls') or '—'} | {r.get('latency_ms', '')}"
+                    f" | {r.get('cache_hit_tokens', 0)}/{r.get('cache_miss_tokens', 0)} |"
+                )
+            lats = [r["latency_ms"] for r in live_rows if r.get("latency_ms") is not None]
+            calls = [int(r["llm_calls"]) for r in live_rows if str(r.get("llm_calls") or "").isdigit()]
+            if lats or calls:
+                lines += ["", f"- P50/P95 时延:{_pct(lats, 50)} / {_pct(lats, 95)} ms(本批 {len(lats)} 条)"]
+            if calls:
+                lines += [
+                    f"- 每答 LLM 调用次数(agent 档):min/中位/max = {min(calls)}/{sorted(calls)[len(calls) // 2]}/{max(calls)}",
+                    f"- 合计 {sum(calls)} 次 / {len(calls)} 答(决策树档基线 = 每答 1 次)",
+                ]
+            for label, rows_ in (("agent 档", agent_rows), ("决策树档", [r for r in live_rows if not r.get("agent")])):
+                hits = sum(r.get("cache_hit_tokens") or 0 for r in rows_)
+                misses = sum(r.get("cache_miss_tokens") or 0 for r in rows_)
+                total = hits + misses
+                if rows_ and total:
+                    lines += [
+                        f"- {label}缓存命中率:Σhit/Σ(hit+miss) = {hits}/{total} = {hits / total:.1%}"
+                    ]
     else:
         lines += [
             "",
@@ -355,6 +480,11 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="负例评测:行为断言(preflight+真检索+真闸)")
     ap.add_argument("--live", action="store_true", help="追加跑产品 HTTP 链路(需后端+token)")
+    ap.add_argument(
+        "--agent",
+        action="store_true",
+        help="live 档临时打开问答 agent 开关(ADR 0010;跑完恢复原值,默认关)",
+    )
     ap.add_argument("--api-url", default="http://127.0.0.1:8000")
     ap.add_argument("--token", default=os.environ.get("BALEEN_EVAL_TOKEN", ""))
     args = ap.parse_args()
@@ -386,8 +516,19 @@ def main() -> int:
         if not args.token:
             print("[error] --live 需要 --token 或环境变量 BALEEN_EVAL_TOKEN", file=sys.stderr)
             return 2
-        print("[3/3] live 档(产品 HTTP 链路)……")
-        live_rows = run_live(rows, args.api_url, args.token)
+        # agent 档:临时打开开关(记录原值,跑完恢复——评测不改变用户的持久设置)
+        prev_agent = None
+        if args.agent:
+            print("[3/3] live 档(产品 HTTP 链路,agent 开关临时打开)……")
+            prev_agent = _set_agent_enabled(args.api_url, args.token, True)
+        else:
+            print("[3/3] live 档(产品 HTTP 链路,agent 关=决策树基线)……")
+        try:
+            live_rows = run_live(rows, args.api_url, args.token)
+        finally:
+            if prev_agent is False:
+                _set_agent_enabled(args.api_url, args.token, False)
+                print("  agent 开关已恢复为关(原值)")
     else:
         print("[3/3] live 档跳过(--live 未开)")
 

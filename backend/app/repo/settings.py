@@ -25,6 +25,7 @@ class SettingsRepo(Repo):
         llm_context_tokens: int | None = None,
         llm_max_output_tokens: int | None = None,
         allow_diagrams: bool | None = None,
+        agent_enabled: bool | None = None,
     ) -> AppSettings:
         """按传入字段更新;None = 保持不变,空串/0 = 清空(回退默认/兜底)。api_key 仅非空时更新。"""
         row = await self.get()
@@ -50,5 +51,7 @@ class SettingsRepo(Repo):
             )
         if allow_diagrams is not None:
             row.allow_diagrams = allow_diagrams
+        if agent_enabled is not None:
+            row.agent_enabled = agent_enabled
         await self.session.flush()
         return row

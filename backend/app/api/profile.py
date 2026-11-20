@@ -53,6 +53,7 @@ class ProfileSettings(BaseModel):
     llm_context_tokens: int | None  # 与 SettingsOut 同口径
     llm_max_output_tokens: int | None
     allow_diagrams: bool  # 与 SettingsOut 同口径
+    agent_enabled: bool  # 与 SettingsOut 同口径(问答 agent 灰度开关,默认关)
 
 
 class ProfileOut(BaseModel):
@@ -106,5 +107,6 @@ async def read_profile(
             allow_diagrams=(
                 True if (row is None or row.allow_diagrams is None) else bool(row.allow_diagrams)
             ),
+            agent_enabled=bool(row and row.agent_enabled),
         ),
     )

@@ -62,6 +62,9 @@ class QaMessage(Base):
     cost_tokens: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     cache_hit_tokens: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
     cache_miss_tokens: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    # agent 步骤留痕(ADR 0010 授权审计):每步 {step, kind, tool, arg, result, latency_ms}。
+    # NULL = 老路径(决策树)的回答 / user 消息;agent 开关开的回答才有值。
+    trace: Mapped[list | None] = mapped_column(JSONB, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

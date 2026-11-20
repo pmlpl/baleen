@@ -12,7 +12,7 @@
 
 ## 契约与决策
 
-- [API 契约 v29](docs/api.md) — 前后端接口（版本以「变更记录」为准）
+- [API 契约 v31](docs/api.md) — 前后端接口（版本以「变更记录」为准）
 - ADR（技术决策，答辩素材）：
   - [0001 架构基线](docs/adr/0001-architecture-baseline.md)
   - [0002 解析栈](docs/adr/0002-parsing-stack.md)
@@ -23,6 +23,7 @@
   - [0007 B 站字幕导入](docs/adr/0007-bilibili-subtitle-import.md)
   - [0008 G2 变编辑](docs/adr/0008-g2-judge-to-editor.md)
   - [0009 视频异步提取](docs/adr/0009-async-video-extraction.md)
+  - [0010 问答链 agent 自主权边界](docs/adr/0010-qa-agent-harness.md)
 - [笔记格式规范](docs/note-format.md) — 完整笔记契约（格式层+内容层），人/AI 写笔记前必读；charter 由问卷生成存 DB，不再独立成文件
 
 ## 交付历史

@@ -78,6 +78,7 @@ class QaRepo(Repo):
         cost_tokens: int = 0,
         cache_hit_tokens: int = 0,
         cache_miss_tokens: int = 0,
+        trace: list | None = None,
     ) -> QaMessage:
         row = QaMessage(
             owner_id=self.owner_id,
@@ -90,6 +91,7 @@ class QaRepo(Repo):
             cost_tokens=cost_tokens,
             cache_hit_tokens=cache_hit_tokens,
             cache_miss_tokens=cache_miss_tokens,
+            trace=trace,
         )
         self.session.add(row)
         await self.session.flush()

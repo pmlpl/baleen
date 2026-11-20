@@ -32,7 +32,8 @@ from app.api.library import RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import QaRepo
 from app.service.llm import LLMClient, LLMError, estimate_tokens
-from app.service.llm.resolve import resolve_llm_config, resolve_tavily_key
+from app.service.llm.resolve import resolve_agent_enabled, resolve_llm_config, resolve_tavily_key
+from app.service.qa.agent import run_agent
 from app.service.qa.answerer import (
     _EMPTY_ANSWER,
     ContextHit,
@@ -139,6 +140,9 @@ class MessageOut(BaseModel):
     # 比按轮次平均各轮 rate 更接近真实的 token 级缓存效率
     cache_hit_tokens: int
     cache_miss_tokens: int
+    # agent 步骤留痕(ADR 0010 授权审计):每步 {step, kind, tool, arg, result, latency_ms}。
+    # None = 老路径(决策树)回答 / user 消息;开关开且回答出自 agent loop 才有值。
+    agent_trace: list[dict] | None = None
 
 
 class ChatResponse(BaseModel):
@@ -332,6 +336,7 @@ def _message_out(m: QaMessage) -> MessageOut:
         cache_hit_rate=_cache_hit_rate(m.cache_hit_tokens, m.cache_miss_tokens),
         cache_hit_tokens=m.cache_hit_tokens,
         cache_miss_tokens=m.cache_miss_tokens,
+        agent_trace=m.trace,
     )
 
 
@@ -403,89 +408,122 @@ async def chat(
     )
     llm_user_text = messages[-1]["content"]
 
-    # 4.5) 工具链兜底:库内没命中 OR 命中但不相关(正文不含查询关键词) → 联网搜索。
-    #   但用户挂了图时图本身就是内容(问的常是「这图讲什么」),搜「图片/内容」只会
-    #   搜出 OCR 工具之类——所以挂图不走联网,让视觉模型直接看图回答。
-    web_results: list[dict[str, str]] = []
+    # 4.4) 问答 agent 灰度(ADR 0010):开关开 → 脑在 loop 里选工具(换词再搜/何时转联网),
+    #   入口契约/预算三道闸/出口校验在马具;脑没给出答案(预算耗尽/LLM 失败/空答案)→
+    #   返回 None,回落下面 4.5/5 的现有决策树——最坏情况 = 现状。开关默认关,关 = 零改动。
     tavily_key = await resolve_tavily_key(session, owner_id)
-    kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
-    if kb_irrelevant and tavily_key and not user_images:
-        try:
-            web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
-        except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
-            web_results = []
+    agent_qa: QaResult | None = None
+    if await resolve_agent_enabled(session, owner_id):
+        agent_qa = await run_agent(
+            payload.question,
+            kb_hits,
+            retrieve=retrieve,
+            client=llm,
+            owner_id=owner_id,
+            top_k=payload.top_k,
+            history=history,
+            ref_notes=ref_notes,
+            attachments=attachments,
+            digest_summaries=digest_summaries,
+            images=user_images + await _load_hit_images(session, owner_id, kb_hits),
+            has_user_images=bool(user_images),
+            tavily_key=tavily_key,
+        )
+
+    # 4.5) 工具链兜底(决策树,agent 关/agent 回落时走):库内没命中 OR 命中但不相关
+    #   (正文不含查询关键词) → 联网搜索。但用户挂了图时图本身就是内容(问的常是
+    #   「这图讲什么」),搜「图片/内容」只会搜出 OCR 工具之类——所以挂图不走联网,
+    #   让视觉模型直接看图回答。
+    web_results: list[dict[str, str]] = []
+    if agent_qa is None:
+        kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
+        if kb_irrelevant and tavily_key and not user_images:
+            try:
+                web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
+            except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
+                web_results = []
 
     # 4) 存 user 消息(两份:content 给人看,llm_content 给下轮 LLM 重放)
     user_msg = await repo.add_message(
         qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
     )
 
-    # 5) LLM(同步 → to_thread,不阻塞事件循环):联网结果走 web 版,否则库内版
-    used_web = bool(web_results)
-    # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图,上下文来自搜索结果)
-    hit_images = [] if used_web else await _load_hit_images(session, owner_id, kb_hits)
-    if used_web:
-        qa: QaResult = await asyncio.to_thread(
-            answer_web,
-            payload.question,
-            web_results,
-            history=history,
-            client=llm,
-            ref_notes=ref_notes,
-            attachments=attachments,
-            digest_summaries=digest_summaries,
-            images=user_images,
-        )
+    # 5) LLM(同步 → to_thread,不阻塞事件循环):agent 开且成功 → 用 agent 答案;
+    #    否则联网结果走 web 版,库内版走 answer([NO_KB] 二段兜底)——现有决策树
+    trace: list[dict] | None = None
+    if agent_qa is not None:
+        qa = agent_qa
+        agent_meta = qa.meta.get("agent") or {}
+        used_web = bool(agent_meta.get("used_web"))
+        trace = agent_meta.get("steps")
     else:
-        qa = await asyncio.to_thread(
-            answer,
-            payload.question,
-            kb_hits,
-            history=history,
-            client=llm,
-            ref_notes=ref_notes,
-            attachments=attachments,
-            digest_summaries=digest_summaries,
-            images=user_images + hit_images,
-        )
-        # 二段兜底:LLM 用 [NO_KB] 标记「笔记答不了」→ 联网搜;没配 Tavily 就用它自己的
-        # 知识正面回答(带标注)。相关性检查只认字面(「数据库」会命中发票笔记),
-        # 语义层面的「答不了」由 LLM 自己判。
-        if qa.answer.startswith("[NO_KB]"):
-            body = qa.answer.removeprefix("[NO_KB]").strip()
-            # 挂了图时不走联网(图本身是内容);也没必要加「笔记库没有」前缀
-            if tavily_key and not user_images:
-                try:
-                    web_results = await asyncio.to_thread(
-                        search_web, search_query, api_key=tavily_key
+        used_web = bool(web_results)
+        # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图,上下文来自搜索结果)
+        hit_images = [] if used_web else await _load_hit_images(session, owner_id, kb_hits)
+        if used_web:
+            qa: QaResult = await asyncio.to_thread(
+                answer_web,
+                payload.question,
+                web_results,
+                history=history,
+                client=llm,
+                ref_notes=ref_notes,
+                attachments=attachments,
+                digest_summaries=digest_summaries,
+                images=user_images,
+            )
+        else:
+            qa = await asyncio.to_thread(
+                answer,
+                payload.question,
+                kb_hits,
+                history=history,
+                client=llm,
+                ref_notes=ref_notes,
+                attachments=attachments,
+                digest_summaries=digest_summaries,
+                images=user_images + hit_images,
+            )
+            # 二段兜底:LLM 用 [NO_KB] 标记「笔记答不了」→ 联网搜;没配 Tavily 就用它自己的
+            # 知识正面回答(带标注)。相关性检查只认字面(「数据库」会命中发票笔记),
+            # 语义层面的「答不了」由 LLM 自己判。
+            if qa.answer.startswith("[NO_KB]"):
+                body = qa.answer.removeprefix("[NO_KB]").strip()
+                # 挂了图时不走联网(图本身是内容);也没必要加「笔记库没有」前缀
+                if tavily_key and not user_images:
+                    try:
+                        web_results = await asyncio.to_thread(
+                            search_web, search_query, api_key=tavily_key
+                        )
+                    except Exception:  # noqa: BLE001 —— 搜索失败走自身知识口径
+                        web_results = []
+                if web_results:
+                    qa = await asyncio.to_thread(
+                        answer_web,
+                        payload.question,
+                        web_results,
+                        history=history,
+                        client=llm,
+                        ref_notes=ref_notes,
+                        attachments=attachments,
+                digest_summaries=digest_summaries,
+                        images=user_images,
                     )
-                except Exception:  # noqa: BLE001 —— 搜索失败走自身知识口径
-                    web_results = []
-            if web_results:
-                qa = await asyncio.to_thread(
-                    answer_web,
-                    payload.question,
-                    web_results,
-                    history=history,
-                    client=llm,
-                    ref_notes=ref_notes,
-                    attachments=attachments,
-            digest_summaries=digest_summaries,
-                    images=user_images,
-                )
-                used_web = True
-            elif user_images:
-                # 挂图 + [NO_KB]:视觉模型已据图给的回答,直接用,不加「笔记库没有」前缀
-                qa = qa.model_copy(update={"answer": body, "citations": []})
-            else:
-                qa = qa.model_copy(
-                    update={
-                        "answer": "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n" + body,
-                        "citations": [],
-                    }
-                )
+                    used_web = True
+                elif user_images:
+                    # 挂图 + [NO_KB]:视觉模型已据图给的回答,直接用,不加「笔记库没有」前缀
+                    qa = qa.model_copy(update={"answer": body, "citations": []})
+                else:
+                    qa = qa.model_copy(
+                        update={
+                            "answer": (
+                                "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n" + body
+                            ),
+                            "citations": [],
+                        }
+                    )
 
-    # 5) 存 assistant 消息(出处 + 计费 + 缓存计数),整体 commit(失败全回滚)
+    # 5) 存 assistant 消息(出处 + 计费 + 缓存计数 + agent 留痕),整体 commit(失败全回滚)
     assistant_msg = await repo.add_message(
         qa_session.id,
         role="assistant",
@@ -495,6 +533,7 @@ async def chat(
         cost_tokens=qa.cost_tokens or 0,
         cache_hit_tokens=qa.prompt_cache_hit_tokens or 0,
         cache_miss_tokens=qa.prompt_cache_miss_tokens or 0,
+        trace=trace,
     )
     await session.commit()
 
@@ -592,19 +631,47 @@ async def chat_stream_endpoint(
     )
     llm_user_text = messages[-1]["content"]
 
-    # 工具链兜底:库内没命中 OR 命中但不相关 → 联网搜索。
+    # 4.4) 问答 agent 灰度(ADR 0010):开关开 → 脑在 loop 里选工具(流开始前完成,
+    #   meta 事件即可带 agent 标记与最终 used_web);没出答案回落现有决策树。
+    tavily_key = await resolve_tavily_key(session, owner_id)
+    agent_qa: QaResult | None = None
+    if await resolve_agent_enabled(session, owner_id):
+        agent_qa = await run_agent(
+            payload.question,
+            kb_hits,
+            retrieve=retrieve,
+            client=llm,
+            owner_id=owner_id,
+            top_k=payload.top_k,
+            history=history,
+            ref_notes=ref_notes,
+            attachments=attachments,
+            digest_summaries=digest_summaries,
+            images=user_images + await _load_hit_images(session, owner_id, kb_hits),
+            has_user_images=bool(user_images),
+            tavily_key=tavily_key,
+        )
+    agent_meta = (agent_qa.meta.get("agent") or {}) if agent_qa is not None else {}
+
+    # 工具链兜底(决策树,agent 关/agent 回落时走):库内没命中 OR 命中但不相关 → 联网搜索。
     #   挂了图时不走联网(图本身是内容,搜「图片/内容」只会搜出 OCR 工具),让视觉模型看图答。
     web_results: list[dict[str, str]] = []
-    tavily_key = await resolve_tavily_key(session, owner_id)
-    kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
-    if kb_irrelevant and tavily_key and not user_images:
-        try:
-            web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
-        except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
-            web_results = []
-    used_web = bool(web_results)
+    if agent_qa is None:
+        kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
+        if kb_irrelevant and tavily_key and not user_images:
+            try:
+                web_results = await asyncio.to_thread(
+                    search_web, search_query, api_key=tavily_key
+                )
+            except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
+                web_results = []
+    used_web = bool(web_results) or bool(agent_meta.get("used_web"))
     # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图);须在 gen() 闭包捕获 messages 前完成
-    hit_images = [] if used_web else await _load_hit_images(session, owner_id, kb_hits)
+    hit_images = (
+        []
+        if (used_web or agent_qa is not None)
+        else await _load_hit_images(session, owner_id, kb_hits)
+    )
     attach_images(messages, user_images + hit_images)
 
     user_msg = await repo.add_message(
@@ -617,6 +684,7 @@ async def chat_stream_endpoint(
         nonlocal used_web  # marker 兜底会改写;不声明会变成局部变量,meta 处就崩
         accumulated: list[str] = []
         usage_event: dict | None = None
+        trace_steps: list[dict] | None = None
         try:
             yield _sse(
                 "meta",
@@ -625,6 +693,8 @@ async def chat_stream_endpoint(
                     "session_title": qa_session.title,
                     "search_query": search_query,
                     "used_web": used_web,
+                    # 本轮是否走了 agent loop(ADR 0010;关/回落 = False → 现有决策树)
+                    "agent": agent_qa is not None,
                     "images_attached": len(hit_images) + len(user_images),  # 命中图+附件图
                     "model": llm.model,  # 本次回答用的模型,前端状态行显示
                     # 检索/改写花了多久(秒):前端据此区分「在检索」还是「在等模型」
@@ -632,7 +702,19 @@ async def chat_stream_endpoint(
                     "user_message": user_out.model_dump(),
                 },
             )
-            if web_results:
+            if agent_qa is not None:
+                # agent 路径:loop 已在流开始前完成(工具轮次在 meta 之后才可能发生),
+                # 与联网兜底同款 UX——整段答案作为一帧 delta 下发
+                accumulated.append(agent_qa.answer)
+                yield _sse("delta", {"text": agent_qa.answer})
+                answer_text = agent_qa.answer
+                citations = agent_qa.citations
+                cost_tokens = agent_qa.cost_tokens or 0
+                model_name = agent_qa.model or llm.model
+                cache_hit = agent_qa.prompt_cache_hit_tokens or 0
+                cache_miss = agent_qa.prompt_cache_miss_tokens or 0
+                trace_steps = agent_meta.get("steps")
+            elif web_results:
                 # 联网兜底走非流式回答(web 上下文结构不同),整段作为一帧 delta 下发
                 qa = await asyncio.to_thread(
                     answer_web,
@@ -758,6 +840,7 @@ async def chat_stream_endpoint(
                 cost_tokens=cost_tokens,
                 cache_hit_tokens=cache_hit,
                 cache_miss_tokens=cache_miss,
+                trace=trace_steps,
             )
             await session.commit()
             # 冻结分段摘要:近窗超阈值则异步冻结(fire-and-forget;失败静默)。

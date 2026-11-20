@@ -1,4 +1,4 @@
-# API 契约 v30
+# API 契约 v31
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -387,19 +387,21 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 ```json
 {
   "session_id": 9, "session_title": "闭包是什么",
-  "user_message": { "id": 1, "role": "user", "content": "…", "citations": [], "model": null, "cost_tokens": 0, "cache_hit_rate": null, "cache_hit_tokens": 0, "cache_miss_tokens": 0 },
-  "assistant_message": { "id": 2, "role": "assistant", "content": "…[1]", "citations": [{ "n": 1, "note_id": 156, "note_title": "…", "heading_path": "…", "snippet": "…" }], "model": "glm-5.2", "cost_tokens": 2169, "cache_hit_rate": 0.4843, "cache_hit_tokens": 15231, "cache_miss_tokens": 16200 },
+  "user_message": { "id": 1, "role": "user", "content": "…", "citations": [], "model": null, "cost_tokens": 0, "cache_hit_rate": null, "cache_hit_tokens": 0, "cache_miss_tokens": 0, "agent_trace": null },
+  "assistant_message": { "id": 2, "role": "assistant", "content": "…[1]", "citations": [{ "n": 1, "note_id": 156, "note_title": "…", "heading_path": "…", "snippet": "…" }], "model": "glm-5.2", "cost_tokens": 2169, "cache_hit_rate": 0.4843, "cache_hit_tokens": 15231, "cache_miss_tokens": 16200, "agent_trace": null },
   "search_query": "Promise 有哪几种状态", "took_ms": 7115
 }
 ```
+
+- **`agent_trace`（v31，ADR 0010）**：问答 agent 的每步留痕（授权审计），条目 `{step, kind, tool, arg, result, latency_ms}`（kind ∈ llm / tool / repair / budget；tool 轮的 arg 是检索/搜索词摘要）。**null = 该回答走现有决策树 / user 消息**；开关开且回答出自 agent loop 才有值，随 `GET /api/qa/sessions/{id}` 与流式 `done` 事件一并透出（前端旧版忽略该字段不受影响）
 
 ### `POST /api/qa/chat/stream`（SSE 流式，同请求体）
 
 响应 `text/event-stream`，事件序：`meta` → `delta`* → `done`；LLM 失败 → `error`（用户消息已落库）。
 
-- `meta`：`{session_id, session_title, search_query, user_message}`
-- `delta`：`{text}`（正文增量；推理模型的思考过程不下发）
-- `done`：`{assistant_message, took_ms}`（完整消息含出处与 cache_hit_rate，已落库）
+- `meta`：`{session_id, session_title, search_query, used_web, agent, images_attached, model, prepare_ms, user_message}`（`agent`（v31）= 本轮是否走了 agent loop）
+- `delta`：`{text}`（正文增量；推理模型的思考过程不下发；agent 路径/联网兜底的回答为整帧 delta）
+- `done`：`{assistant_message, took_ms}`（完整消息含出处、cache_hit_rate 与 agent_trace，已落库）
 
 ### `POST /api/parse`（v28 新增，📎 附件统一解析，不入库）
 
@@ -436,6 +438,8 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 **`cache_hit_rate` 口径**：prompt 前缀缓存命中占比 = hit/(hit+miss)；上游未命中时不下发字段 → `null`（前端显示「—」）。字段双格式归一：DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`。v29 起消息附带原始计数 `cache_hit_tokens` / `cache_miss_tokens`（双 0 = 该条无缓存数据），前端问答页用它算会话级**平均缓存命中率** Σhit/Σ(hit+miss)（token 加权，比各轮 rate 算术平均更贴近真实缓存效率），替代此前「取最近一条非空 rate」的口径。
 
 **联网兜底**：库内未命中且设置页配了 Tavily key → 自动搜网，回答基于搜索结果、citations 带 `url`（`note_id=null`，前端渲染外链）、`used_web=true`；未配 key 或搜索失败 → 维持「没找到」口径。**挂了图片附件（`images` 非空）时不走联网**——图本身是内容（问的常是「这图讲什么」），搜「图片/内容」只会搜出 OCR 工具之类；让视觉模型直接看图回答（`answer` 路径附图），`[NO_KB]` 兜底也跳过联网、不加「笔记库没有」前缀。
+
+**问答 agent 灰度（v31，ADR 0010）**：设置页 `agent_enabled`（默认**关**）= 上述检索→相关性判定→[NO_KB]→联网/自答的硬编码决策树；**开** = 决策树上翻为 agent loop——LLM 在 loop 里决定「换个词再搜（`search_kb`）/ 何时转联网（`search_web`）/ 直接答」，首轮检索与消息前缀字节与现状一致。护栏全在代码（预算 MAX_STEPS/每步超时/总预算，超了回落决策树，**最坏情况 = 现状**；引用真实性校验拒收假 `[n]`；挂图不给联网工具）。配额上每答多 1–2 次 LLM 调用（实测负例 8 条均为 2 次），每步留痕进 `agent_trace`。请求/响应契约不变（前端零改动）。
 
 ### `POST /api/qa/sessions/{id}/note-plan`（阶段4 增强）
 
@@ -478,16 +482,17 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 ### `GET /api/settings`
 
 ```json
-{ "llm_base_url": "http://…", "llm_model": "glm-5.2", "api_key_set": true, "api_key_tail": "abcd" }
+{ "llm_base_url": "http://…", "llm_model": "glm-5.2", "api_key_set": true, "api_key_tail": "abcd", "llm_context_tokens": null, "llm_max_output_tokens": null, "allow_diagrams": true, "agent_enabled": false }
 ```
 
 ### `PUT /api/settings`
 
 ```json
-{ "llm_base_url": "…", "llm_model": "…", "llm_api_key": "…" }
+{ "llm_base_url": "…", "llm_model": "…", "llm_api_key": "…", "agent_enabled": true }
 ```
 
 - 三字段均可省略（= 保持不变）；`llm_api_key` 传空串 = 保持不变，传新值 = 覆盖
+- **`agent_enabled`（v31，ADR 0010）**：问答 agent 灰度开关，**默认关**——关 = 走现有决策树（行为与现状完全一致），开 = LLM 在 loop 里选工具（见 §5 agent 灰度段）；旧客户端省略该字段 = 保持不变
 - 已知边界：worker 的 LLM 配置暂仍读 .env（设置页只影响问答/改写链路）；charter 已改为 DB 优先（见 §8）
 
 ---
@@ -566,6 +571,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-20 | v31 | **问答 agent 灰度（ADR 0010）**：§6 设置加 `agent_enabled`（**默认关**；关 = 走现有决策树，行为与现状完全一致；开 = answerer 决策树上翻 tool-call loop——LLM 在 loop 里决定换词再搜 `search_kb` / 何时转联网 `search_web` / 直接答，预算三道闸 MAX_STEPS/每步超时/总预算超了回落决策树，最坏情况 = 现状）。§5 消息响应（`user_message`/`assistant_message`/`GET /sessions/{id}`/流式 `done`）新增 `agent_trace`（每步留痕 `{step, kind, tool, arg, result, latency_ms}`，null = 老路径/user 消息）；流式 `meta` 事件新增 `agent` 标记。迁移 0016：`app_settings.agent_enabled`（默认 false）+ `qa_messages.trace`（JSONB 授权审计）。前端契约不变（零改动，新增字段旧版忽略）。**背景**：`_has_relevant_hit` 字面闸判「沾边」就混合作答（n02 Hadoop 案例，缺陷台账失败模式④）；「这段只讲了起源没回答组件清单，该换词再搜或转联网」是只有 LLM 能做的语义判断。首跑教训（已修）：addendum 必须显式声明对旧规则 2（[NO_KB]+自身知识）的优先级，否则模型从不调 search_web |
 | 2026-11-20 | v30 | **B 站扫码登录半自动获取 SESSDATA**：§2 新增 `POST /api/bilibili/login`（弹真浏览器扫码，同步阻塞 ≤3.5 分钟，落库返回 uid）+ `GET /api/bilibili/login`（登录态查询，SESSDATA 永不回显）。被风控的 whisper 导入在 worker 兜底自动触发扫码（`video_stage`/`video_log` 提示 + 扫码成功原地重试兜底）；视频笔记页加「B 站登录」手动按钮。迁移 0015：`app_settings` 加 `bilibili_sessdata` / `bilibili_sessdata_at` / `bilibili_uid` 三列（DB 优先热生效，`.env` 的 `BILIBILI_SESSDATA` 仅回退）。**背景**：B 站浏览器兜底需要 SESSDATA 门票但 F12 手抄从未发生过（11-19 财富自由 5583 两次导入死于此）；扫码全程真浏览器（红线：SESSDATA 不做 HTTP 重放——TLS 指纹打分实测无效），既有消费者不变只换值的来源 |
 | 2026-11-18 | v29 | **问答缓存命中率改会话平均**：`§5` 消息响应（`user_message` / `assistant_message` / `GET /api/qa/sessions/{id}` 各消息 / 流式 `done` 事件）新增 `cache_hit_tokens` / `cache_miss_tokens` 原始计数（int，双 0 = 该条无缓存数据，与 `cache_hit_rate: null` 同判）；前端问答页输入框下方的「缓存命中率」（取最近一条非空 rate）改为**「平均缓存命中率」** = Σhit/Σ(hit+miss)，token 加权聚合全会话，联网搜索轮（双 0）天然不进分母。**背景**：按轮次算术平均会把长消息（几十 k 缓存 token、命中率高）和短消息（几百 token、命中率低）等权摊平，偏离真实 token 级缓存效率；`cache_hit_rate` 逐消息字段保留不变 |
 | 2026-11-17 | v28 | **📎 附件统一后端解析 + 大文件分层分析**：①新增 `POST /api/parse`（§5，multipart 单文件 ≤ 10 MB，不入库）——复用 G0 `parse_file`，docx/pdf/pptx/md/csv/txt/html 一套口径；响应 `{status, text, mode, images, warnings, message, truncated}`。②新增 `service/parse/html_parser.py`（标准库 HTMLParser 零新依赖）：剥 style/script/head、块级标签断行、h1-h6 产 heading；`<img src="data:...">` 经 `media_sink` 提取字节（导入路径存库/解析路径回传前端视觉通道），外链不联网抓；`PARSERS` 加 `.html/.htm`（`ALLOWED_EXTS` 自动扩大，导入同步支持 HTML）；`media_sink` 特判从 md 扩到 md/html。③新增 `service/qa/file_analyzer.py`（map-reduce）：正文 > 40000 字符分块（20000/块，重叠 500）并行 LLM 提取 → 合并 ≤ 20000 字符报告（`mode=analyzed`）；20 块上限 → `FileTooLargeError` 422 提示拆分；单块失败降级保留原文头部。④`POST /api/qa/chat` 的 `attachments[].text` 上限 20000 → 40000（与解析分层对齐）。⑤前端 `QaView` 📎 文档类全部走 `/api/parse`（删前端白名单/截断/编码逻辑），`api/parse.ts` 新增；chips 加「已分析」标记；解析中显示进行中提示。**背景**：HTML 简历 18 万字符 90% 是 base64，旧前端读文本被 20000 截断；附件全文进 `llm_content` 每轮重放是硬约束，故分层而非放宽上限 |

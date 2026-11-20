@@ -10,7 +10,7 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-20 · （11-19 深夜批:视频笔记复核/六连修/dedupe 假阳性修复/插图方案C+结构图闸/bootstrap 统计修复）B站扫码登录半自动获取 SESSDATA(主人 7 条人工裁决+四把取证铁锤,台账 77→88 八失败模式演进)→ 当天修复三轮:六连修(父块展示序列化+渲染/帧知识相关性+双候选+零帧警告/幂等守卫/标题数量词/灯箱)→ 18:00 定时复跑批次(3B1B 96%✓/39前端网关无罪✓/财富自由 B站风控→抖音版 89%✓,新抓 dedupe 假阳性 A 档)→ 晚间小修(重复帧硬守卫 _dedupe_video_doc+95% 第三采样点)→ **深夜 dedupe 假阳性修复**(`_reset_stale_done_job` 以 source_created 为判据+2 条真 DB 回归,撤修复即 FAIL)→ **主人拍板两件落地**:插图方案 C(按宽高比自适应)+ 生成式结构图「有依据才生」闸→ 标签审计修正 1 条(87efed→reject,ok 口径误拒率全量 0/47、test 0/17、dev 0/30)→ **bootstrap 统计修复**(比例指标统一 CP 精确区间:0/47 从谎报 `[0%,0%]` 改为诚实 `[0%,7.5%]`);→ **B站扫码登录半自动获取 SESSDATA**(主人深夜立项三拍板:app_settings DB 落盘+视频页手动按钮+180s 超时;迁移 0015 三列/resolve 现读热生效/bilibili_login.py 探针验证链路 hover→立即登录→QR/worker 兜底缺凭证自动弹窗+原地重试/POST+GET /api/bilibili/login/VideoView 按钮;顺手修 bilibili_extractor re.sub 潜伏 NameError——SESSDATA 从未配置过该路径是死代码);基线 **598 passed**
+**最后更新**：2026-11-20 · （11-19 深夜批:视频笔记复核/六连修/dedupe 假阳性修复/插图方案C+结构图闸/bootstrap 统计修复）B站扫码登录半自动获取 SESSDATA(主人 7 条人工裁决+四把取证铁锤,台账 77→88 八失败模式演进)→ 当天修复三轮:六连修(父块展示序列化+渲染/帧知识相关性+双候选+零帧警告/幂等守卫/标题数量词/灯箱)→ 18:00 定时复跑批次(3B1B 96%✓/39前端网关无罪✓/财富自由 B站风控→抖音版 89%✓,新抓 dedupe 假阳性 A 档)→ 晚间小修(重复帧硬守卫 _dedupe_video_doc+95% 第三采样点)→ **深夜 dedupe 假阳性修复**(`_reset_stale_done_job` 以 source_created 为判据+2 条真 DB 回归,撤修复即 FAIL)→ **主人拍板两件落地**:插图方案 C(按宽高比自适应)+ 生成式结构图「有依据才生」闸→ 标签审计修正 1 条(87efed→reject,ok 口径误拒率全量 0/47、test 0/17、dev 0/30)→ **bootstrap 统计修复**(比例指标统一 CP 精确区间:0/47 从谎报 `[0%,0%]` 改为诚实 `[0%,7.5%]`);→ **B站扫码登录半自动获取 SESSDATA**(主人深夜立项三拍板:app_settings DB 落盘+视频页手动按钮+180s 超时;迁移 0015 三列/resolve 现读热生效/bilibili_login.py 探针验证链路 hover→立即登录→QR/worker 兜底缺凭证自动弹窗+原地重试/POST+GET /api/bilibili/login/VideoView 按钮;顺手修 bilibili_extractor re.sub 潜伏 NameError——SESSDATA 从未配置过该路径是死代码);→ **问答 agent harness L1(ADR 0010,api.md v31)**:answerer 决策树上翻 tool-call loop(脑在 loop 里选 search_kb 换词再搜/search_web 何时转联网/直接答;LLM client 加 tools/tool_choice/timeout 透传)——三明治结构(入口契约 system/出口校验引用真实性+拒收重写/预算三道闸 MAX_STEPS+45s 每步+120s 总预算在马具,超了回落决策树,最坏情况=现状);`app_settings.agent_enabled` 灰度开关**默认关**(关=行为与现状字节一致)+`qa_messages.trace` 每步留痕(迁移 0016,MessageOut.agent_trace 透出);负例 live 两档 8/8 PASS(决策树档基线+agent 档;agent 档判据精细化**待主人复核**:FAIL=库内引用且未联网,联网答案的背景句真归因记 PASS);首跑抓真缺陷:旧规则2的 [NO_KB]+自身知识压过工具指引→addendum 显式声明优先级(台账落账);cache 探针:tools 不打断前缀缓存(agent 开 62.4% vs 关 56.7%);基线 **629 passed**
 
 **backlog #1/#3/#6 全部落地(2026-11-19 深夜续)**：#3 渲染回归探针 35 断言(探针当天抓出 `looksLikeCode` 把 `**粗体**` 开头段落吞成代码的真缺陷,400 父块对拍只 4 处变化全是修复)+ g2_eval 视觉通道修复(9 条 G0 假缺口)+ #6 帧选择评测(16 条题集,首跑 5 FAIL 全对应主人裁决)+ #1 驳回样本筛选工具(发现一个三方标注分歧待裁决)
 
@@ -60,6 +60,7 @@
 | **SVG 插图** | `frontend/src/utils/svg.ts` + QaView/NoteView 接入 + prompt 引导 | ✅ ```svg 代码块沙箱 iframe 渲染(sandbox 无 allow-* + CSP default-src 'none',零依赖);DOMParser 预量高;失败退化代码块+角标;浏览器截图验证含 script 的 SVG 不执行;存为笔记保留图块 |
 | **对话附件（v17→v28）** | `app/api/parse.py` + `service/qa/file_analyzer.py` + `service/parse/html_parser.py` + QaView 📎 | ✅ v28 起 📎 文档类统一走 `POST /api/parse`（复用 G0 不入库，HTML/docx/pdf/pptx/md/csv/txt 一套口径）；正文 > 40000 字符 map-reduce 分层分析（`mode=analyzed`，20 块上限→422）；`attachments[].text` 上限 20000→40000；图片走视觉通道（前端缩 1024px）；挂图不搜网；纯文本模型拒图时去图降级 |
 | **冻结分段摘要 digest（v28）** | `app/service/qa/digest.py` + `answerer.py`(`HISTORY_TOKEN_BUDGET`) | ✅ 老对话压成不可变「第二条 system」+ 近窗 append-only，**保前缀缓存**、止静默丢失、砍二次式成本；token > 100K 触发 / 200K 安全网；异步 arq 触发，旧消息不删、前端零改 |
+| **问答 agent harness（L1，ADR 0010）** | `app/service/qa/agent.py` + `llm/client.py`(tools 透传) + `api/qa.py`(接线) | ✅ answerer 决策树上翻 tool-call loop：脑选工具（search_kb 换词再搜 / search_web 何时转联网 / 直接答），预算三道闸+出口校验在马具（超了回落决策树，最坏=现状）；`agent_enabled` 灰度默认关（关=现状字节一致，api.md v31）；`qa_messages.trace` 每步留痕（迁移 0016）；负例两档 8/8 PASS，agent 档判据精细化待主人复核；前缀缓存实测不断（agent 62.4% vs 关 56.7%）；**前端零改动** |
 | **笔记渲染（v18）** | `frontend/src/utils/section.ts` | ✅ 表格/mermaid 重建；引用徽章可点（外链+站内）；文末出处清单；`finish_reason` 截断续写兜底；**格式渲染（2026-11-19）**：父块围栏代码块/列表/粗体/引用（chunker 父块 display 序列化 + 围栏/列表/引用/行内渲染,老笔记行为不变）;插图限宽 640px+点击灯箱;**插图按宽高比自适应（方案 C,主人拍板）**：`utils/figure-layout.ts` 在 img load 后按 naturalWidth/Height 分类——窄图(w/h ≤ 4/3,如 6015 的 1080×1920 竖屏帧)左浮动小图文字环绕,宽图(16:9 视频帧)保持居中限宽 640px,900px 以下回落单栏居中。**渲染回归探针（2026-11-19）**：`scripts/probe_section_render.mjs` 35 条断言钉住 6 个渲染分支+老笔记兼容+XSS 底线（esbuild 打包到 node 跑，与 math 探针同范式）；**探针当天就抓出一个真缺陷**——`looksLikeCode` 的注释规则 `/^\s*(\/\/|\/\*|\*)/` 把**任何以 `*` 开头的行**都判成代码，导致「以粗体开头的段落」整段被吞进 `<pre>`；400 个真实父块对拍，4 个变化全是修复（6096 两段误判代码恢复为正文+粗体），零副作用 |
 | **数学公式渲染** | `frontend/src/utils/math.ts` + `markdown.ts` | ✅ KaTeX 行内 `$...$`/块级 `$$...$$`,NoteView/QaView 共用;原文级占位保护(公式里 `[1]`/`**` 不被行内替换吃);pandoc 式启发式防美元价签误判;块级收集不越空行/标题/自闭合行(防吞正文成烂公式报红);20 边界用例探针(`scripts/probe_math_render.mjs`,含 QA 真实消息回归)全过 |
 | **B 站视频字幕导入（v20）** | `app/service/bilibili.py` + `POST /api/sources/url` + LibraryView URL 对话框 | ✅ 纯 HTTP(urllib)拉 CC/AI 字幕→markdown→现有管线；无字幕报错；SESSDATA 全局配置；有章节分 heading、字幕合段；34 测试 |
@@ -73,7 +74,7 @@
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  598 passed
+cd backend && uv run pytest -q     →  629 passed
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -111,6 +112,7 @@ cd backend && uv run pytest -q     →  598 passed
 → **575**（backlog#3 渲染回归探针 35 断言 + g2_eval 视觉通道接线 2 测;2026-11-19 深夜）
 → **585**（backlog#6 帧选择质量评测:题集 16 条期望 + 判定逻辑 10 测;2026-11-19 深夜）
 → **598**（B站扫码登录半自动获取 SESSDATA:qr_login 3 路+login_cb 重试链 4+API 5+worker cb 1 共 12 测;2026-11-20 凌晨）
+→ **629**（问答 agent harness L1:LLM client tools 透传 6+agent loop 单测 20+API 级灰度 5;2026-11-20）
 
 **任何新任务都不许把这个数降下来。**
 

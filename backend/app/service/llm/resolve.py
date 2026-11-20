@@ -100,7 +100,21 @@ async def resolve_allow_diagrams(session: AsyncSession, owner_id: int) -> bool:
     return bool(row.allow_diagrams)
 
 
+async def resolve_agent_enabled(session: AsyncSession, owner_id: int) -> bool:
+    """问答 agent 灰度开关(ADR 0010,2026-11-20):**默认关**。
+
+    行不存在或字段为 NULL/false → False = 走现有决策树,行为与现状完全一致;
+    true = answerer 决策树上翻为 agent loop(脑选工具,预算/校验在马具)。
+    每次请求现读 → 设置页保存后热生效。
+    """
+    row = await _row(session, owner_id)
+    if row is None or row.agent_enabled is None:
+        return False
+    return bool(row.agent_enabled)
+
+
 __all__ = [
+    "resolve_agent_enabled",
     "resolve_allow_diagrams",
     "resolve_bilibili_sessdata",
     "resolve_charter",

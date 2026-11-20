@@ -119,6 +119,123 @@ class TestChatSuccess:
         assert json.loads(transport.calls[0]["body"])["response_format"] == {"type": "json_object"}
 
 
+class TestFunctionCalling:
+    """tools / tool_choice 透传 + tool_calls 解析(ADR 0010)。None = 与现状一致,老调用方零改动。"""
+
+    def test_tools_and_tool_choice_passthrough(self):
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_kb",
+                    "description": "搜索笔记库",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"query": {"type": "string"}},
+                        "required": ["query"],
+                    },
+                },
+            }
+        ]
+        client, transport = _client([(200, _chat_body("ok"))])
+        client.chat(
+            [{"role": "user", "content": "hi"}], tools=tools, tool_choice="auto"
+        )
+        sent = json.loads(transport.calls[0]["body"])
+        assert sent["tools"] == tools
+        assert sent["tool_choice"] == "auto"
+
+    def test_no_tools_by_default_keeps_legacy_shape(self):
+        """不传 tools → 请求体没有 tools/tool_choice 字段(与现状字节一致,保前缀缓存)。"""
+        client, transport = _client([(200, _chat_body("ok"))])
+        client.chat([{"role": "user", "content": "hi"}])
+        sent = json.loads(transport.calls[0]["body"])
+        assert "tools" not in sent
+        assert "tool_choice" not in sent
+
+    def test_tool_calls_parsed(self):
+        body = json.dumps(
+            {
+                "model": "fake-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,  # 发起工具调用时 content 常为 null
+                            "tool_calls": [
+                                {
+                                    "id": "call_0",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "search_kb",
+                                        "arguments": '{"query": "hadoop 生态"}',
+                                    },
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"total_tokens": 30},
+            }
+        ).encode()
+        client, _ = _client([(200, body)])
+        result = client.chat([{"role": "user", "content": "hi"}], tools=[])
+        assert result.tool_calls == [
+            {
+                "id": "call_0",
+                "type": "function",
+                "function": {"name": "search_kb", "arguments": '{"query": "hadoop 生态"}'},
+            }
+        ]
+        assert result.content == ""  # null → 空串,不炸
+        assert result.finish_reason == "tool_calls"
+
+    def test_no_tool_calls_returns_empty_list(self):
+        client, _ = _client([(200, _chat_body("普通回答"))])
+        result = client.chat([{"role": "user", "content": "hi"}])
+        assert result.tool_calls == []
+
+    def test_malformed_tool_call_entries_skipped(self):
+        """缺 id / 缺 function.name 的坏条目跳过,不让单条坏数据炸整轮。"""
+        body = json.dumps(
+            {
+                "model": "fake-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "答",
+                            "tool_calls": [
+                                "不是dict",
+                                {"function": {"name": "no_id"}},  # 缺 id
+                                {"id": "call_1", "function": {"name": ""}},  # 缺 name
+                                {
+                                    "id": "call_2",
+                                    "type": "function",
+                                    "function": {"name": "search_web", "arguments": "{}"},
+                                },
+                            ],
+                        }
+                    }
+                ],
+                "usage": {"total_tokens": 30},
+            }
+        ).encode()
+        client, _ = _client([(200, body)])
+        result = client.chat([{"role": "user", "content": "hi"}], tools=[])
+        assert [tc["id"] for tc in result.tool_calls] == ["call_2"]
+        assert result.content == "答"
+
+    def test_per_call_timeout_override(self):
+        """timeout 覆盖传到 transport;默认 = 构造时的 self.timeout。"""
+        client, transport = _client([(200, _chat_body("ok")), (200, _chat_body("ok"))])
+        client.chat([{"role": "user", "content": "x"}], timeout=12.5)
+        assert transport.calls[0]["timeout"] == 12.5
+        client.chat([{"role": "user", "content": "x"}])
+        assert transport.calls[1]["timeout"] == 60.0  # DEFAULT_TIMEOUT
+
+
 class TestErrorClassification:
     def test_auth_failure_raises_without_leaking_key(self):
         client, transport = _client([(401, b'{"error":"invalid key"}')])

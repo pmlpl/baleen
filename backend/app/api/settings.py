@@ -29,6 +29,8 @@ class SettingsOut(BaseModel):
     llm_max_output_tokens: int | None  # None = 用 organizer 兜底(131072)
     # 结构图开关(默认 True)。True 也只是「允许」——真正该不该画由结构依据闸判定
     allow_diagrams: bool
+    # 问答 agent 灰度开关(ADR 0010,**默认关**)。关 = 走现有决策树,行为与现状完全一致
+    agent_enabled: bool
 
 
 class SettingsUpdate(BaseModel):
@@ -43,6 +45,8 @@ class SettingsUpdate(BaseModel):
     llm_max_output_tokens: int | None = Field(default=None, ge=0, le=1_000_000)
     # 结构图开关:None = 保持不变
     allow_diagrams: bool | None = None
+    # 问答 agent 开关:None = 保持不变;false = 显式关(与缺省同效)
+    agent_enabled: bool | None = None
 
 
 def _tail(secret: str | None) -> tuple[bool, str]:
@@ -68,6 +72,7 @@ async def read_settings(session: SessionDep, owner_id: CurrentOwnerDep) -> Setti
         allow_diagrams=(
             True if (row is None or row.allow_diagrams is None) else bool(row.allow_diagrams)
         ),
+        agent_enabled=bool(row and row.agent_enabled),
     )
 
 
@@ -83,6 +88,7 @@ async def update_settings(
         llm_context_tokens=payload.llm_context_tokens,
         llm_max_output_tokens=payload.llm_max_output_tokens,
         allow_diagrams=payload.allow_diagrams,
+        agent_enabled=payload.agent_enabled,
     )
     await session.commit()
     return await read_settings(session, owner_id)
