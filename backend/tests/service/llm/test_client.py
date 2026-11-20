@@ -138,9 +138,7 @@ class TestFunctionCalling:
             }
         ]
         client, transport = _client([(200, _chat_body("ok"))])
-        client.chat(
-            [{"role": "user", "content": "hi"}], tools=tools, tool_choice="auto"
-        )
+        client.chat([{"role": "user", "content": "hi"}], tools=tools, tool_choice="auto")
         sent = json.loads(transport.calls[0]["body"])
         assert sent["tools"] == tools
         assert sent["tool_choice"] == "auto"
@@ -298,9 +296,7 @@ class TestErrorClassification:
         assert len(transport.calls) == 3  # 1 次 + 重试 2 次
 
     def test_network_error_classified(self):
-        client, _ = _client(
-            [urllib.error.URLError("connection refused")] * 3, max_retries=2
-        )
+        client, _ = _client([urllib.error.URLError("connection refused")] * 3, max_retries=2)
         with pytest.raises(LLMNetworkError):
             client.chat([{"role": "user", "content": "x"}])
 
@@ -416,4 +412,149 @@ class TestShortErrorBody:
 
     def test_angle_brackets_in_plain_body_not_treated_as_html(self):
         # 正文里带尖括号(如 <reference_files> 块说明)不算 HTML 页,原样保留
-        assert _short("用 <reference_files> 块传附件".encode("utf-8")) == "用 <reference_files> 块传附件"
+        assert (
+            _short("用 <reference_files> 块传附件".encode("utf-8"))
+            == "用 <reference_files> 块传附件"
+        )
+
+
+class _StreamTransport:
+    """流式测试 transport:request_stream 返回预置 SSE 行;request 不应被走到。"""
+
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = lines
+        self.calls: list[dict] = []
+
+    def request(self, method, url, headers, body, timeout):  # pragma: no cover
+        raise AssertionError("本测试不应走非流式 request")
+
+    def request_stream(self, method, url, headers, body, timeout):
+        self.calls.append({"body": body, "timeout": timeout})
+        return 200, {}, iter((line + "\n").encode() for line in self.lines)
+
+
+def _stream_client(lines):
+    transport = _StreamTransport(lines)
+    client = LLMClient(
+        base_url="https://api.example.test/v1",
+        api_key="sk-stream-SECRET",
+        model="fake-model",
+        transport=transport,
+        sleep=lambda _s: None,
+    )
+    return client, transport
+
+
+def _sse_line(payload: dict) -> str:
+    return "data: " + json.dumps(payload, ensure_ascii=False)
+
+
+def _tc_delta(index: int, **kw: str) -> dict:
+    """构造一条流式 tool_call 分片:id/name 只在首帧,arguments 逐帧追加。"""
+    tc: dict = {"index": index}
+    if "id" in kw:
+        tc["id"] = kw["id"]
+        tc["type"] = "function"
+    fn = {k: v for k, v in kw.items() if k in ("name", "arguments")}
+    if fn:
+        tc["function"] = fn
+    return tc
+
+
+class TestStreamFunctionCalling:
+    """chat_stream 的 tools 透传 + tool_calls 流式分片拼装(ADR 0010 流式批)。"""
+
+    def test_stream_tools_passthrough_and_tool_calls_assembled(self):
+        raw_query = json.dumps({"query": "闭包"}, ensure_ascii=False)
+        first, mid, last = raw_query[:3], raw_query[3:8], raw_query[8:]
+        lines = [
+            _sse_line(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    _tc_delta(0, id="call_0", name="search_kb", arguments="")
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+            _sse_line({"choices": [{"delta": {"tool_calls": [_tc_delta(0, arguments=first)]}}]}),
+            _sse_line(
+                {"choices": [{"delta": {"tool_calls": [_tc_delta(0, arguments=mid + last)]}}]}
+            ),
+            "data: [DONE]",
+        ]
+        tools = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_kb",
+                    "description": "再搜一遍",
+                    "parameters": {"type": "object", "properties": {}, "required": []},
+                },
+            }
+        ]
+        client, transport = _stream_client(lines)
+        events = list(
+            client.chat_stream(
+                [{"role": "user", "content": "x"}], tools=tools, tool_choice="auto", timeout=12.5
+            )
+        )
+        sent = json.loads(transport.calls[0]["body"])
+        assert sent["tools"] == tools  # 透传
+        assert sent["tool_choice"] == "auto"
+        assert transport.calls[0]["timeout"] == 12.5
+        # 分片拼装成与非流式 ChatResult.tool_calls 同形,作为流末事件
+        assert events[-1] == {
+            "type": "tool_calls",
+            "tool_calls": [
+                {
+                    "id": "call_0",
+                    "type": "function",
+                    "function": {"name": "search_kb", "arguments": raw_query},
+                }
+            ],
+        }
+
+    def test_stream_no_tools_keeps_legacy_shape(self):
+        """不传 tools → 流式请求体没有 tools/tool_choice 字段(老行为)。"""
+        lines = [
+            _sse_line({"choices": [{"delta": {"content": "答"}}]}),
+            "data: [DONE]",
+        ]
+        client, transport = _stream_client(lines)
+        events = list(client.chat_stream([{"role": "user", "content": "x"}]))
+        sent = json.loads(transport.calls[0]["body"])
+        assert "tools" not in sent and "tool_choice" not in sent
+        assert events == [{"type": "content", "text": "答"}]  # 没有工具 → 无 tool_calls 事件
+
+    def test_stream_content_then_tool_calls_both_surfaced(self):
+        """同一条流先出正文再出工具调用(模型边说边调):两种事件都发。"""
+        lines = [
+            _sse_line({"choices": [{"delta": {"content": "我先看看。"}}]}),
+            _sse_line(
+                {
+                    "choices": [
+                        {
+                            "delta": {
+                                "tool_calls": [
+                                    _tc_delta(
+                                        0,
+                                        id="call_1",
+                                        name="search_web",
+                                        arguments='{"query": "x"}',
+                                    )
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ),
+            "data: [DONE]",
+        ]
+        client, _transport = _stream_client(lines)
+        events = list(client.chat_stream([{"role": "user", "content": "x"}], tools=[]))
+        assert [e["type"] for e in events] == ["content", "tool_calls"]

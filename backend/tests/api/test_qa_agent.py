@@ -20,14 +20,21 @@ from app.service.llm import LLMClient
 
 
 class FakeTransport:
-    def __init__(self, responses: list[tuple]) -> None:
+    def __init__(self, responses: list[tuple], stream_groups: list[list[str]]) -> None:
         self._responses = responses
         self.calls: list[dict] = []
+        # 流式调用(request_stream)按组弹:每组 = 一次 LLM 流式响应的 SSE 行列表
+        self.stream_groups = stream_groups
 
     def request(self, method, url, headers, body, timeout):
         self.calls.append({"url": url, "body": body})
         status, raw = self._responses.pop(0)
         return status, {}, raw
+
+    def request_stream(self, method, url, headers, body, timeout):
+        self.calls.append({"url": url, "body": body, "stream": True})
+        lines = self.stream_groups.pop(0)
+        return 200, {}, iter((line + "\n").encode() for line in lines)
 
 
 def _chat(content: str, *, total: int = 15) -> bytes:
@@ -69,7 +76,7 @@ def _tool_body(name: str, query: str, call_id: str = "call_0") -> bytes:
 
 
 def _parse_sse(text: str) -> dict[str, Any]:
-    events: dict[str, Any] = {"deltas": []}
+    events: dict[str, Any] = {"deltas": [], "statuses": []}
     for frame in text.split("\n\n"):
         event, data = None, None
         for line in frame.split("\n"):
@@ -82,6 +89,8 @@ def _parse_sse(text: str) -> dict[str, Any]:
         parsed = json.loads(data)
         if event == "delta":
             events["deltas"].append(parsed["text"])
+        elif event == "status":
+            events["statuses"].append(parsed["text"])
         else:
             events[event] = parsed
     events["delta_text"] = "".join(events["deltas"])
@@ -102,6 +111,7 @@ def agent_setup(env: SimpleNamespace) -> SimpleNamespace:
             )
         ],
         responses=[],
+        stream_groups=[],  # 流式调用(request_stream)的 SSE 行组,按组弹
         queries=[],
         transports=[],
     )
@@ -111,7 +121,7 @@ def agent_setup(env: SimpleNamespace) -> SimpleNamespace:
         return SimpleNamespace(query=query, hits=list(state.hits))
 
     def fake_llm() -> LLMClient:
-        transport = FakeTransport(state.responses)
+        transport = FakeTransport(state.responses, state.stream_groups)
         state.transports.append(transport)
         return LLMClient(
             base_url="https://api.example.test/v1",
@@ -244,21 +254,87 @@ class TestSwitchOn:
         # 6 轮 agent + 1 轮决策树
         assert len(agent_setup.transports[-1].calls) == AGENT_MAX_STEPS + 1
 
-    def test_stream_agent_path_emits_single_delta_with_trace(self, env, agent_setup):
-        """流式端点:agent 路径答案作为一帧 delta 下发,meta 带 agent 标记,done 带 trace。"""
+    def test_stream_agent_path_streams_answer_with_status_and_trace(self, env, agent_setup):
+        """流式端点:agent 最终答案**逐段放行**(多帧 delta,不再整段跳出),工具轮发 status。
+
+        主人验收反馈:不要「思考中」之后直接跳出整段内容。
+        """
         env.client.put("/api/settings", json={"agent_enabled": True})
-        agent_setup.responses.append((200, _tool_body("search_kb", "闭包 定义 例子")))
-        agent_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[2]", total=44)))
+        tool_query = json.dumps({"query": "闭包 定义 例子"}, ensure_ascii=False)
+        agent_setup.stream_groups.extend(
+            [
+                # 第一步(流式):工具调用分片
+                [
+                    "data: "
+                    + json.dumps(
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "tool_calls": [
+                                            {
+                                                "index": 0,
+                                                "id": "call_0",
+                                                "type": "function",
+                                                "function": {"name": "search_kb", "arguments": ""},
+                                            }
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "data: "
+                    + json.dumps(
+                        {
+                            "choices": [
+                                {
+                                    "delta": {
+                                        "tool_calls": [
+                                            {"index": 0, "function": {"arguments": tool_query}}
+                                        ]
+                                    }
+                                }
+                            ]
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "data: [DONE]",
+                ],
+                # 第二步(流式):最终答案分两段增量 + usage
+                [
+                    "data: " + json.dumps({"choices": [{"delta": {"content": "闭包是函数"}}]}, ensure_ascii=False),
+                    "data: "
+                    + json.dumps({"choices": [{"delta": {"content": "+捕获的外层变量。[2]\n"}}]}, ensure_ascii=False),
+                    "data: "
+                    + json.dumps(
+                        {
+                            "choices": [],
+                            "usage": {"prompt_tokens": 90, "total_tokens": 130},
+                        },
+                        ensure_ascii=False,
+                    ),
+                    "data: [DONE]",
+                ],
+            ]
+        )
         with env.client.stream(
             "POST", "/api/qa/chat/stream", json={"question": "闭包是什么"}
         ) as resp:
             text = "".join(resp.iter_text())
         events = _parse_sse(text)
         assert events["meta"]["agent"] is True
-        assert events["delta_text"] == "闭包是函数+捕获的外层变量。[2]"
-        assert events["done"]["assistant_message"]["agent_trace"] is not None
-        assert [s["kind"] for s in events["done"]["assistant_message"]["agent_trace"]] == [
-            "llm",
-            "tool",
-            "llm",
-        ]
+        # 工具轮进度可见(status 事件,带换的词)
+        assert len(events["statuses"]) == 1
+        assert "闭包 定义 例子" in events["statuses"][0]
+        # 逐段放行:delta 帧拼起来 = 完整答案
+        assert events["delta_text"] == "闭包是函数+捕获的外层变量。[2]\n"
+        assert len(events["deltas"]) >= 1  # 逐段放行(首行门可能合帧,拼起来对即可)
+        # done:trace 每步 + 引用映射回真实 note_id
+        done = events["done"]["assistant_message"]
+        assert done["agent_trace"] is not None
+        assert [s["kind"] for s in done["agent_trace"]] == ["llm", "tool", "llm"]
+        assert done["citations"][0]["n"] == 2
+        assert done["citations"][0]["note_id"] == 10
+        assert done["cost_tokens"] == 130  # 流式 usage 块进计数

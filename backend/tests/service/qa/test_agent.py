@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.service.llm import LLMClient, LLMResponseError
-from app.service.qa.agent import AGENT_ADDENDUM, run_agent
+from app.service.qa.agent import AGENT_ADDENDUM, run_agent, run_agent_iter
 from app.service.qa.answerer import ContextHit, build_qa_messages
 
 
@@ -108,13 +108,17 @@ def _retrieve_fn(hits_by_query: dict[str, list[ContextHit]]):
 def _web_fn(results: list[dict[str, str]] | None = None):
     """fake Tavily:记录查询;默认返回一条预置结果。"""
     calls: list[str] = []
-    payload = results if results is not None else [
-        {
-            "title": "Hadoop 生态",
-            "url": "https://example.com/hadoop",
-            "content": "HDFS/YARN/MapReduce…",
-        }
-    ]
+    payload = (
+        results
+        if results is not None
+        else [
+            {
+                "title": "Hadoop 生态",
+                "url": "https://example.com/hadoop",
+                "content": "HDFS/YARN/MapReduce…",
+            }
+        ]
+    )
 
     def web_search(query: str, *, api_key: str, **_kw: Any):
         calls.append(query)
@@ -158,11 +162,7 @@ class TestDirectAnswer:
         client, _transport = _client([(200, _chat("答 [1]"))])
         retrieve, _calls = _retrieve_fn({})
         hits = [_hit(10), _hit(11, "Fetch 指南")]
-        asyncio.run(
-            run_agent(
-                "闭包是什么", hits, retrieve=retrieve, client=client, owner_id=1
-            )
-        )
+        asyncio.run(run_agent("闭包是什么", hits, retrieve=retrieve, client=client, owner_id=1))
         sent = json.loads(_transport.calls[0]["body"])
         legacy, _meta = build_qa_messages("闭包是什么", hits)
         assert sent["messages"][0] == legacy[0]  # system 一字不差
@@ -268,7 +268,10 @@ class TestWebTool:
         client, transport = _client([(200, _chat("看图答"))])
         retrieve, _calls = _retrieve_fn({})
         _run(
-            client, retrieve, tavily_key="tvly-x", has_user_images=True,
+            client,
+            retrieve,
+            tavily_key="tvly-x",
+            has_user_images=True,
             images=[{"mime": "image/png", "data_url": "data:image/png;base64,x"}],
         )
         sent = json.loads(transport.calls[0]["body"])
@@ -284,9 +287,7 @@ class TestWebTool:
         )
         retrieve, _calls = _retrieve_fn({})
         web, web_calls = _web_fn()
-        result = _run(
-            client, retrieve, tavily_key="tvly-x", has_user_images=True, web_search=web
-        )
+        result = _run(client, retrieve, tavily_key="tvly-x", has_user_images=True, web_search=web)
         assert result is not None
         assert web_calls == []  # 没真联网
         assert result.meta["agent"]["tool_calls"]["search_web"] == 0
@@ -413,3 +414,190 @@ class TestTrace:
         assert tool_step["result"] == "1 hits"
         assert isinstance(tool_step["latency_ms"], float)
         assert all(s["step"] == i + 1 for i, s in enumerate(steps))
+
+
+# ---- 流式模式(run_agent_iter streaming=True):status/delta 事件 + 首行门 ----
+
+
+class _StreamTransport:
+    """流式 transport:每次 request_stream 弹一组预置 SSE 行;request 不应被走到。"""
+
+    def __init__(self, line_groups: list[list[str]]) -> None:
+        self._groups = list(line_groups)
+        self.calls: list[dict] = []
+
+    def request(self, method, url, headers, body, timeout):  # pragma: no cover
+        raise AssertionError("流式模式不应走非流式 request")
+
+    def request_stream(self, method, url, headers, body, timeout):
+        self.calls.append({"body": body})
+        lines = self._groups.pop(0)
+        return 200, {}, iter((line + "\n").encode() for line in lines)
+
+
+def _sse(payload: dict) -> str:
+    return "data: " + json.dumps(payload, ensure_ascii=False)
+
+
+def _stream_client(line_groups):
+    transport = _StreamTransport(line_groups)
+    client = LLMClient(
+        base_url="https://api.example.test/v1",
+        api_key="sk-stream-SECRET",
+        model="fake-model",
+        transport=transport,
+        sleep=lambda _s: None,
+    )
+    return client, transport
+
+
+def _run_iter(client, retrieve, **kwargs):
+    return asyncio.run(
+        _collect_iter(
+            kwargs.pop("question", "Hadoop 生态圈有哪些组件"),
+            kwargs.pop("kb_hits", [_hit(10)]),
+            retrieve,
+            client,
+            **kwargs,
+        )
+    )
+
+
+async def _collect_iter(question, kb_hits, retrieve, client, **kwargs):
+    kwargs.setdefault("streaming", True)
+    events = []
+    async for ev in run_agent_iter(
+        question, kb_hits, retrieve=retrieve, client=client, owner_id=1, **kwargs
+    ):
+        events.append(ev)
+    return events
+
+
+class TestStreamingIter:
+    def test_tool_round_then_streamed_answer(self):
+        """工具轮发 status(带换的词);最终答案逐段放行;result 带全部留痕。"""
+        groups = [
+            [
+                _sse(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_0",
+                                            "type": "function",
+                                            "function": {
+                                                "name": "search_kb",
+                                                "arguments": "",
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ),
+                _sse(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "function": {
+                                                "arguments": json.dumps({"query": "Hadoop 组件"})
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ),
+                "data: [DONE]",
+            ],
+            [
+                _sse({"choices": [{"delta": {"content": "换词再搜后:"}}]}),
+                _sse({"choices": [{"delta": {"content": "Hadoop 生态含 HDFS。[2]\n"}}]}),
+                "data: "
+                + json.dumps(
+                    {
+                        "choices": [],
+                        "usage": {
+                            "prompt_tokens": 100,
+                            "total_tokens": 140,
+                            "prompt_tokens_details": {"cached_tokens": 80},
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                "data: [DONE]",
+            ],
+        ]
+        client, _transport = _stream_client(groups)
+        retrieve, calls = _retrieve_fn({"Hadoop 组件": [_hit(20, "Hadoop 生态")]})
+        events = _run_iter(client, retrieve, kb_hits=[_hit(10)])
+        assert calls == ["Hadoop 组件"]  # 换的词真的用于检索
+        kinds = [ev["type"] for ev in events]
+        assert kinds[0] == "status" and "Hadoop 组件" in events[0]["text"]
+        assert kinds[-1] == "result"
+        deltas = [ev["text"] for ev in events if ev["type"] == "delta"]
+        # 首行门:多段增量可能合帧放行,拼起来 = 完整答案(逐段放行,非整段跳出)
+        assert "".join(deltas) == "换词再搜后:Hadoop 生态含 HDFS。[2]\n"
+        qa = events[-1]["qa"]
+        assert qa.answer == "换词再搜后:Hadoop 生态含 HDFS。[2]"  # strip 后的最终文本
+        assert [c.note_id for c in qa.citations] == [20]
+        assert qa.cost_tokens == 140  # 流式 usage 块进了计数
+        assert qa.prompt_cache_hit_tokens == 80
+        assert [s["kind"] for s in qa.meta["agent"]["steps"]] == ["llm", "tool", "llm"]
+
+    def test_no_kb_marker_suppressed_and_bailed_out_as_one_delta(self):
+        """流式 [NO_KB]:标记不外泄,一个增量都不放行;兜底文本整段补发。"""
+        groups = [
+            [
+                _sse({"choices": [{"delta": {"content": "[NO_KB]\n"}}]}),
+                _sse({"choices": [{"delta": {"content": "Hadoop 生态含 HDFS、YARN 等。"}}]}),
+                "data: [DONE]",
+            ]
+        ]
+        client, _transport = _stream_client(groups)
+        retrieve, _calls = _retrieve_fn({})
+        events = _run_iter(client, retrieve, kb_hits=[], tavily_key=None)
+        deltas = [ev["text"] for ev in events if ev["type"] == "delta"]
+        assert len(deltas) == 1  # 整段补发
+        assert "[NO_KB]" not in deltas[0]
+        assert deltas[0].startswith("（笔记库里没有相关内容，以下用 AI 自身的知识回答）")
+        assert "HDFS" in deltas[0]
+        assert events[-1]["qa"].citations == []
+
+    def test_streaming_fake_citation_kept_in_text_but_filtered_from_citations(self):
+        """流式不修复(已放行文本无法收回):死徽章留正文,citations 只留有效编号。"""
+        groups = [
+            [
+                _sse({"choices": [{"delta": {"content": "生态含 HDFS。[9]\n"}}]}),
+                "data: [DONE]",
+            ]
+        ]
+        client, _transport = _stream_client(groups)
+        retrieve, _calls = _retrieve_fn({})
+        events = _run_iter(client, retrieve)
+        qa = events[-1]["qa"]
+        assert "[9]" in qa.answer  # 死徽章保留(与决策树流式同语义)
+        assert qa.citations == []  # 幻觉编号绝不进 citations
+
+    def test_non_streaming_wrapper_still_repairs(self):
+        """对照:非流式 run_agent 对同样的假引用走修复轮(两种模式行为差异被钉住)。"""
+        client, _transport = _client(
+            [
+                (200, _chat("生态含 HDFS。[9]", total=30)),
+                (200, _chat("生态含 HDFS。[1]", total=30)),
+            ]
+        )
+        retrieve, _calls = _retrieve_fn({})
+        result = _run(client, retrieve)
+        assert result is not None
+        assert "[1]" in result.answer  # 修复成有效编号
+        assert any(s["kind"] == "repair" for s in result.meta["agent"]["steps"])

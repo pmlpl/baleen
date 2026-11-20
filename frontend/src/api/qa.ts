@@ -173,6 +173,8 @@ export interface StreamMeta {
 export interface StreamHandlers {
   onMeta?: (meta: StreamMeta) => void
   onDelta?: (text: string) => void
+  /** agent 工具轮进度(ADR 0010 v33):「正在换词检索笔记库:…」/「正在联网搜索:…」 */
+  onStatus?: (text: string) => void
   onDone?: (data: { assistant_message: QaMessage; took_ms: number }) => void
   onError?: (detail: string) => void
 }
@@ -236,6 +238,7 @@ export async function streamChat(
     const parsed = JSON.parse(data) as Record<string, unknown>
     if (event === 'meta') handlers.onMeta?.(parsed as unknown as StreamMeta)
     else if (event === 'delta') handlers.onDelta?.(String(parsed.text))
+    else if (event === 'status') handlers.onStatus?.(String(parsed.text))
     else if (event === 'done')
       handlers.onDone?.(parsed as unknown as { assistant_message: QaMessage; took_ms: number })
     else if (event === 'error')

@@ -530,6 +530,8 @@ function stopThinkingTimer(): void {
 
 /** 已开始输出正文(收到首个 delta)→ 不再显示「思考中」 */
 const streamingStarted = ref(false)
+// agent 工具轮进度(status 事件,ADR 0010 v33):正文开始前显示「正在换词检索…/联网搜索…」
+const agentStatus = ref('')
 
 /** 本轮正在用的模型(meta 事件带来,回答完成后由 lastModel 接管) */
 const pendingModel = ref<string | null>(null)
@@ -698,6 +700,7 @@ async function send(): Promise<void> {
   sending.value = true
   errorText.value = ''
   streamingStarted.value = false
+  agentStatus.value = ''
   startThinkingTimer()
   // 引用/附件随问题一起出发:捕获进当轮消息(随气泡上屏)、输入框立刻清空,不等 AI 回完。
   // 流没建立起来时(catch 分支)再原样还回来。
@@ -769,12 +772,17 @@ async function send(): Promise<void> {
         onDelta: (t) => {
           if (!streamingStarted.value) {
             streamingStarted.value = true // 正文开始,不再显示「思考中」
+            agentStatus.value = ''
             stopThinkingTimer()
           }
           if (streamingIdx !== null && messages.value[streamingIdx] !== undefined) {
             messages.value[streamingIdx].content += t
             scrollBottom()
           }
+        },
+        onStatus: (t) => {
+          // agent 工具轮进度:替换上一条(同一时刻只有一步在跑)
+          agentStatus.value = t
         },
         onDone: (d) => {
           stopThinkingTimer()
@@ -1080,6 +1088,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
               <span v-if="pendingModel !== null" class="thinking-model">
                 · {{ pendingModel }}
               </span>
+              <span v-if="agentStatus !== ''" class="thinking-status">{{ agentStatus }}</span>
               <span v-if="thinkingSec >= 15" class="thinking-hint">
                 （模型较慢，最长可能需要 2 分钟）
               </span>
@@ -1705,6 +1714,13 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   margin-left: 4px;
   color: var(--ink-3);
   font-family: 'Cascadia Code', 'Consolas', monospace;
+  font-size: 12px;
+}
+
+/* agent 工具轮进度(思考行内,随 status 事件更新) */
+.thinking-status {
+  margin-left: 6px;
+  color: var(--ink-3);
   font-size: 12px;
 }
 

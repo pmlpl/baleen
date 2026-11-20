@@ -1,4 +1,4 @@
-# API 契约 v33
+# API 契约 v34
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -399,8 +399,9 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 
 响应 `text/event-stream`，事件序：`meta` → `delta`* → `done`；LLM 失败 → `error`（用户消息已落库）。
 
-- `meta`：`{session_id, session_title, search_query, used_web, agent, images_attached, model, prepare_ms, user_message}`（`agent`（v31）= 本轮是否走了 agent loop）
-- `delta`：`{text}`（正文增量；推理模型的思考过程不下发；agent 路径/联网兜底的回答为整帧 delta）
+- `meta`：`{session_id, session_title, search_query, used_web, agent, images_attached, model, prepare_ms, user_message}`（`agent` = 本轮是否按 agent 模式跑（默认开；agent 模式下 `used_web` 真值随 done 的 citations，meta 时点尚未发生））
+- `status`：`{text}`（**v34**，agent 工具轮进度——「正在换词检索笔记库:…」/「正在联网搜索:…」，带检索词；旧前端忽略该事件）
+- `delta`：`{text}`（正文增量；推理模型的思考过程不下发；**agent 最终答案逐段放行（v34）**——多帧增量流式，与库内路径同款；联网兜底（决策树路径）仍为整帧）
 - `done`：`{assistant_message, took_ms}`（完整消息含出处、cache_hit_rate 与 agent_trace，已落库）
 
 ### `POST /api/parse`（v28 新增，📎 附件统一解析，不入库）
@@ -441,7 +442,7 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 
 **联网兜底**：库内未命中且设置页配了 Tavily key → 自动搜网，回答基于搜索结果、citations 带 `url`（`note_id=null`，前端渲染外链）、`used_web=true`；未配 key 或搜索失败 → 维持「没找到」口径。**挂了图片附件（`images` 非空）时不走联网**——图本身是内容（问的常是「这图讲什么」），搜「图片/内容」只会搜出 OCR 工具之类；让视觉模型直接看图回答（`answer` 路径附图），`[NO_KB]` 兜底也跳过联网、不加「笔记库没有」前缀。
 
-**问答 agent（v31，ADR 0010；**v32 起默认开**）**：问答默认走 agent loop——LLM 在 loop 里决定「换个词再搜（`search_kb`）/ 何时转联网（`search_web`）/ 直接答」，首轮检索与消息前缀字节与旧决策树一致。护栏全在代码（预算 MAX_STEPS/每步超时/总预算，超了回落下述决策树，**最坏情况 = 现状**；引用真实性校验拒收假 `[n]`；挂图不给联网工具）。配额上每答多 1–2 次 LLM 调用（实测负例 8 条均为 2 次），每步留痕进 `agent_trace`。`agent_enabled=false` = 显式关回**旧决策树**（上述检索→相关性判定→[NO_KB]→联网/自答的硬编码树，保留作紧急开关/A-B 对照）；请求/响应契约不变（前端零改动）。
+**问答 agent（v31，ADR 0010；**v32 起默认开**）**：问答默认走 agent loop——LLM 在 loop 里决定「换个词再搜（`search_kb`）/ 何时转联网（`search_web`）/ 直接答」，首轮检索与消息前缀字节与旧决策树一致。护栏全在代码（预算 MAX_STEPS/每步超时/总预算，超了回落下述决策树，**最坏情况 = 现状**；引用真实性校验拒收假 `[n]`；挂图不给联网工具）。配额上每答多 1–2 次 LLM 调用（实测负例 8 条均为 2 次），每步留痕进 `agent_trace`。`agent_enabled=false` = 显式关回**旧决策树**（上述检索→相关性判定→[NO_KB]→联网/自答的硬编码树，保留作紧急开关/A-B 对照）；请求/响应契约不变（前端零改动；`status` 事件为新增，旧前端忽略）。**流式路径（v34）**：最终答案边生成边放行（多帧 delta，不再「思考中」后整段跳出），工具轮发 `status` 进度事件；流式模式不做假引用修复轮（已放行文本无法收回）——幻觉编号只从 citations 里剔除，正文死徽章与决策树流式同语义；非流式端点（`POST /api/qa/chat`）行为不变（含修复轮）。
 
 ### `POST /api/qa/sessions/{id}/note-plan`（阶段4 增强）
 
@@ -573,6 +574,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-20 | v34 | **agent 流式输出**（主人验收反馈：「我希望前端流式输出AI内容，而不是从『思考中』之后直接跳出整段内容」）：①`chat_stream` 加 `tools`/`tool_choice`/`timeout` 透传 + `tool_calls` 流式分片拼装（流末事件，与非流式 `ChatResult.tool_calls` 同形）。②`agent.py` 重构为 `run_agent_iter` 异步生成器：`streaming=True` 产 `status`/`delta` 事件、[NO_KB] 首行门扣下标记答案、流式不做假引用修复轮（已放行文本无法收回——幻觉编号只从 citations 剔除，死徽章与决策树流式同语义）；`run_agent` 为薄包装，非流式行为不变（含修复轮）。③流式端点 agent loop 移入 `gen()`：事件序 `meta → status* → delta* → done`，最终答案**逐段放行**（多帧 delta），工具轮发 status（带检索词）；agent 回落时决策树前置（4.5 预检+附图）gen 内现算，最坏=现状；`meta.agent` 语义改为「本轮是否按 agent 模式跑」。④前端 `qa.ts` 加 `onStatus`；问答页思考行显示工具轮进度。测试 +7（client 3 + iter 4）；真链路实测：直答题 386 帧 delta、换词/转网题 3 条 status + 594 帧 delta |
 | 2026-11-20 | v33 | **会话「最近活跃」排序 + 每用户保留最新 50 个**（主人 2026-11-20 拍板）：§5 会话列表从「按创建时间」改为「按最近活跃」（`updated_at desc`）——落一条消息（user/assistant）即刷该会话活跃时间，旧会话发一轮新对话上浮到顶；仅打开/查看/导出不刷新。保留策略：每用户只留最新 50 个会话，更旧的**硬删**（消息/摘要 FK CASCADE 连带删），只在新建会话时触发裁剪（删几个记日志不建表）。迁移 0018：`qa_sessions.updated_at`（NOT NULL，server_default now()）+ `(owner_id, updated_at DESC)` 索引 + 存量回填 `updated_at = created_at`；老用户零感知（只加列回填，digest/缓存不受影响）。响应字段不变（`created_at` 照旧返回，前端不显示日期）。已知边界：闲置旧会话开在别的标签页时可能被裁 → 之后发消息 404，前端兜底「已开新对话」 |
 | 2026-11-20 | v32 | **问答 agent 默认开**（主人验收拍板：「还要我手动去打开吗，我们都已经是 agent 模式了，旧对话模式不要再是默认」）：`agent_enabled` 语义翻转——NULL/true = agent loop（**默认**），false = 显式关回旧决策树（紧急开关/A-B 对照）。迁移 0017：`app_settings.agent_enabled` server_default false→true + 存量行全部置 true；agent 失败回落决策树的代码层兜底不变（ADR 0010「最坏情况=现状」不拆）。`negative_eval.py` 加 `--no-agent`（临时关 agent 跑决策树基线，跑完恢复原值；`--agent` 改为显式确保开）。§5/§6 描述同步；测试基线 631（旧决策树测试在 fixture 显式关 agent，agent 默认开有专项测试） |
 | 2026-11-20 | v31 | **问答 agent 灰度（ADR 0010）**：§6 设置加 `agent_enabled`（**默认关**；关 = 走现有决策树，行为与现状完全一致；开 = answerer 决策树上翻 tool-call loop——LLM 在 loop 里决定换词再搜 `search_kb` / 何时转联网 `search_web` / 直接答，预算三道闸 MAX_STEPS/每步超时/总预算超了回落决策树，最坏情况 = 现状）。§5 消息响应（`user_message`/`assistant_message`/`GET /sessions/{id}`/流式 `done`）新增 `agent_trace`（每步留痕 `{step, kind, tool, arg, result, latency_ms}`，null = 老路径/user 消息）；流式 `meta` 事件新增 `agent` 标记。迁移 0016：`app_settings.agent_enabled`（默认 false）+ `qa_messages.trace`（JSONB 授权审计）。前端契约不变（零改动，新增字段旧版忽略）。**背景**：`_has_relevant_hit` 字面闸判「沾边」就混合作答（n02 Hadoop 案例，缺陷台账失败模式④）；「这段只讲了起源没回答组件清单，该换词再搜或转联网」是只有 LLM 能做的语义判断。首跑教训（已修）：addendum 必须显式声明对旧规则 2（[NO_KB]+自身知识）的优先级，否则模型从不调 search_web |

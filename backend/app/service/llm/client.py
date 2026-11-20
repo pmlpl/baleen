@@ -214,13 +214,19 @@ class LLMClient:
         *,
         temperature: float = 0.3,
         max_tokens: int = DEFAULT_MAX_TOKENS,
+        tools: list[dict] | None = None,
+        tool_choice: str | dict | None = None,
+        timeout: float | None = None,
     ) -> Iterator[dict[str, Any]]:
         """流式 chat:逐段 yield 事件字典,消费方按 ``type`` 分流。
 
         - {"type": "reasoning", "text": ...} —— 推理模型的思考过程(不想展示可忽略)
         - {"type": "content", "text": ...}   —— 正文增量
+        - {"type": "tool_calls", "tool_calls": [...]} —— function calling:流式分片
+          在流末拼装成与非流式 ``ChatResult.tool_calls`` 同形(坏条目跳过);没调用则无此事件
         - {"type": "usage", ...}             —— 末尾计费/缓存块(上游未命中可能缺席)
 
+        ``tools`` / ``tool_choice`` / ``timeout`` 与 ``chat()`` 同语义(透传/单次超时覆盖)。
         流式不做重试(中途重试无法续传);打开失败(认证/限流/5xx)在首个 yield 前抛出。
         同步生成器;async 调用方用 to_thread 逐段推进或自行包任务。
         """
@@ -234,6 +240,10 @@ class LLMClient:
             "stream": True,
             "stream_options": {"include_usage": True},
         }
+        if tools is not None:
+            payload["tools"] = tools
+        if tool_choice is not None:
+            payload["tool_choice"] = tool_choice
         url = urljoin(self.base_url, "chat/completions")
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -241,7 +251,9 @@ class LLMClient:
         stream_fn = getattr(self._transport, "request_stream", None)
         if stream_fn is None:  # 旧自定义 Transport 未实现流式
             raise LLMError("当前 Transport 不支持流式(request_stream 缺失)")
-        status, _headers, resp = cast(Any, stream_fn("POST", url, headers, body, self.timeout))
+        status, _headers, resp = cast(
+            Any, stream_fn("POST", url, headers, body, self.timeout if timeout is None else timeout)
+        )
         if status in (401, 403):
             raw = resp.read() if hasattr(resp, "read") else b""
             raise LLMAuthError(f"认证失败(HTTP {status}):请检查 LLM_API_KEY", status_code=status)
@@ -252,6 +264,9 @@ class LLMClient:
             raise LLMResponseError(f"服务端错误(HTTP {status}):{_short(raw)}", status_code=status)
 
         try:
+            # function calling 分片:上游把一个 tool_call 拆成多帧(index 对位,
+            # id/name 只在首帧,arguments 逐帧追加)——按 index 拼装,流末一次性发
+            tool_call_parts: dict[int, dict] = {}
             for raw_line in resp:
                 line = raw_line.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data: "):
@@ -284,6 +299,31 @@ class LLMClient:
                 piece = delta.get("content")
                 if piece:
                     yield {"type": "content", "text": piece}
+                for tc in delta.get("tool_calls") or []:
+                    if not isinstance(tc, dict):
+                        continue
+                    idx = tc.get("index")
+                    if not isinstance(idx, int):
+                        idx = 0  # 兼容缺 index 的上游
+                    part = tool_call_parts.setdefault(
+                        idx,
+                        {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+                    )
+                    if tc.get("id"):
+                        part["id"] = tc["id"]
+                    if tc.get("type"):
+                        part["type"] = tc["type"]
+                    fn = tc.get("function") or {}
+                    if fn.get("name"):
+                        part["function"]["name"] = fn["name"]
+                    if fn.get("arguments") is not None:
+                        part["function"]["arguments"] += str(fn["arguments"])
+            if tool_call_parts:
+                # 与非流式 ChatResult.tool_calls 同形;缺 id/name 的坏条目跳过(同 _parse_chat)
+                assembled = [tool_call_parts[i] for i in sorted(tool_call_parts)]
+                valid = [tc for tc in assembled if tc["id"] and tc["function"]["name"]]
+                if valid:
+                    yield {"type": "tool_calls", "tool_calls": valid}
         finally:
             close = getattr(resp, "close", None)
             if close is not None:
