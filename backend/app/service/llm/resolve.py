@@ -101,15 +101,15 @@ async def resolve_allow_diagrams(session: AsyncSession, owner_id: int) -> bool:
 
 
 async def resolve_agent_enabled(session: AsyncSession, owner_id: int) -> bool:
-    """问答 agent 灰度开关(ADR 0010,2026-11-20):**默认关**。
+    """问答 agent 开关(ADR 0010;主人 2026-11-20 验收拍板:**默认开**,迁移 0017)。
 
-    行不存在或字段为 NULL/false → False = 走现有决策树,行为与现状完全一致;
-    true = answerer 决策树上翻为 agent loop(脑选工具,预算/校验在马具)。
-    每次请求现读 → 设置页保存后热生效。
+    行不存在或字段为 NULL → True(agent loop);false = 显式关回旧决策树
+    (紧急开关/A-B 对照)。每次请求现读 → 设置页保存后热生效。
+    agent 失败时回落决策树是代码层兜底,与这个开关无关(永远在)。
     """
     row = await _row(session, owner_id)
     if row is None or row.agent_enabled is None:
-        return False
+        return True
     return bool(row.agent_enabled)
 
 

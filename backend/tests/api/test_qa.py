@@ -123,6 +123,10 @@ def _hit(note_id: int, title: str, hp: str, child: str) -> SimpleNamespace:
 @pytest.fixture
 def qa_setup(env: SimpleNamespace) -> SimpleNamespace:
     """env(TestClient + 事务隔离)+ 可控假检索(记录检索词)/ 假 LLM(队列+流式)。"""
+    # 本文件测的是**旧决策树**路径(迁移 0017 起 agent loop 是默认问答模式):
+    # 显式关掉 agent,让 [NO_KB] 二段兜底/4.5 前置联网/消息结构等断言落在决策树上;
+    # agent 路径的测试在 test_qa_agent.py(默认开)。测试事务回滚,不动真实设置行。
+    env.client.put("/api/settings", json={"agent_enabled": False})
     state = SimpleNamespace(
         hits=[_hit(10, "闭包笔记", "一、闭包", "闭包是函数+捕获的外层变量。")],
         responses=[],  # (status, body) 非流式队列;测试按「改写→回答」顺序填入

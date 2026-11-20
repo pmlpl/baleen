@@ -483,7 +483,12 @@ def main() -> int:
     ap.add_argument(
         "--agent",
         action="store_true",
-        help="live 档临时打开问答 agent 开关(ADR 0010;跑完恢复原值,默认关)",
+        help="live 档显式确保 agent 开(ADR 0010;agent 已默认开,迁移 0017;与 --no-agent 互斥)",
+    )
+    ap.add_argument(
+        "--no-agent",
+        action="store_true",
+        help="live 档临时关掉 agent 开关,跑旧决策树基线(A/B 对照;跑完恢复原值)",
     )
     ap.add_argument("--api-url", default="http://127.0.0.1:8000")
     ap.add_argument("--token", default=os.environ.get("BALEEN_EVAL_TOKEN", ""))
@@ -516,19 +521,27 @@ def main() -> int:
         if not args.token:
             print("[error] --live 需要 --token 或环境变量 BALEEN_EVAL_TOKEN", file=sys.stderr)
             return 2
-        # agent 档:临时打开开关(记录原值,跑完恢复——评测不改变用户的持久设置)
-        prev_agent = None
-        if args.agent:
-            print("[3/3] live 档(产品 HTTP 链路,agent 开关临时打开)……")
+        # agent 旗(ADR 0010;默认已开,迁移 0017):--agent 显式确保开 / --no-agent 临时关
+        # 跑旧决策树基线(A/B)。翻转都记录原值、跑完恢复——评测不改变用户的持久设置。
+        if args.agent and args.no_agent:
+            print("[error] --agent 与 --no-agent 互斥", file=sys.stderr)
+            return 2
+        target: bool | None = True if args.agent else (False if args.no_agent else None)
+        prev_agent: bool | None = None
+        if target is True:
+            print("[3/3] live 档(产品 HTTP 链路,--agent 显式确保 agent 开)……")
             prev_agent = _set_agent_enabled(args.api_url, args.token, True)
+        elif target is False:
+            print("[3/3] live 档(产品 HTTP 链路,--no-agent 临时关 agent=旧决策树基线)……")
+            prev_agent = _set_agent_enabled(args.api_url, args.token, False)
         else:
-            print("[3/3] live 档(产品 HTTP 链路,agent 关=决策树基线)……")
+            print("[3/3] live 档(产品 HTTP 链路,按当前设置跑——agent 默认开)……")
         try:
             live_rows = run_live(rows, args.api_url, args.token)
         finally:
-            if prev_agent is False:
-                _set_agent_enabled(args.api_url, args.token, False)
-                print("  agent 开关已恢复为关(原值)")
+            if target is not None and prev_agent is not None and prev_agent != target:
+                _set_agent_enabled(args.api_url, args.token, prev_agent)
+                print(f"  agent 开关已恢复原值({'开' if prev_agent else '关'})")
     else:
         print("[3/3] live 档跳过(--live 未开)")
 

@@ -29,7 +29,8 @@ class SettingsOut(BaseModel):
     llm_max_output_tokens: int | None  # None = 用 organizer 兜底(131072)
     # 结构图开关(默认 True)。True 也只是「允许」——真正该不该画由结构依据闸判定
     allow_diagrams: bool
-    # 问答 agent 灰度开关(ADR 0010,**默认关**)。关 = 走现有决策树,行为与现状完全一致
+    # 问答 agent 开关(ADR 0010,v32 起**默认开**;主人 2026-11-20 验收拍板)。
+    # false = 显式关回旧决策树(紧急开关/A-B 对照)
     agent_enabled: bool
 
 
@@ -72,7 +73,9 @@ async def read_settings(session: SessionDep, owner_id: CurrentOwnerDep) -> Setti
         allow_diagrams=(
             True if (row is None or row.allow_diagrams is None) else bool(row.allow_diagrams)
         ),
-        agent_enabled=bool(row and row.agent_enabled),
+        agent_enabled=(
+            True if (row is None or row.agent_enabled is None) else bool(row.agent_enabled)
+        ),
     )
 
 

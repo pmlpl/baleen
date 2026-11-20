@@ -1,5 +1,5 @@
-"""问答 agent 灰度的 API 级测试(ADR 0010):开关默认关=现状字节一致;
-开=agent loop + trace 落库;超预算回落决策树。
+"""问答 agent 的 API 级测试(ADR 0010):默认开(迁移 0017)=agent loop + trace 落库;
+显式关=旧决策树字节一致;超步数回落。
 
 TestClient + env 夹具(外层事务 + savepoint 隔离,需 PostgreSQL)+ 假检索 + 假 LLM
 (FakeTransport,不联网;响应队列支持 tool_calls 轮次)。
@@ -130,11 +130,40 @@ def agent_setup(env: SimpleNamespace) -> SimpleNamespace:
         app.dependency_overrides.pop(qa_module.get_llm_client, None)
 
 
-class TestSwitchOff:
-    def test_agent_off_by_default_walks_legacy_tree(self, env, agent_setup):
-        """开关默认关 = 走现有决策树:LLM 请求体里没有 tools 字段(字节与现状一致)。"""
-        resp = env.client.get("/api/settings")
+class TestDefaultOn:
+    """默认开(迁移 0017,主人 2026-11-20 验收拍板:不手动开,agent 就是问答模式)。"""
+
+    def test_agent_on_by_default_without_touching_settings(self, env, agent_setup):
+        """不动设置直接问 → agent loop:请求带 tools,trace 落在消息上。"""
+        agent_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]", total=42)))
+        r = env.client.post("/api/qa/chat", json={"question": "闭包是什么"})
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["assistant_message"]["agent_trace"] is not None  # agent 跑了
+        sent = json.loads(agent_setup.transports[-1].calls[0]["body"])
+        assert "tools" in sent and sent["tool_choice"] == "auto"
+        assert body["assistant_message"]["citations"][0]["note_id"] == 10
+
+    def test_user_without_settings_row_defaults_on(self, env, agent_setup):
+        """注册一个全新账号(无 app_settings 行)→ resolve 走「行不存在=开」分支。"""
+        reg = env.client.post(
+            "/api/auth/register",
+            json={"username": "agent-default-on-probe", "password": "probe-pass-123"},
+        )
+        assert reg.status_code in (200, 201), reg.text
+        token = reg.json()["access_token"]
+        resp = env.client.get(
+            "/api/settings", headers={"Authorization": f"Bearer {token}"}
+        )
         assert resp.status_code == 200, resp.text
+        assert resp.json()["agent_enabled"] is True
+
+
+class TestSwitchOff:
+    def test_explicit_off_walks_legacy_tree(self, env, agent_setup):
+        """显式关(PUT false) = 紧急开关/回归口径:走旧决策树,请求体无 tools 字段。"""
+        env.client.put("/api/settings", json={"agent_enabled": False})
+        resp = env.client.get("/api/settings")
         assert resp.json()["agent_enabled"] is False
 
         agent_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))

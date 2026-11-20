@@ -1,4 +1,4 @@
-# API 契约 v31
+# API 契约 v32
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -439,7 +439,7 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 
 **联网兜底**：库内未命中且设置页配了 Tavily key → 自动搜网，回答基于搜索结果、citations 带 `url`（`note_id=null`，前端渲染外链）、`used_web=true`；未配 key 或搜索失败 → 维持「没找到」口径。**挂了图片附件（`images` 非空）时不走联网**——图本身是内容（问的常是「这图讲什么」），搜「图片/内容」只会搜出 OCR 工具之类；让视觉模型直接看图回答（`answer` 路径附图），`[NO_KB]` 兜底也跳过联网、不加「笔记库没有」前缀。
 
-**问答 agent 灰度（v31，ADR 0010）**：设置页 `agent_enabled`（默认**关**）= 上述检索→相关性判定→[NO_KB]→联网/自答的硬编码决策树；**开** = 决策树上翻为 agent loop——LLM 在 loop 里决定「换个词再搜（`search_kb`）/ 何时转联网（`search_web`）/ 直接答」，首轮检索与消息前缀字节与现状一致。护栏全在代码（预算 MAX_STEPS/每步超时/总预算，超了回落决策树，**最坏情况 = 现状**；引用真实性校验拒收假 `[n]`；挂图不给联网工具）。配额上每答多 1–2 次 LLM 调用（实测负例 8 条均为 2 次），每步留痕进 `agent_trace`。请求/响应契约不变（前端零改动）。
+**问答 agent（v31，ADR 0010；**v32 起默认开**）**：问答默认走 agent loop——LLM 在 loop 里决定「换个词再搜（`search_kb`）/ 何时转联网（`search_web`）/ 直接答」，首轮检索与消息前缀字节与旧决策树一致。护栏全在代码（预算 MAX_STEPS/每步超时/总预算，超了回落下述决策树，**最坏情况 = 现状**；引用真实性校验拒收假 `[n]`；挂图不给联网工具）。配额上每答多 1–2 次 LLM 调用（实测负例 8 条均为 2 次），每步留痕进 `agent_trace`。`agent_enabled=false` = 显式关回**旧决策树**（上述检索→相关性判定→[NO_KB]→联网/自答的硬编码树，保留作紧急开关/A-B 对照）；请求/响应契约不变（前端零改动）。
 
 ### `POST /api/qa/sessions/{id}/note-plan`（阶段4 增强）
 
@@ -492,7 +492,7 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 ```
 
 - 三字段均可省略（= 保持不变）；`llm_api_key` 传空串 = 保持不变，传新值 = 覆盖
-- **`agent_enabled`（v31，ADR 0010）**：问答 agent 灰度开关，**默认关**——关 = 走现有决策树（行为与现状完全一致），开 = LLM 在 loop 里选工具（见 §5 agent 灰度段）；旧客户端省略该字段 = 保持不变
+- **`agent_enabled`（v31，ADR 0010；**v32 起默认开**）**：问答 agent 开关——NULL/true = agent loop（**默认**，迁移 0017 翻转），false = 显式关回旧决策树（紧急开关/A-B 对照，见 §5 问答 agent 段）；agent 失败时回落决策树是代码层兜底，与该开关无关；旧客户端省略该字段 = 保持不变
 - 已知边界：worker 的 LLM 配置暂仍读 .env（设置页只影响问答/改写链路）；charter 已改为 DB 优先（见 §8）
 
 ---
@@ -571,6 +571,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-20 | v32 | **问答 agent 默认开**（主人验收拍板：「还要我手动去打开吗，我们都已经是 agent 模式了，旧对话模式不要再是默认」）：`agent_enabled` 语义翻转——NULL/true = agent loop（**默认**），false = 显式关回旧决策树（紧急开关/A-B 对照）。迁移 0017：`app_settings.agent_enabled` server_default false→true + 存量行全部置 true；agent 失败回落决策树的代码层兜底不变（ADR 0010「最坏情况=现状」不拆）。`negative_eval.py` 加 `--no-agent`（临时关 agent 跑决策树基线，跑完恢复原值；`--agent` 改为显式确保开）。§5/§6 描述同步；测试基线 631（旧决策树测试在 fixture 显式关 agent，agent 默认开有专项测试） |
 | 2026-11-20 | v31 | **问答 agent 灰度（ADR 0010）**：§6 设置加 `agent_enabled`（**默认关**；关 = 走现有决策树，行为与现状完全一致；开 = answerer 决策树上翻 tool-call loop——LLM 在 loop 里决定换词再搜 `search_kb` / 何时转联网 `search_web` / 直接答，预算三道闸 MAX_STEPS/每步超时/总预算超了回落决策树，最坏情况 = 现状）。§5 消息响应（`user_message`/`assistant_message`/`GET /sessions/{id}`/流式 `done`）新增 `agent_trace`（每步留痕 `{step, kind, tool, arg, result, latency_ms}`，null = 老路径/user 消息）；流式 `meta` 事件新增 `agent` 标记。迁移 0016：`app_settings.agent_enabled`（默认 false）+ `qa_messages.trace`（JSONB 授权审计）。前端契约不变（零改动，新增字段旧版忽略）。**背景**：`_has_relevant_hit` 字面闸判「沾边」就混合作答（n02 Hadoop 案例，缺陷台账失败模式④）；「这段只讲了起源没回答组件清单，该换词再搜或转联网」是只有 LLM 能做的语义判断。首跑教训（已修）：addendum 必须显式声明对旧规则 2（[NO_KB]+自身知识）的优先级，否则模型从不调 search_web |
 | 2026-11-20 | v30 | **B 站扫码登录半自动获取 SESSDATA**：§2 新增 `POST /api/bilibili/login`（弹真浏览器扫码，同步阻塞 ≤3.5 分钟，落库返回 uid）+ `GET /api/bilibili/login`（登录态查询，SESSDATA 永不回显）。被风控的 whisper 导入在 worker 兜底自动触发扫码（`video_stage`/`video_log` 提示 + 扫码成功原地重试兜底）；视频笔记页加「B 站登录」手动按钮。迁移 0015：`app_settings` 加 `bilibili_sessdata` / `bilibili_sessdata_at` / `bilibili_uid` 三列（DB 优先热生效，`.env` 的 `BILIBILI_SESSDATA` 仅回退）。**背景**：B 站浏览器兜底需要 SESSDATA 门票但 F12 手抄从未发生过（11-19 财富自由 5583 两次导入死于此）；扫码全程真浏览器（红线：SESSDATA 不做 HTTP 重放——TLS 指纹打分实测无效），既有消费者不变只换值的来源 |
 | 2026-11-18 | v29 | **问答缓存命中率改会话平均**：`§5` 消息响应（`user_message` / `assistant_message` / `GET /api/qa/sessions/{id}` 各消息 / 流式 `done` 事件）新增 `cache_hit_tokens` / `cache_miss_tokens` 原始计数（int，双 0 = 该条无缓存数据，与 `cache_hit_rate: null` 同判）；前端问答页输入框下方的「缓存命中率」（取最近一条非空 rate）改为**「平均缓存命中率」** = Σhit/Σ(hit+miss)，token 加权聚合全会话，联网搜索轮（双 0）天然不进分母。**背景**：按轮次算术平均会把长消息（几十 k 缓存 token、命中率高）和短消息（几百 token、命中率低）等权摊平，偏离真实 token 级缓存效率；`cache_hit_rate` 逐消息字段保留不变 |

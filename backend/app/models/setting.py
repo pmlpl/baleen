@@ -51,10 +51,11 @@ class AppSettings(Base):
     #   false       = 一律不生成
     # 「该不该画」不在这里决定——是代码算出来的(并列清单/流程阶段),不靠 LLM 自觉。
     allow_diagrams: Mapped[bool | None] = mapped_column(Boolean, server_default=text("true"))
-    # 问答 agent 灰度开关(ADR 0010,2026-11-20):NULL/false = 走现有决策树(行为与现状
-    # 完全一致);true = answerer 决策树上翻为 agent loop(脑选工具,预算/校验在马具)。
-    # 「脑不执缰」——预算与停不停永远在代码,这个开关只管要不要把语义决策交给脑。
-    agent_enabled: Mapped[bool | None] = mapped_column(Boolean, server_default=text("false"))
+    # 问答 agent 开关(ADR 0010;主人 2026-11-20 验收拍板**默认开**,迁移 0017 翻转):
+    # NULL/true = agent loop(脑选工具,预算/校验在马具);false = 显式关回旧决策树
+    # (紧急开关/A-B 对照用)。「脑不执缰」——预算与停不停永远在代码;agent 失败时
+    # 回落决策树的兜底与开关无关,永远在代码层。
+    agent_enabled: Mapped[bool | None] = mapped_column(Boolean, server_default=text("true"))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),
