@@ -116,6 +116,9 @@ const IMPORT_MAX_POLLS = 1800 // 2s × 1800 = 60 分钟上限（whisper 异步�
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 
+/** 跟踪断线（轮询连续失败超容忍）——不是导入失败，任务可能仍在 worker 里跑 */
+class TrackLostError extends Error {}
+
 function importStageText(detail: SourceDetail): string {
   // 视频异步提取阶段（下载音频中/whisper转写中/❌错误）——优先显示
   if (detail.video_stage) return detail.video_stage
@@ -190,8 +193,21 @@ async function waitImportDone(
   sourceId: number,
   onPoll: (detail: SourceDetail) => void,
 ): Promise<SourceDetail> {
+  // 网络闪断/后端热重载的几秒端口空窗 ≠ 任务失败：连续失败超过容忍次数才放弃跟踪。
+  // worker 在独立进程继续跑——放弃跟踪只代表「前端看不见了」，不代表「导入失败」。
+  const IMPORT_FAIL_TOLERANCE = 6 // 连续 6 次(约 12s+)仍失败才断开跟踪
+  let failures = 0
   for (let i = 0; i < IMPORT_MAX_POLLS; i += 1) {
-    const detail = await getSource(sourceId)
+    let detail: SourceDetail
+    try {
+      detail = await getSource(sourceId)
+      failures = 0
+    } catch {
+      failures += 1
+      if (failures >= IMPORT_FAIL_TOLERANCE) throw new TrackLostError()
+      await sleep(IMPORT_POLL_MS)
+      continue
+    }
     if (detail.job.status === 'done' || detail.job.status === 'failed') return detail
     onPoll(detail)
     await sleep(IMPORT_POLL_MS)
@@ -260,8 +276,15 @@ async function importVideo(): Promise<void> {
       await trackImport(upload.source_id, item)
     }
   } catch (error) {
-    item.stage = `❌ 导入失败:${describeApiError(error)}`
-    item.status = 'failed'
+    if (error instanceof TrackLostError) {
+      // 跟踪断线≠导入失败：worker 独立进程里任务还在跑。
+      // 保留 rememberActive（不清）——刷新页面可重新接上真实进度。
+      item.stage = '⚠️ 跟踪断线（后端重启或网络闪断）——任务可能仍在后台进行，刷新本页可重新接上'
+      item.status = 'pending'
+    } else {
+      item.stage = `❌ 导入失败:${describeApiError(error)}`
+      item.status = 'failed'
+    }
   } finally {
     importing.value = false
   }
