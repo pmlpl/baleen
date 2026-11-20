@@ -114,10 +114,12 @@ def qr_login_bilibili(timeout_s: float = 180.0) -> BiliLoginResult:
                 raise BiliLoginError("B 站登录弹窗没有出现（可能被风控拦截，稍后再试）")
 
             # ④ 等用户扫码：轮询 cookie 里的 SESSDATA（同时检测用户关窗）
+            # ⚠️ 关窗检测用 page.is_closed()——这版 Playwright sync API 的 Browser
+            # 没有 is_closed（实测 AttributeError，2026-11-20 主人首扫秒关的根因）
             waited_ms = 0
             poll_ms = 1000
             while waited_ms < timeout_s * 1000:
-                if browser.is_closed():
+                if page.is_closed():
                     raise BiliLoginCancelled("浏览器窗口被关闭，已取消 B 站登录")
                 try:
                     cookies = ctx.cookies("https://www.bilibili.com")
@@ -138,8 +140,10 @@ def qr_login_bilibili(timeout_s: float = 180.0) -> BiliLoginResult:
                 waited_ms += poll_ms
             raise BiliLoginTimeout(f"等待扫码超时（{int(timeout_s)} 秒），已放弃本次登录")
         finally:
-            if not browser.is_closed():
-                browser.close()
+            try:
+                browser.close()  # 已关的 browser close 是 no-op，无需 is_closed 预检
+            except Exception:  # noqa: BLE001
+                pass
 
 
 async def save_bilibili_login(session: AsyncSession, owner_id: int, result: BiliLoginResult) -> None:

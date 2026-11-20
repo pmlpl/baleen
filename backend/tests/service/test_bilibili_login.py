@@ -38,6 +38,12 @@ class FakeLocator:
 
 
 class FakePage:
+    def __init__(self, closed: bool = False) -> None:
+        self._closed = closed
+
+    def is_closed(self) -> bool:
+        return self._closed  # 真实接口在 Page 上（Browser 没有 is_closed，实测 AttributeError）
+
     def goto(self, url: str, **_kw: Any) -> None:
         pass
 
@@ -55,15 +61,18 @@ class FakePage:
 
 
 class FakeCtx:
-    def __init__(self, cookie_batches: list[list[dict[str, Any]]]) -> None:
+    def __init__(
+        self, cookie_batches: list[list[dict[str, Any]]], page: FakePage | None = None
+    ) -> None:
         self._batches = list(cookie_batches)
         self._i = 0
+        self._page = page if page is not None else FakePage()
 
     def add_init_script(self, _s: str) -> None:
         pass
 
     def new_page(self) -> FakePage:
-        return FakePage()
+        return self._page
 
     def cookies(self, _url: str) -> list[dict[str, Any]]:
         if not self._batches:
@@ -74,15 +83,14 @@ class FakeCtx:
 
 
 class FakeBrowser:
-    def __init__(self, ctx: FakeCtx, closed: bool = False) -> None:
+    """⚠️ 不定义 is_closed——真实 sync Browser 没有这个方法（mock 比真实对象多方法=假绿，
+    2026-11-20 主人首扫秒关的教训：FakeBrowser 自带 is_closed 让单测全绿、真机 AttributeError）。"""
+
+    def __init__(self, ctx: FakeCtx) -> None:
         self._ctx = ctx
-        self._closed = closed
 
     def new_context(self, **_kw: Any) -> FakeCtx:
         return self._ctx
-
-    def is_closed(self) -> bool:
-        return self._closed
 
     def close(self) -> None:
         pass
@@ -138,11 +146,12 @@ def test_qr_login_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_qr_login_cancelled_by_window_close(monkeypatch: pytest.MonkeyPatch) -> None:
-    """用户直接关掉浏览器窗口 → 友好取消（不是超时）。"""
+    """用户直接关掉浏览器窗口 → 友好取消（不是超时）。检测点=page.is_closed()。"""
     from app.service.bilibili_login import BiliLoginCancelled, qr_login_bilibili
 
-    ctx = FakeCtx([[]])
-    _install(monkeypatch, FakeBrowser(ctx, closed=True))
+    closed_page = FakePage(closed=True)
+    ctx = FakeCtx([[]], page=closed_page)
+    _install(monkeypatch, FakeBrowser(ctx))
 
     with pytest.raises(BiliLoginCancelled, match="取消"):
         qr_login_bilibili(timeout_s=180.0)
