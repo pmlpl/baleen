@@ -30,6 +30,8 @@ export interface QaMessage {
   /** 原始缓存命中/未命中 token 数:前端按 Σhit/Σ(hit+miss) 算会话级平均命中率 */
   cache_hit_tokens: number
   cache_miss_tokens: number
+  /** agent 模式每步留痕(api.md v31);缺省/null = 旧决策树路径/user 消息/前端占位 */
+  agent_trace?: { step: number; kind: string; tool: string | null }[] | null
 }
 
 /** 对话附件:用户临时上传给 AI 看的参考文件文本(后端 /api/parse 统一解析得到,不入库)。 */

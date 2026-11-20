@@ -550,19 +550,42 @@ const rendered = computed(() =>
   messages.value.map((m) => (m.role === 'assistant' ? renderMarkdown(m.content) : '')),
 )
 
-/** 会话级平均缓存命中率:Σ命中/Σ(命中+未命中),按 token 加权——
- * 比各轮 rate 的算术平均更贴近真实的 token 级缓存效率(长消息不该被短消息摊薄)。
- * 联网搜索轮没有缓存数据(双 0),天然不进分母;
- * null = 会话里还没有任何带缓存数据的回答 */
-const avgCacheRate = computed<number | null>(() => {
-  let hit = 0
-  let miss = 0
-  for (const m of messages.value) {
-    if (m.role !== 'assistant') continue
-    hit += m.cache_hit_tokens
-    miss += m.cache_miss_tokens
-  }
-  return hit + miss > 0 ? hit / (hit + miss) : null
+/** 会话级缓存命中率,分桶口径(token 加权 Σhit/Σ(hit+miss)):
+ * - overall: 全部轮——真金白银的利用率
+ * - kb: 纯库内轮——前缀设计质量的真实水平
+ * - web: 联网轮——每轮现抓网页内容天然未命中,结构性偏低,不是缓存坏了
+ * 联网判定:出处带 url(库内出处 url=null)或 agent trace 有 search_web 步骤
+ * (搜了但最终没引网页也算联网轮——稀释发生在内容进上下文那一刻,不看引没引)。
+ * 旧注释「联网轮双 0 不进分母」是决策树时代行为,agent 模式联网轮带 miss 进分母,
+ * 这正是要分桶的原因。桶里没有任何带缓存数据的轮 → 该桶 null */
+const cacheRateBuckets = computed<{ overall: number | null; kb: number | null; web: number | null }>(
+  () => {
+    const all = [0, 0]
+    const kb = [0, 0]
+    const web = [0, 0]
+    for (const m of messages.value) {
+      if (m.role !== 'assistant') continue
+      const isWeb =
+        m.citations.some((c) => c.url !== null) ||
+        (m.agent_trace?.some((s) => s.tool === 'search_web') ?? false)
+      const bucket = isWeb ? web : kb
+      bucket[0] += m.cache_hit_tokens
+      bucket[1] += m.cache_miss_tokens
+      all[0] += m.cache_hit_tokens
+      all[1] += m.cache_miss_tokens
+    }
+    const rate = (hit: number, mis: number) => (hit + mis > 0 ? hit / (hit + mis) : null)
+    return { overall: rate(all[0], all[1]), kb: rate(kb[0], kb[1]), web: rate(web[0], web[1]) }
+  },
+)
+
+const avgCacheRate = computed<number | null>(() => cacheRateBuckets.value.overall)
+
+/** 两桶都有数据才显示分层——单桶会话(全联网/全库内)总数即桶数,无对比意义 */
+const cacheRateSplit = computed<string | null>(() => {
+  const { kb, web } = cacheRateBuckets.value
+  if (kb === null || web === null) return null
+  return `库内轮 ${(kb * 100).toFixed(1)}% · 联网轮 ${(web * 100).toFixed(1)}%`
 })
 
 const hasAssistantMessage = computed(() => messages.value.some((m) => m.role === 'assistant'))
@@ -1311,6 +1334,13 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
           </span>
           <span v-else-if="hasAssistantMessage">—(当前模型未返回缓存数据)</span>
           <span v-else>—</span>
+          <span
+            v-if="cacheRateSplit !== null"
+            class="cache-split"
+            title="联网轮每轮现抓网页内容,天然未命中,偏低是结构性现象;库内轮才反映前缀设计的真实缓存水平"
+          >
+            ({{ cacheRateSplit }})
+          </span>
         </p>
       </div>
     </div>
