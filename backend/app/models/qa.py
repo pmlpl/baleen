@@ -28,12 +28,20 @@ from app.models.base import Base
 
 class QaSession(Base):
     __tablename__ = "qa_sessions"
-    __table_args__ = (Index("qa_sessions_owner_created_idx", "owner_id", text("created_at DESC")),)
+    __table_args__ = (
+        Index("qa_sessions_owner_created_idx", "owner_id", text("created_at DESC")),
+        Index("qa_sessions_owner_updated_idx", "owner_id", text("updated_at DESC")),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
     owner_id: Mapped[int] = mapped_column(BigInteger, server_default="1", nullable=False)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # 最近活跃时间:落一条消息(user/assistant)即刷新,仅打开/查看不碰。
+    # 会话列表按它排(最近活跃在前),也是「每用户只保留最新 50 个会话」的裁剪依据。
+    updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 

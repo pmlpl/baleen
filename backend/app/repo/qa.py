@@ -6,10 +6,14 @@
 
 from __future__ import annotations
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 
 from app.models.qa import QaDigest, QaMessage, QaSession
 from app.repo.base import Repo
+
+# 每用户保留的会话上限:只留最近活跃的最新 50 个,更旧的硬删(消息/摘要 FK CASCADE 连带删)。
+# 新建会话时由 API 层触发裁剪(只有新会话出现才可能超上限)。
+KEEP_SESSIONS = 50
 
 
 class QaRepo(Repo):
@@ -42,12 +46,13 @@ class QaRepo(Repo):
         return row
 
     async def list_sessions(self, *, limit: int = 50) -> tuple[int, list[QaSession]]:
+        """按**最近活跃**(updated_at)降序排——旧会话发一轮新对话即上浮顶部。"""
         base = select(QaSession).where(QaSession.owner_id == self.owner_id)
         total = int(
             await self.session.scalar(select(func.count()).select_from(base.subquery())) or 0
         )
         rows = await self.session.scalars(
-            base.order_by(QaSession.created_at.desc(), QaSession.id.desc()).limit(limit)
+            base.order_by(QaSession.updated_at.desc(), QaSession.id.desc()).limit(limit)
         )
         return total, list(rows)
 
@@ -94,8 +99,36 @@ class QaRepo(Repo):
             trace=trace,
         )
         self.session.add(row)
+        # 落一条消息(user 或 assistant)= 该会话「最近活跃」:刷 updated_at,旧会话发一轮
+        # 新对话即上浮列表顶部;仅打开/查看不碰时间。事务边界仍由调用方定(随轮次一起提交)。
+        await self.session.execute(
+            update(QaSession)
+            .where(QaSession.id == session_id, QaSession.owner_id == self.owner_id)
+            .values(updated_at=func.now())
+        )
         await self.session.flush()
         return row
+
+    async def trim_sessions(self, *, keep: int = KEEP_SESSIONS) -> int:
+        """只保留该用户最近活跃的 keep 个会话,更旧的硬删(消息/摘要 FK CASCADE 连带删)。
+
+        返回删掉的个数。在 API 两条消息流的 create_session 之后调用——只有新会话
+        产生才可能超上限,新建的会话 updated_at 最新,必在保留之列不会被自己裁掉。
+        """
+        keep_ids = (
+            select(QaSession.id)
+            .where(QaSession.owner_id == self.owner_id)
+            .order_by(QaSession.updated_at.desc(), QaSession.id.desc())
+            .limit(keep)
+            .scalar_subquery()
+        )
+        result = await self.session.execute(
+            delete(QaSession).where(
+                QaSession.owner_id == self.owner_id,
+                QaSession.id.not_in(keep_ids),
+            )
+        )
+        return int(result.rowcount or 0)
 
     async def delete_session(self, session_id: int) -> bool:
         """删会话;消息靠 FK ondelete CASCADE 连带删。返回是否真的删了。"""

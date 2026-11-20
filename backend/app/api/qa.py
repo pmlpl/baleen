@@ -16,6 +16,7 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import re
 import time
 from datetime import datetime
@@ -30,7 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import CurrentOwnerDep, SessionDep
 from app.api.library import RetrieveDep
 from app.models.qa import QaMessage, QaSession
-from app.repo.qa import QaRepo
+from app.repo.qa import KEEP_SESSIONS, QaRepo
 from app.service.llm import LLMClient, LLMError, estimate_tokens
 from app.service.llm.resolve import resolve_agent_enabled, resolve_llm_config, resolve_tavily_key
 from app.service.qa.agent import run_agent
@@ -57,6 +58,8 @@ from app.service.qa.summarizer import (
 from app.service.qa.websearch import search_web
 
 router = APIRouter(prefix="/api/qa", tags=["qa"])
+
+logger = logging.getLogger(__name__)
 
 # 提问长度上限:原 500 常把长提示词挡成 422;放宽到远超模型上下文的量级,
 # 不再因 question 字符数校验失败,实际长度仍受 LLM 上下文约束(超了是模型层错误)
@@ -340,6 +343,24 @@ def _message_out(m: QaMessage) -> MessageOut:
     )
 
 
+async def _create_session_and_trim(repo: QaRepo, title: str, *, owner_id: int) -> QaSession:
+    """新建会话 + 保留策略裁剪:只留最新 KEEP_SESSIONS 个会话,更旧的硬删(级联删消息/摘要)。
+
+    两条消息流(非流式/SSE)共用;裁剪只在新建会话后触发(只有新会话出现才可能超上限)。
+    删了几个记日志留痕,不建表。
+    """
+    qa_session = await repo.create_session(title)
+    trimmed = await repo.trim_sessions()
+    if trimmed:
+        logger.info(
+            "会话保留策略:owner=%s 删除 %d 个旧会话(只保留最新 %d 个)",
+            owner_id,
+            trimmed,
+            KEEP_SESSIONS,
+        )
+    return qa_session
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
@@ -351,9 +372,11 @@ async def chat(
     started = time.perf_counter()
     repo = QaRepo(session, owner_id)
 
-    # 1) 会话:无则建(title = 首问前 30 字)
+    # 1) 会话:无则建(title = 首问前 30 字;建新会话触发保留策略裁剪,只留最新 50 个)
     if payload.session_id is None:
-        qa_session = await repo.create_session(payload.question[:TITLE_CHARS])
+        qa_session = await _create_session_and_trim(
+            repo, payload.question[:TITLE_CHARS], owner_id=owner_id
+        )
     else:
         qa_session = await repo.get_session(payload.session_id)
         if qa_session is None:
@@ -583,7 +606,9 @@ async def chat_stream_endpoint(
     repo = QaRepo(session, owner_id)
 
     if payload.session_id is None:
-        qa_session = await repo.create_session(payload.question[:TITLE_CHARS])
+        qa_session = await _create_session_and_trim(
+            repo, payload.question[:TITLE_CHARS], owner_id=owner_id
+        )
     else:
         qa_session = await repo.get_session(payload.session_id)
         if qa_session is None:

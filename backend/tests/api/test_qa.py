@@ -13,14 +13,17 @@ fake_retrieve 记录每次检索词,供断言「改写后的 query 真的用于�
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 from app.api import library as library_module
 from app.api import qa as qa_module
 from app.main import app
+from app.repo.qa import KEEP_SESSIONS
 from app.service.llm import LLMClient
 
 
@@ -182,10 +185,10 @@ def test_chat_creates_session_and_persists(env: SimpleNamespace, qa_setup: Simpl
     # 首轮只调 1 次 LLM(回答),没有改写调用
     assert len(qa_setup.transports[-1].calls) == 1
 
-    # 落库:侧栏列表 + 重开详情
+    # 落库:侧栏列表 + 重开详情。保留策略:总数封顶 50(库里已饱和时新建会顶掉最旧的 1 个)
     listing = env.client.get("/api/qa/sessions").json()
-    assert listing["total"] == before + 1
-    assert listing["items"][0]["id"] == session_id  # 最新在前
+    assert listing["total"] == min(before + 1, KEEP_SESSIONS)
+    assert listing["items"][0]["id"] == session_id  # 最近活跃在前
     detail = env.client.get(f"/api/qa/sessions/{session_id}").json()
     assert [m["role"] for m in detail["messages"]] == ["user", "assistant"]
     assert detail["messages"][0]["content"] == "闭包是什么"
@@ -279,12 +282,205 @@ def test_delete_session(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None
     assert resp.status_code == 204
     assert env.client.get(f"/api/qa/sessions/{sid}").status_code == 404
     listing = env.client.get("/api/qa/sessions").json()
-    assert listing["total"] == before  # 只删了自己建的那条,主人的真实会话不动
+    # 只删了自己建的那条;保留策略下总数封顶 50(饱和时新建那条已顶掉 1 个最旧的)
+    assert listing["total"] == min(before + 1, KEEP_SESSIONS) - 1
 
 
 def test_blank_question_rejected(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
     resp = env.client.post("/api/qa/chat", json={"question": "   "})
     assert resp.status_code == 422
+
+
+# ---- 会话「最近活跃」排序 + 保留策略(每用户只留最新 50,2026-11-20) ----
+#
+# 隔离对照账号:远离真实用户的自增序列,保证该 owner 在开发库里没有任何真实会话,
+# 断言才能用绝对值(总数/位次)而不是差值。qa 表 owner_id 无 FK,不必先建 users 行
+# 才能种会话;要经 API 说话才需要(登录态校验 users 存在)。
+TEST_OWNER = 918_273
+BYSTANDER_OWNER = TEST_OWNER + 1
+
+
+def _headers_for(env: SimpleNamespace, owner_id: int) -> dict[str, str]:
+    """给对照账号造 users 行 + token,并关掉它的 agent 开关(本组测试全走决策树路径)。"""
+
+    async def _make_user() -> None:
+        async with env.shared["factory"]() as session:
+            await session.execute(
+                text(
+                    "INSERT INTO users (id, username, password_hash) "
+                    "VALUES (:i, 'qa-test-owner', 'x') ON CONFLICT (id) DO NOTHING"
+                ),
+                {"i": owner_id},
+            )
+            await session.commit()
+
+    env.client.portal.call(_make_user)
+    from app.service.auth.token import create_access_token
+
+    token = create_access_token(owner_id, "qa-test-owner")
+    resp = env.client.put(
+        "/api/settings",
+        json={"agent_enabled": False},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert resp.status_code == 200, resp.text  # 关不掉 agent,后面就全走 agent loop 了
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _seed_sessions(
+    env: SimpleNamespace,
+    owner_id: int,
+    count: int,
+    *,
+    payload_first: int = 0,
+    days_before: int = 0,
+) -> list[int]:
+    """直接落库 count 个会话(updated_at 按序号递增,控制新旧),返回 old→new 的 id 列表。
+
+    days_before: 时间戳整体往前挪 N 天(同一测试里第二批要比第一批更旧)。
+    payload_first: 给最老的前 n 个会话各塞 1 条消息 + 1 条摘要(裁剪验证级联删除)。
+    时间戳用 2026-01-01 级别的旧日期,一定排在真实会话(最近活跃)之后。
+    """
+
+    async def _seed() -> list[int]:
+        async with env.shared["factory"]() as session:
+            ids: list[int] = []
+            base = datetime(2026, 1, 1, tzinfo=timezone.utc) - timedelta(days=days_before)
+            for i in range(count):
+                ts = base + timedelta(days=i)
+                cur = await session.execute(
+                    text(
+                        "INSERT INTO qa_sessions (owner_id, title, created_at, updated_at) "
+                        "VALUES (:o, :t, :c, :u) RETURNING id"
+                    ),
+                    {"o": owner_id, "t": f"种子会话{i}", "c": ts, "u": ts},
+                )
+                ids.append(int(cur.scalar_one()))
+            for sid in ids[:payload_first]:
+                mid = int(
+                    (
+                        await session.execute(
+                            text(
+                                "INSERT INTO qa_messages (owner_id, session_id, role, content) "
+                                "VALUES (:o, :s, 'user', '种子消息') RETURNING id"
+                            ),
+                            {"o": owner_id, "s": sid},
+                        )
+                    ).scalar_one()
+                )
+                await session.execute(
+                    text(
+                        "INSERT INTO qa_digests "
+                        "(owner_id, session_id, start_msg_id, end_msg_id, summary) "
+                        "VALUES (:o, :s, :m, :m, '种子摘要')"
+                    ),
+                    {"o": owner_id, "s": sid, "m": mid},
+                )
+            await session.commit()
+            return ids
+
+    return env.client.portal.call(_seed)
+
+
+def _count_rows(
+    env: SimpleNamespace, table: str, owner_id: int, session_id: int | None = None
+) -> int:
+    """直查库数行数(owner 范围内;table 只由下方调用点的静态字面量传入)。"""
+
+    async def _q() -> int:
+        async with env.shared["factory"]() as session:
+            sql = f"SELECT count(*) FROM {table} WHERE owner_id = :o"  # noqa: S608
+            params: dict[str, Any] = {"o": owner_id}
+            if session_id is not None:
+                sql += " AND session_id = :s"
+                params["s"] = session_id
+            return int((await session.execute(text(sql), params)).scalar_one())
+
+    return env.client.portal.call(_q)
+
+
+def test_session_activity_ordering_and_touch(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    """①落一条消息即刷 updated_at,仅打开/查看不碰;②列表按最近活跃排:旧会话发一轮即上浮到顶。"""
+    headers = _headers_for(env, TEST_OWNER)
+    old_id, new_id = _seed_sessions(env, TEST_OWNER, 2)  # 返回 old→new
+
+    def _ids() -> list[int]:
+        page = env.client.get("/api/qa/sessions?limit=100", headers=headers).json()
+        return [s["id"] for s in page["items"]]
+
+    # 初始:新的在上;打开/查看旧会话(GET detail/导出同理不碰时间)次序不变
+    assert _ids().index(new_id) < _ids().index(old_id)
+    assert env.client.get(f"/api/qa/sessions/{old_id}", headers=headers).status_code == 200
+    assert _ids().index(new_id) < _ids().index(old_id)  # 仅查看没把它顶上去
+
+    # 在旧会话里发一轮对话(user+assistant 各 touch 一次)→ 上浮到最顶
+    qa_setup.responses.append((200, _chat("旧会话的新回答,还在。[1]")))
+    resp = env.client.post(
+        "/api/qa/chat", json={"session_id": old_id, "question": "闭包是什么"}, headers=headers
+    )
+    assert resp.status_code == 200, resp.text
+    assert _ids().index(old_id) < _ids().index(new_id)  # 旧会话翻到了新会话上面
+
+
+def test_session_retention_trims_to_50_with_cascade(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    """每用户只留最新 50 个,更旧的硬删(消息/摘要 FK CASCADE 连带删);两条消息流都接线。"""
+    headers = _headers_for(env, TEST_OWNER)
+
+    # 边界:49 存量 + 新建 1 = 正好 50 → 不裁,最老的还在(消息也原样)
+    ids = _seed_sessions(env, TEST_OWNER, 49, payload_first=1)
+    qa_setup.responses.append((200, _chat("边界:正好 50 个,不裁。[1]")))
+    resp = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert _count_rows(env, "qa_sessions", TEST_OWNER) == 50
+    assert env.client.get(f"/api/qa/sessions/{ids[0]}", headers=headers).status_code == 200
+    assert _count_rows(env, "qa_messages", TEST_OWNER, ids[0]) == 1  # 没被误删
+
+    # 再种 2 个更旧的(days_before 往前挪)→ 52 + 非流式新建 1 = 53 → 裁 3:
+    # 2 个旧的(带消息/摘要,验级联)+ ids[0](49 批里最老的,也带消息)
+    old2 = _seed_sessions(env, TEST_OWNER, 2, payload_first=2, days_before=400)
+    qa_setup.responses.append((200, _chat("超了,该裁了。[1]")))
+    resp = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert _count_rows(env, "qa_sessions", TEST_OWNER) == 50
+    for gone in [*old2, ids[0]]:
+        assert env.client.get(f"/api/qa/sessions/{gone}", headers=headers).status_code == 404
+        assert _count_rows(env, "qa_messages", TEST_OWNER, gone) == 0  # 消息级联删
+        assert _count_rows(env, "qa_digests", TEST_OWNER, gone) == 0  # 摘要级联删
+    assert env.client.get(f"/api/qa/sessions/{ids[1]}", headers=headers).status_code == 200
+
+    # 流式端点同一条保留策略:50 + 新建 1 = 51 → 再裁最老的 1 个(ids[1])
+    qa_setup.stream_lines = _sse_lines(["流式也会裁。[1]"], cache_hit=0, cache_miss=0)
+    resp = env.client.post("/api/qa/chat/stream", json={"question": "闭包是什么"}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert _count_rows(env, "qa_sessions", TEST_OWNER) == 50
+    assert env.client.get(f"/api/qa/sessions/{ids[1]}", headers=headers).status_code == 404
+    assert env.client.get(f"/api/qa/sessions/{ids[2]}", headers=headers).status_code == 200
+
+
+def test_session_retention_is_owner_scoped(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    """A 的裁剪只动 A 自己的:B(另一个 owner)的旧会话/消息原样保留,连看都看不见。"""
+    b_ids = _seed_sessions(env, BYSTANDER_OWNER, 3, payload_first=3, days_before=400)
+    headers = _headers_for(env, TEST_OWNER)
+
+    _seed_sessions(env, TEST_OWNER, 51)
+    qa_setup.responses.append((200, _chat("A 触发裁剪的回答。[1]")))
+    resp = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}, headers=headers)
+    assert resp.status_code == 200, resp.text
+    assert _count_rows(env, "qa_sessions", TEST_OWNER) == 50  # A 真的被裁了
+
+    # B 的 3 个会话/消息原样在(若裁剪漏了 owner 过滤,B 这些最旧的会最先被误删)
+    assert _count_rows(env, "qa_sessions", BYSTANDER_OWNER) == 3
+    assert _count_rows(env, "qa_messages", BYSTANDER_OWNER) == 3
+    for bid in b_ids:
+        assert _count_rows(env, "qa_messages", BYSTANDER_OWNER, bid) == 1
+        # owner 作用域:A 的 token 连 B 的会话详情都看不见(404)
+        assert env.client.get(f"/api/qa/sessions/{bid}", headers=headers).status_code == 404
 
 
 def test_export_session_writes_file_and_returns_markdown(

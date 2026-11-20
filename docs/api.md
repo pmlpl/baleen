@@ -1,4 +1,4 @@
-# API 契约 v32
+# API 契约 v33
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -430,10 +430,12 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 
 | 端点 | 说明 |
 |---|---|
-| `GET /api/qa/sessions?limit=50` | 会话列表（最新在前），`{total, items:[{id,title,created_at}]}` |
+| `GET /api/qa/sessions?limit=50` | 会话列表（**v33 起按最近活跃在前**，`updated_at desc`），`{total, items:[{id,title,created_at}]}` |
 | `GET /api/qa/sessions/{id}` | 重开会话，`{id,title,created_at,messages:[Message]}` |
 | `DELETE /api/qa/sessions/{id}` | 删会话（消息 CASCADE），204 |
 | `GET /api/qa/sessions/{id}/export` | 导出 Markdown（浏览器下载；同时在 `tmp/qa_exports/` 落一份） |
+
+**最近活跃与保留策略（v33）**：会话列表按**最近活跃**排序——落一条消息（user/assistant）即刷新该会话的活跃时间，旧会话发一轮新对话就上浮到顶部；仅打开/查看/导出**不**刷新。每用户只保留**最新 50 个**会话，更旧的**硬删**（消息/摘要 FK CASCADE 连带删；`qa_sessions.updated_at` 迁移 0018，存量回填 = `created_at`）。裁剪只在**新建会话时**触发（只有新会话出现才可能超上限），删了几个记进后端日志，不建表。已知边界：闲置旧会话可能正开在别的标签页里被裁掉 → 之后该标签页发消息得 `404 会话不存在`，前端兜底「已开新对话」提示。
 
 **`cache_hit_rate` 口径**：prompt 前缀缓存命中占比 = hit/(hit+miss)；上游未命中时不下发字段 → `null`（前端显示「—」）。字段双格式归一：DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`。v29 起消息附带原始计数 `cache_hit_tokens` / `cache_miss_tokens`（双 0 = 该条无缓存数据），前端问答页用它算会话级**平均缓存命中率** Σhit/Σ(hit+miss)（token 加权，比各轮 rate 算术平均更贴近真实缓存效率），替代此前「取最近一条非空 rate」的口径。
 
@@ -571,6 +573,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-20 | v33 | **会话「最近活跃」排序 + 每用户保留最新 50 个**（主人 2026-11-20 拍板）：§5 会话列表从「按创建时间」改为「按最近活跃」（`updated_at desc`）——落一条消息（user/assistant）即刷该会话活跃时间，旧会话发一轮新对话上浮到顶；仅打开/查看/导出不刷新。保留策略：每用户只留最新 50 个会话，更旧的**硬删**（消息/摘要 FK CASCADE 连带删），只在新建会话时触发裁剪（删几个记日志不建表）。迁移 0018：`qa_sessions.updated_at`（NOT NULL，server_default now()）+ `(owner_id, updated_at DESC)` 索引 + 存量回填 `updated_at = created_at`；老用户零感知（只加列回填，digest/缓存不受影响）。响应字段不变（`created_at` 照旧返回，前端不显示日期）。已知边界：闲置旧会话开在别的标签页时可能被裁 → 之后发消息 404，前端兜底「已开新对话」 |
 | 2026-11-20 | v32 | **问答 agent 默认开**（主人验收拍板：「还要我手动去打开吗，我们都已经是 agent 模式了，旧对话模式不要再是默认」）：`agent_enabled` 语义翻转——NULL/true = agent loop（**默认**），false = 显式关回旧决策树（紧急开关/A-B 对照）。迁移 0017：`app_settings.agent_enabled` server_default false→true + 存量行全部置 true；agent 失败回落决策树的代码层兜底不变（ADR 0010「最坏情况=现状」不拆）。`negative_eval.py` 加 `--no-agent`（临时关 agent 跑决策树基线，跑完恢复原值；`--agent` 改为显式确保开）。§5/§6 描述同步；测试基线 631（旧决策树测试在 fixture 显式关 agent，agent 默认开有专项测试） |
 | 2026-11-20 | v31 | **问答 agent 灰度（ADR 0010）**：§6 设置加 `agent_enabled`（**默认关**；关 = 走现有决策树，行为与现状完全一致；开 = answerer 决策树上翻 tool-call loop——LLM 在 loop 里决定换词再搜 `search_kb` / 何时转联网 `search_web` / 直接答，预算三道闸 MAX_STEPS/每步超时/总预算超了回落决策树，最坏情况 = 现状）。§5 消息响应（`user_message`/`assistant_message`/`GET /sessions/{id}`/流式 `done`）新增 `agent_trace`（每步留痕 `{step, kind, tool, arg, result, latency_ms}`，null = 老路径/user 消息）；流式 `meta` 事件新增 `agent` 标记。迁移 0016：`app_settings.agent_enabled`（默认 false）+ `qa_messages.trace`（JSONB 授权审计）。前端契约不变（零改动，新增字段旧版忽略）。**背景**：`_has_relevant_hit` 字面闸判「沾边」就混合作答（n02 Hadoop 案例，缺陷台账失败模式④）；「这段只讲了起源没回答组件清单，该换词再搜或转联网」是只有 LLM 能做的语义判断。首跑教训（已修）：addendum 必须显式声明对旧规则 2（[NO_KB]+自身知识）的优先级，否则模型从不调 search_web |
 | 2026-11-20 | v30 | **B 站扫码登录半自动获取 SESSDATA**：§2 新增 `POST /api/bilibili/login`（弹真浏览器扫码，同步阻塞 ≤3.5 分钟，落库返回 uid）+ `GET /api/bilibili/login`（登录态查询，SESSDATA 永不回显）。被风控的 whisper 导入在 worker 兜底自动触发扫码（`video_stage`/`video_log` 提示 + 扫码成功原地重试兜底）；视频笔记页加「B 站登录」手动按钮。迁移 0015：`app_settings` 加 `bilibili_sessdata` / `bilibili_sessdata_at` / `bilibili_uid` 三列（DB 优先热生效，`.env` 的 `BILIBILI_SESSDATA` 仅回退）。**背景**：B 站浏览器兜底需要 SESSDATA 门票但 F12 手抄从未发生过（11-19 财富自由 5583 两次导入死于此）；扫码全程真浏览器（红线：SESSDATA 不做 HTTP 重放——TLS 指纹打分实测无效），既有消费者不变只换值的来源 |

@@ -10,7 +10,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { getToken } from '../auth/token'
-import { describeApiError } from '../api/http'
+import { ApiError, describeApiError } from '../api/http'
 import { listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
 import { parseAttachment } from '../api/parse'
@@ -632,6 +632,13 @@ async function openSession(id: number): Promise<void> {
       void renderSvgsIn(msgListEl.value)
     }
   } catch (error) {
+    // 旧会话可能已被保留策略清理(每用户只留最近 50 个;别的标签页里建新会话会顶掉它):
+    // 落到新对话并给一句人话,别让用户对着「接口还没就绪」猜
+    if (error instanceof ApiError && error.status === 404) {
+      startNew()
+      errorText.value = '这个会话已被清理(系统只保留最近 50 个会话),已开新对话。'
+      return
+    }
     errorText.value = describeApiError(error)
   } finally {
     loadingSession.value = false
@@ -805,11 +812,18 @@ async function send(): Promise<void> {
     if (streamingIdx !== null && messages.value[streamingIdx]?.content === '') {
       messages.value.splice(streamingIdx, 1)
     }
+    const desc = describeApiError(error)
+    // 发问的会话已被保留策略清理(旧标签页里的闲置会话会被顶掉):开新对话承接,
+    // 提问与引用/附件原样还回输入框,重发即可
+    const sessionGone = error instanceof Error && desc.includes('会话不存在')
+    if (sessionGone) startNew()
     input.value = text
     referencedNotes.value = sentExtras.notes.map((n) => ({ ...n }))
     attachments.value = attachmentsPayload.map((a) => ({ ...a }))
     imageAttachments.value = imagesPayload.map((im) => ({ ...im }))
-    errorText.value = describeApiError(error)
+    errorText.value = sessionGone
+      ? '这个会话已被清理(系统只保留最近 50 个),已开新对话;提问还在输入框,重发即可。'
+      : desc
   } finally {
     stopThinkingTimer()
     sending.value = false
@@ -914,51 +928,53 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
     <div class="qa-layout">
       <aside class="session-side">
-        <button class="btn btn--primary new-btn" type="button" @click="startNew">+ 新对话</button>
-        <p v-if="sessions.length === 0" class="muted side-empty">还没有历史会话</p>
-        <ul class="session-list">
-          <li
-            v-for="s in sessions"
-            :key="s.id"
-            class="session-item"
-            :class="{ 'session-item--active': s.id === currentSessionId }"
-          >
-            <button class="session-open" type="button" :title="s.title" @click="openSession(s.id)">
-              {{ s.title }}
-            </button>
-            <button
-              class="session-export"
-              type="button"
-              title="导出为 Markdown"
-              aria-label="导出为 Markdown"
-              @click.stop="exportSession(s.id)"
+        <div class="session-side-inner">
+          <button class="btn btn--primary new-btn" type="button" @click="startNew">+ 新对话</button>
+          <p v-if="sessions.length === 0" class="muted side-empty">还没有历史会话</p>
+          <ul class="session-list">
+            <li
+              v-for="s in sessions"
+              :key="s.id"
+              class="session-item"
+              :class="{ 'session-item--active': s.id === currentSessionId }"
             >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
+              <button class="session-open" type="button" :title="s.title" @click="openSession(s.id)">
+                {{ s.title }}
+              </button>
+              <button
+                class="session-export"
+                type="button"
+                title="导出为 Markdown"
+                aria-label="导出为 Markdown"
+                @click.stop="exportSession(s.id)"
               >
-                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                <polyline points="7 10 12 15 17 10" />
-                <line x1="12" y1="15" x2="12" y2="3" />
-              </svg>
-            </button>
-            <button
-              class="session-del"
-              type="button"
-              aria-label="删除会话"
-              @click.stop="removeSession(s.id)"
-            >
-              ×
-            </button>
-          </li>
-        </ul>
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                  <polyline points="7 10 12 15 17 10" />
+                  <line x1="12" y1="15" x2="12" y2="3" />
+                </svg>
+              </button>
+              <button
+                class="session-del"
+                type="button"
+                aria-label="删除会话"
+                @click.stop="removeSession(s.id)"
+              >
+                ×
+              </button>
+            </li>
+          </ul>
+        </div>
       </aside>
 
       <div class="chat-main" @dragover.prevent @drop.prevent="onChatDrop">
@@ -1299,9 +1315,19 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   gap: 16px;
 }
 
+/* 侧栏外壳:内容不参与行高(绝对铺满),行高只由右侧对话区定——
+   两栏像素级同高;会话再多也只在侧栏内部滚,不再把整页拉长 */
 .session-side {
+  position: relative;
   flex-shrink: 0;
   width: 210px;
+}
+
+.session-side-inner {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .new-btn {
@@ -1313,11 +1339,16 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   font-size: 13px;
 }
 
+/* 会话列表:侧栏里独立滚动(「+ 新对话」固定顶部不被卷走) */
 .session-list {
   display: flex;
   list-style: none;
   flex-direction: column;
   gap: 6px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 2px 6px 0;
 }
 
 .session-item {
