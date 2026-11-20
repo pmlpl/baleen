@@ -111,14 +111,20 @@ def check_test_baseline() -> None:
         )
 
     base = max(truth)
+    compared = 0
     for rel, nums in found.items():
         if rel == "STATUS.md":
             continue
+        compared += 1
         bad = sorted(n for n in nums if n != base)
         if bad:
             add(ERROR, "测试基线", f"{rel} 写 {bad}，STATUS 是 {base}")
         else:
             add(INFO, "测试基线", f"{rel} 与基线 {base} 一致")
+    if compared == 0:
+        # 2026-11-20 修的静默缺口:其余文档都不再声明基线时,循环体零执行导致
+        # 本检查一声不吭——基线值本身必须可见,否则这条检查等于不存在
+        add(INFO, "测试基线", f"基线 {base}（STATUS 唯一真源，其余文档无声明，无需比对）")
 
 
 # ------------------------------------------------------- 3. 端点数量（若写了）
@@ -262,7 +268,48 @@ def check_links() -> None:
         add(INFO, "文档链接", "全部可解析")
 
 
-# --------------------------------------------- 8. 已删文件不该再被当成活文档
+# --------------------------------------------- 8. 台账统计与分析层必须同步
+def check_ledger_stats() -> None:
+    """CSV 是真源，md 统计段是分析层——「改 CSV 必须同步 md 统计」是台账维护约定，
+    但 2026-11-20 实际漂移过（md 说 90、CSV 已 96，跨会话追加时最容易漏的就是同步统计）。
+    """
+    import csv
+    from collections import Counter
+
+    csv_path = ROOT / "eval" / "analysis" / "defects_ledger.csv"
+    if not csv_path.exists():
+        add(WARN, "台账统计", "eval/analysis/defects_ledger.csv 不存在")
+        return
+    with open(csv_path, encoding="utf-8-sig") as f:
+        rows = list(csv.DictReader(f))
+    tiers = Counter(r["tier"] for r in rows)
+    actual = (len(rows), tiers.get("A", 0), tiers.get("B", 0), tiers.get("C", 0))
+
+    md = read("eval/analysis/defects_ledger.md")
+    m = re.search(
+        r"\*\*总数\s*(\d+)\*\*\s*=\s*A\s*(\d+)\s*/\s*B\s*(\d+)\s*/\s*C\s*(\d+)", md
+    )
+    if not m:
+        add(WARN, "台账统计", "defects_ledger.md 统计段没有『**总数 N** = A x / B y / C z』")
+        return
+    claimed = tuple(int(x) for x in m.groups())
+    if claimed != actual:
+        add(
+            ERROR,
+            "台账统计",
+            f"md 说 总数{claimed[0]}=A{claimed[1]}/B{claimed[2]}/C{claimed[3]}，"
+            f"CSV 实际 总数{actual[0]}=A{actual[1]}/B{actual[2]}/C{actual[3]}"
+            "——改台账后必须同步 md 统计段",
+        )
+    else:
+        add(
+            INFO,
+            "台账统计",
+            f"{actual[0]} 条（A{actual[1]}/B{actual[2]}/C{actual[3]}），md 与 CSV 一致",
+        )
+
+
+# --------------------------------------------- 9. 已删文件不该再被当成活文档
 def check_no_dead_docs() -> None:
     dead = [
         "backend/notes_out",
@@ -282,6 +329,7 @@ def main() -> int:
         check_log_coverage,
         check_delivery_coverage,
         check_freshness,
+        check_ledger_stats,
         check_links,
         check_no_dead_docs,
     ):

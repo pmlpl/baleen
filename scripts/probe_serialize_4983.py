@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 """探针:用后端真实 doc_to_markdown 把笔记 4983 序列化成 md,存 %TEMP%/note4983.md。
+
+⚠️ probe_math_render.mjs 的数据源——它读 %TEMP%/note4983.md 跑断言,删本探针 = 渲染探针断粮。
 embed 模块只被 notes_edit 引了常量,stub 掉避免加载 torch。
 """
 import json
