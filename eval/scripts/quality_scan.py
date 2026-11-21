@@ -772,6 +772,20 @@ def phase_llm(notes: list[dict], delay: float, limit: int | None, resume: bool) 
 
 DIM_LABEL = {"typo": "术语错字", "frame": "废帧混入", "style": "口语残留"}
 
+FRONTEND_NOTE_URL = "http://localhost:5173/notes/{}"  # 前端路由 /notes/:id
+
+HOW_TO_VERIFY = """## 怎么确认(先读这节再往下看)
+
+| flag 类型 | 怎么裁决 |
+|---|---|
+| **错字 / 口语残留** | 看本行引文即可裁决——证据就在行内(「」里的原文),够判断就不用打开笔记 |
+| **语义 / 上下文类** | 点行尾直达链接,在**前端笔记页**看渲染后的全文再判断 |
+| **废帧混入** | 必须**前端看图**(点开笔记→图片点击灯箱放大)——图片存在 `storage/media` 由前端解析,**磁盘上没有每篇笔记的 md 文件**,md/VSCode 里看不到图 |
+
+> 直达链接指向前端 dev server(`http://localhost:5173`)——没起先在 `frontend/` 跑 `npm run dev`。
+> 纯文本引文裁决不了的,一律以前端渲染页为准。
+"""
+
 
 def phase_report(notes: list[dict]) -> None:
     rows = load_rows()
@@ -785,6 +799,7 @@ def phase_report(notes: list[dict]) -> None:
         f"> 生成:`eval/scripts/quality_scan.py --report` · 数据:{csv_path().name} · "
         f"只 flag 不修正,主人裁决后另开修正批(PUT 修改留痕)",
         "",
+        HOW_TO_VERIFY,
         "## 量化指标(#5/#6 首批测量)",
         "",
         "| 指标 | 值 |",
@@ -815,8 +830,9 @@ def phase_report(notes: list[dict]) -> None:
         loc = f" @ {r['location']}" if r["location"] else ""
         near = f" → 建议改 **{r['near']}**" if r["near"] else ""
         reason = f"({r['reason']})" if r["reason"] else ""
+        link = f" → [打开笔记]({FRONTEND_NOTE_URL.format(r['note_id'])})"
         return (f"- note {r['note_id']}「{r['title'][:20]}」[{DIM_LABEL.get(r['dim'], r['dim'])}"
-                f"/{r['signal']}]「{r['evidence'][:60]}」{loc}{near}{reason}")
+                f"/{r['signal']}]「{r['evidence'][:60]}」{loc}{near}{reason}{link}")
 
     if open_rows:
         order = {"typo": 0, "frame": 1, "style": 2}
