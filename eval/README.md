@@ -34,6 +34,13 @@ uv run python ..\eval\scripts\<脚本名>
 | 6 | `uv run python ..\eval\scripts\negative_eval.py` | `runs\negative_report.md`：负例行为表 | PASS/FAIL（全 PASS=正常） | 免费；`--live` 要后端+token |
 | 7 | `uv run python ..\eval\scripts\review_agent.py` | `runs\ai_review.csv` + `runs\ai_agreement.md`：**AI 盲审 35 样本 + 一致率 + 分歧裁决单** | 一致率行 + 分歧裁决单（你只裁决分歧） | 花 LLM token（用你设置页配的模型；`--mode candidates` 盲审候选池，`--compare` 免费重算一致率） |
 | 8 | `uv run python ..\eval\scripts\frame_eval.py` | 帧选择质量打分：无用帧混入率 / 有用帧召回率 / 零帧清单 | 三个汇总数字 + 逐条 PASS/FAIL；**FAIL 是题集抓到的真问题，不是脚本坏了** | 免费（只读库） |
+| 9 | `uv run python ..\eval\scripts\quality_scan.py --stats --scan` | 终端：全库分层统计 + 启发式嫌疑（错字/废帧/口语残留） | `[scan]` 行的条数；明细在 `runs\quality_scan_<日期>.csv` | 免费（只读库） |
+| 10 | `uv run python ..\eval\scripts\quality_scan.py --llm` | CSV 追加 LLM 终审判定（确认/否决启发式 + 新发现） | 逐篇 `typo= frame= style=` 行 | **花 token（全库每篇 ≤1 次调用，44 篇约 12 万 token）；`--resume` 断点续跑** |
+| 11 | `uv run python ..\eval\scripts\quality_scan.py --report` | `runs\quality_scan_<日期>.md`：**分诊报告**（只列 flag + 量化指标 + 主人抽查包） | flag 清单 + 抽查包两节 | 免费 |
+
+**全库质检（2026-11-21 新增）**：AI 筛 100%、主人只看 flag 的分诊流程。步 9 免费可单独跑；步 10 是
+成本闸（每篇 ≤1 次调用），步 11 把 CSV 汇成报告。启发式词典在脚本头 `DOMAIN_DICT`/`COMMON_WORDS`
+（领域新词报了近似词误报 → 加进词典即可）。**只 flag 不修正**——主人裁决后另开修正批（PUT 修改留痕）。
 
 **帧选择评测（backlog #6）的题集**在 `eval/queries/frame_selection_expectations.md`——主人 2026-11-19
 对 7 条视频笔记的逐帧裁决（16 条期望）。⚠️ **存量笔记是旧筛选规则产物**，跑出来是「旧规则基线」；
