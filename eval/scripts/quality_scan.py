@@ -174,23 +174,39 @@ def walk_doc(doc: dict) -> dict:
     current_path: list[str] = []  # 当前 heading 路径(heading 块更新,兄弟块共用)
 
     def collect_text(node: dict) -> str:
-        """块内文本(跳过嵌套 codeBlock 由外层处理;inline code 归 code_texts)。"""
+        """块内文本。inline code 保留原文(错字扫描容忍它;剥掉会让 LLM 看到
+        「空格占位」误判成笔记缺陷——2026-11-21 实证);嵌套 codeBlock 由外层处理。"""
         t = node.get("type")
         if t == "text":
-            marks = node.get("marks") or []
-            if any(m.get("type") == "code" for m in marks):
-                code_texts.append(node.get("text") or "")
-                return ""
             return node.get("text") or ""
         if t == "image":
             return ""
         parts = []
         for child in node.get("content") or []:
             if child.get("type") == "codeBlock":
-                code_texts.append(flatten_block(child))
-                continue
+                continue  # 代码块单独收集,不混进段落文本
             parts.append(collect_text(child))
         return "".join(parts)
+
+    def flatten_table(node: dict) -> str:
+        """表格 → 标准 markdown 表(表头行+分隔行)——直接拼文本会把整张表
+        压成流水串,LLM 会误判「表格拍平」(doc 里表是完好的);
+        自造「表头:」前缀也会被 LLM 当成笔记残留(2026-11-21 两案实证)。"""
+        rows: list[list[str]] = []
+        for tr in node.get("content") or []:
+            if tr.get("type") != "tableRow":
+                continue
+            cells = [collect_text(cell).strip() for cell in tr.get("content") or []]
+            if any(cells):
+                rows.append(cells)
+        if not rows:
+            return ""
+        width = max(len(r) for r in rows)
+        rows = [r + [""] * (width - len(r)) for r in rows]
+        md = "| " + " | ".join(rows[0]) + " |\n"
+        md += "|" + "---|" * width + "\n"
+        md += "\n".join("| " + " | ".join(r) + " |" for r in rows[1:])
+        return md
 
     def flatten_block(node: dict) -> str:
         parts = []
@@ -228,6 +244,11 @@ def walk_doc(doc: dict) -> dict:
             return
         if t == "codeBlock":
             code_texts.append(flatten_block(node))
+            return
+        if t == "table":
+            text = flatten_table(node)
+            if text.strip():
+                paras.append({"path": loc(), "text": text, "table": True})
             return
         text = collect_text(node)
         if text.strip():
@@ -420,6 +441,9 @@ def scan_style(note: dict) -> list[dict]:
         text = p["text"].strip()
         if not text:
             continue
+        if p.get("table"):
+            prev_text = text
+            continue  # 表格再长也正常,不报超长段(6095 误报教训)
         hits = COLLOQUIAL_RE.findall(text)
         if len(hits) >= COLLOQUIAL_MIN_HITS:
             flags.append({
@@ -479,6 +503,12 @@ def llm_judge_note(client, note: dict, heur_flags: list[dict]) -> tuple[dict | N
     """单篇终审,≤1 次调用。返回 (json 结果|None, 原始输出摘要)。"""
     texts = [p["text"] for p in note["paras"]]
     body = "\n".join(texts)
+    code_section = ""
+    code_joined = "\n".join(c for c in note["code"] if c.strip())
+    if code_joined:
+        # 预算要给足:截短会让 LLM 把「工具输入的截断」误判成「笔记代码截断」
+        # (156/157 实证:两篇代码 10-16k 字符,4000 预算下 LLM 报「结尾硬截断」假 flag)
+        code_section = f"\n代码块内容(上下文参考;代码/命令/变量名不算错字,清单可能截断不算笔记缺陷):\n{code_joined[:20000]}\n"
     if len(body) > CONTENT_BUDGET:
         half = CONTENT_BUDGET // 2
         body = body[:half] + "\n……(中段截断)……\n" + body[-half:]
@@ -496,6 +526,7 @@ def llm_judge_note(client, note: dict, heur_flags: list[dict]) -> tuple[dict | N
         f"来源:{note['layer']}  quality:{note['quality']}\n\n"
         + (f"图片描述清单({len(note['images'])}张):\n" + "\n".join(img_lines) + "\n\n" if img_lines else "")
         + (f"启发式嫌疑(仅供参考,需你独立判断):\n" + "\n".join(heur_lines) + "\n\n" if heur_lines else "")
+        + code_section
         + f"正文:\n{body}"
     )
     messages = [
@@ -622,6 +653,25 @@ def phase_scan(notes: list[dict]) -> list[dict]:
     return rows
 
 
+def _state_path() -> Path:
+    return RUNS_DIR / "quality_scan_llm_state.json"
+
+
+def _load_judged() -> set[int]:
+    """已终审篇的状态文件——全 0 flag 的篇在 CSV 里没有 llm 行,
+    只靠 CSV 判重会把它们重跑一遍(2026-11-21 实证),所以另存状态。"""
+    if _state_path().exists():
+        return {int(x) for x in json.loads(_state_path().read_text(encoding="utf-8"))["judged"]}
+    return set()
+
+
+def _save_judged(judged: set[int]) -> None:
+    RUNS_DIR.mkdir(parents=True, exist_ok=True)
+    _state_path().write_text(
+        json.dumps({"judged": sorted(judged)}, ensure_ascii=False), encoding="utf-8"
+    )
+
+
 def phase_llm(notes: list[dict], delay: float, limit: int | None, resume: bool) -> None:
     """LLM 终审:全库每篇 ≤1 次调用;启发式 flag 标 confirmed/dismissed,LLM 新发现 source=llm。"""
     from app.service.llm import LLMError
@@ -635,7 +685,7 @@ def phase_llm(notes: list[dict], delay: float, limit: int | None, resume: bool) 
         print(f"[error] LLM 不可用:{exc}", file=sys.stderr)
         return
 
-    judged = {int(r["note_id"]) for r in rows if r.get("source") == "llm"} if resume else set()
+    judged = _load_judged() if resume else set()
     targets = [n for n in notes if n["id"] not in judged]
     if limit:
         targets = targets[:limit]
@@ -710,6 +760,8 @@ def phase_llm(notes: list[dict], delay: float, limit: int | None, resume: bool) 
         print(f"  ({i}/{total}) note {n['id']} {n['title'][:24]:<26} "
               f"typo={n_typo} frame={n_frame} style={n_style}")
         save_rows(rows)
+        judged.add(n["id"])
+        _save_judged(judged)
         time.sleep(delay)
     save_rows(rows)
     print(f"[llm] 完成 {total} 篇,{time.perf_counter() - t0:.0f}s → {csv_path()}")

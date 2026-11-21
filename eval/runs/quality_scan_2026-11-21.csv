@@ -1,16 +1,58 @@
 ﻿note_id,layer,title,dim,signal,evidence,location,near,count,source,verdict,reason
-157,doc,Fetch / Axios 完全指南,typo,近似词(距离2),Worker,1.9.1 用 fetch 的场合 > 用 fetch 的场合,docker(2),1,heur,,
-160,doc,缺陷反馈：VIP音乐播放能力缺失（最终版）,typo,近似词(距离2),Solara,1.3.2 已突破的部分 > 已突破的部分,sora(2),3,heur,,
-164,doc,轻量化发票 OCR 识别与校验系统,typo,近似词(距离2),Engine,1.9 运行环境 > 运行环境,nginx(2),1,heur,,
+157,doc,Fetch / Axios 完全指南,typo,近似词(距离2),Worker,1.9.1 用 fetch 的场合 > 用 fetch 的场合,docker(2),1,heur,dismissed,
+159,doc,变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）,typo,近似词(距离1),coro,1.4.1 通用约定 > 3.1 通用约定,cors(1),1,heur,dismissed,"正确标识符/术语(inline code 上下文),非错字"
+159,doc,变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）,typo,近似词(距离1),httpx,1.4.1 通用约定 > 3.1 通用约定,http(1),1,heur,dismissed,"正确标识符/术语(inline code 上下文),非错字"
+159,doc,变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）,typo,近似词(距离1),base,1.4.2.1 file_tool.py > file_tool.py,bash(1),1,heur,dismissed,"正确标识符/术语(inline code 上下文),非错字"
+160,doc,缺陷反馈：VIP音乐播放能力缺失（最终版）,typo,近似词(距离2),Solara,1.3.2 已突破的部分 > 已突破的部分,sora(2),3,heur,dismissed,
+164,doc,轻量化发票 OCR 识别与校验系统,typo,近似词(距离2),Engine,1.9 运行环境 > 运行环境,nginx(2),1,heur,dismissed,
+296,doc,实验方案 · 轨道 B 泛化验证(exp-03),style,超长段落,"651字:语料:10 部左右真实公开中国法律法规(劳动法、劳动合同法等,与制度问答场景最近的文体),目标 3-10 万字 / 15",1.3 实验设计 > 二、实验设计,,1,heur,,
 2704,qa,Workflow 工作流：从信息卡到触发器与设计类型,style,超长段落,955字:[1] Agent 应用开发学习指南 · Agent 应用开发学习指南 — /notes/161[W1] 工作流触发器 ,可继续深入的方向 > 出处,,1,heur,,
+4250,video,读懂策略互动、利益博弈的底层逻辑丨《博弈论》深度解读,typo,近似词(距离1),Nash,1.2 纳什均衡：多方博弈下的局部最优陷阱 > 1.2.1 概念定义：中点拥挤模型,bash(1),1,heur,dismissed,"正确标识符/术语(inline code 上下文),非错字"
 4982,qa,电磁场中屏蔽势与电荷分布推导,style,超长段落,1217字:起点：泊松方程在无限空间中，势 $\phi$ 满足 $\nabla^2\phi = -\rho/\varepsilon_,电磁场中屏蔽势与电荷分布推导 > 核心思路与关键步骤,,1,heur,,
 4983,qa,圆锥曲线基础与椭圆错题解析,style,超长段落,"1159字:基础参数：$a^2=12, b^2=3 \Rightarrow c^2=a^2-b^2=9, c=3$。焦点坐标：焦点在",1. 椭圆离心率计算（第5题） > 2. 椭圆焦点与中点纵坐标（第6题）,,1,heur,,
-5468,video,一条视频搞懂15个主流AI热词：从LLM到Workspace Agent的完整逻辑线,typo,近似词(距离1),Window,四、上下文窗口（Context Window）：一次能装下多少 Token > 4.1 定义,windows(1),1,heur,,
+5468,video,一条视频搞懂15个主流AI热词：从LLM到Workspace Agent的完整逻辑线,typo,近似词(距离1),Window,四、上下文窗口（Context Window）：一次能装下多少 Token > 4.1 定义,windows(1),1,heur,dismissed,
 6002,qa,闭包到底是什么？用大白话解释,style,超长段落,643字:[1] 闭包 —— 面试必问，装逼必备 · 闭包 —— 面试必问，装逼必备 > 一、闭包到底是个什么玩意儿？ > 官方定,怎么解决 > 出处,,1,heur,,
 6007,qa,容器化技术演进与 API 网关辨析,style,超长段落,774字:[1] kube_evolution · 一、容器化技术栈演进路线 > 1.1 技术栈总体演进逻辑 — /notes/4,通用网关辨析框架 > 出处,,1,heur,,
 6008,qa,RAG 检索增强生成：原理、与微调的选型及私有知识库搭建,style,超长段落,734字:[1] 一条视频搞懂15个主流AI热词：从LLM到Workspace Agent的完整逻辑线 · 六、RAG（检索增强生,两个实用提醒 > 出处,,1,heur,,
-6009,video,Docker 常用命令实战：从拉取镜像到推送 Docker Hub,frame,界面元素,Chrome 地址栏输入 EC2 公网 IP 54.186.61.160，准备访问容器服务,ts=438s 3.2 docker build 构建镜像 > 3.3 端口映射运行与访问验证,,1,heur,,
-6009,video,Docker 常用命令实战：从拉取镜像到推送 Docker Hub,frame,互动引导,视频结尾的互动引导画面，非技术内容,ts=594s 4.1 镜像命名与登录 > 4.2 推送镜像并在 Docker Hub 查看,,1,heur,,
-6011,video,AI 入门地图：19 个核心概念速通,frame,互动引导,互动页：哪个 AI 概念还没懂，可以在评论区一起交流,ts=521s 4.4 Agent：从给建议到直接办事 > 4.5 Skill：智能体的操作说明书,,1,heur,,
-6013,video,PPO 基本原理：给策略更新加限速,typo,近似词(距离2),decide,一、PPO 基本原理：给策略更新加限速 > 1.1 用机器人行走建立全局认知,decoder(2),1,heur,,
-6095,video,从夯到拉：39 个前端技术全景评价,style,超长段落,619字:技术类别评级Sass样式方案人上人BootstrapUI 框架拉完了Tailwind CSS原子化 CSS夯Elemen,1.3 五档等级说明 > 1.4 项技术的等级速查,,1,heur,,
+6009,video,Docker 常用命令实战：从拉取镜像到推送 Docker Hub,typo,近似词(距离1),httpd,三、构建并运行自定义镜像 > 3.1 编写 Dockerfile,http(1),1,heur,dismissed,"正确标识符/术语(inline code 上下文),非错字"
+6009,video,Docker 常用命令实战：从拉取镜像到推送 Docker Hub,frame,界面元素,Chrome 地址栏输入 EC2 公网 IP 54.186.61.160，准备访问容器服务,ts=438s 3.2 docker build 构建镜像 > 3.3 端口映射运行与访问验证,,1,heur,dismissed,"识图 borderline(低信息过渡帧)+LLM 未报;6009 该段讲端口映射,图配着用可留"
+6009,video,Docker 常用命令实战：从拉取镜像到推送 Docker Hub,frame,互动引导,视频结尾的互动引导画面，非技术内容,ts=594s 4.1 镜像命名与登录 > 4.2 推送镜像并在 Docker Hub 查看,,1,heur,confirmed,片尾互动引导（求关注、点赞类）画面，与内容无关
+6011,video,AI 入门地图：19 个核心概念速通,frame,互动引导,互动页：哪个 AI 概念还没懂，可以在评论区一起交流,ts=521s 4.4 Agent：从给建议到直接办事 > 4.5 Skill：智能体的操作说明书,,1,heur,confirmed,属于评论区互动引导，不是正文内容帧。
+6013,video,PPO 基本原理：给策略更新加限速,typo,近似词(距离2),decide,一、PPO 基本原理：给策略更新加限速 > 1.1 用机器人行走建立全局认知,decoder(2),1,heur,dismissed,
+156,doc,闭包 —— 面试必问，装逼必备,style,LLM终审,函数嵌套函数（外层函数套内层函数）内层函数引用外层函数的变量内层函数在外面被使用（return 出去或者赋值给全局变量）,,,1,llm,open,三条并列条件被挤成一句，没有分隔和标点，明显是结构化重写没做干净，读起来像口语流水账。
+157,doc,Fetch / Axios 完全指南,style,LLM终审,但操蛋的是它设计得不够人性化，很多坑老子一个一个给你讲。,,,1,llm,open,这是典型的逐字稿式第一人称口播腔和脏话，没有改写为书面说明；同一段还有「狗屎设计」「你他妈就想用原生」等，应改成「fetch 的设计不够直观」「如果坚持用原生方案」等中性表述。
+158,doc,手写实战练习 —— 面试手撕题全集,style,LLM终审,这些他妈的都是面试高频题，不会写别他妈说自己是前端。,,,1,llm,open,"开场是口头吐槽式口语,还夹杂脏话,不是笔记正文应有的表述,应改为客观陈述,如「以下均为面试高频手写题」"
+159,doc,变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）,style,LLM终审,改动前：5 个核心工具无单测覆盖：file_tool.save_to_file — 路径逃逸 / 子目录默认 / 自动补后缀 / JSON 格式化 —— 安全 + 易踩坑registry.discov,,,1,llm,open,原本应是五条并列的列表项，却被压成一段连写的长句，“易踩坑registry.discover_tools”“哪里坏script_tool.run_custom_script”等条目之间直接粘连，缺少分
+160,doc,缺陷反馈：VIP音乐播放能力缺失（最终版）,style,LLM终审,✅ QQ音乐搜索：c.y.qq.com/soso/fcgi-bin/client_search_cp 旧接口可用，搜到周杰伦原唱 mid=0039MnYb0qxYhV✅ 网易云WEAPI加密：AES-,,,1,llm,open,多条✅/❌清单被挤在同一行，换行丢失，条目边界与逻辑层次被破坏；下方「JS逆向：…响应解密：…Frida hook：…」同样粘连成段，需要恢复分行
+164,doc,轻量化发票 OCR 识别与校验系统,style,LLM终审,→ 检索导出纯CPU运行，无需GPU，支持Docker一键部署；定位报销票据数字化场景（非发票文档友好拦截）,,,1,llm,open,两条独立要点/小节粘连在一起，缺乏分段，读起来逻辑断裂
+164,doc,轻量化发票 OCR 识别与校验系统,style,LLM终审,规则校验OCR 版式还原：基于文本块坐标重建阅读顺序,,,1,llm,open,「规则校验」结尾与下一小节标题「OCR 版式还原」粘连，导致语义误读为同一术语
+296,doc,实验方案 · 轨道 B 泛化验证(exp-03),style,LLM终审,"调研 + 下载法规语料(¥0),MOMO 过目选 10 部本地环境装 torch + bge,冒烟(3 篇文档全管线)LLM 生成候选题 → MOMO 确认 30 条全量跑:5 策略 × 2 embe",,,1,llm,open,"时间线/待办清单被压成一段且分隔符全部丢失(「选 10 部本地环境装」「模型report.md」直接粘连),属于明显的结构断裂,应按步骤拆行重排。"
+297,doc,命令速查表,style,LLM终审,所有 Python 命令加 uv run 前缀 —— 不要敲裸 python接口用 curl.exe -s —— 不要用 curl前端用 npm run dev —— 不是 uv run改完先跑 uv,,,1,llm,open,"这几条本应是分开的要点清单,却被并成一段且分句之间缺少断行,读起来像逐字稿流水账,结构断裂,建议按条拆成独立列表项。"
+487,qa,什么是 ReAct？,style,LLM终审,首段“ReAct 是一种 AI Agent 设计模式，其核心思想是模拟人‘思考—行动—观察’的循环……”与第二段“ReAct 是一种 AI Agent 设计模式，不是前端库 React……核心思想是模,,,1,llm,open,开头两段内容重复，只保留一段；第二段补充“不是前端库 React”即可，属于整理时未合并的重复段落
+4250,video,读懂策略互动、利益博弈的底层逻辑丨《博弈论》深度解读,style,LLM终审,初始状态：员工和老王都能按时下班，效率正常。,,,1,llm,open,前文囚徒困境场景设定为「你与老王」，此处人称突然变成「员工和老王」，与后文「你也被迫跟随加班」对不上，疑似逐字稿残留导致的指代混乱。
+4260,video,【后厨重地·网关】Nginx、API网关、Ingress、Gateway API、Istio，一集讲透,typo,LLM终审,名为 “Ingress Not Made” 的漏洞组,,名为 “IngressNightmare” 的漏洞组,1,llm,open,这是 ingress-nginx 漏洞组的专有名，原文明显错听/错写。
+4260,video,【后厨重地·网关】Nginx、API网关、Ingress、Gateway API、Istio，一集讲透,typo,LLM终审,Kong：内部由 Nginx 和 OpenResty 组成，使用 etcd 存储配置,,Kong：内部由 Nginx 和 OpenResty 组成，使用 PostgreSQL/Cassandra 存储配置（或,1,llm,open,Kong 的传统配置存储不是 etcd，etcd 是 Kubernetes 等系统常用键值存储，此处专有名词误写。
+4982,qa,电磁场中屏蔽势与电荷分布推导,typo,LLM终审,势的形式（屏蔽/尤卡型）,,（屏蔽/汤川型，即 Yukawa 型）,1,llm,open,Yukawa 势的中文标准译名是“汤川势/汤川型”，“尤卡型”是明显不符合规范的临时音译，疑为听写或转写造成的错误。
+4983,qa,圆锥曲线基础与椭圆错题解析,style,LLM终审,此处原对话推导中……为计算步骤展示，但最终中点纵坐标需除以2，详见下文修正或按原对话逻辑保留……根据原对话文字“...”，我们保留原对话的逻辑链条,,,1,llm,open,保留了未清理的对话元注释和自相矛盾的推导说明，造成明显逻辑断裂，属于编辑残留。
+5468,video,一条视频搞懂15个主流AI热词：从LLM到Workspace Agent的完整逻辑线,typo,LLM终审,n8n、codes 这类工具解决的就是这个问题,,n8n、Coze 这类工具,1,llm,open,Coze（扣子）是与 n8n 并列常被提及的工作流/智能体平台，语音转写「Coze」被错听成「codes」，同段后文重复出现同样错误
+5468,video,一条视频搞懂15个主流AI热词：从LLM到Workspace Agent的完整逻辑线,frame,LLM终审,视频开头提示可先收藏,,,1,llm,open,「可先收藏」属于引导观众收藏/互动的片头引导帧，与所在位置的知识内容无关
+5756,qa,简历写法与项目经历表达,style,LLM终审,面试一定会追问数字，最怕的不是数字偏小，而是说不清楚数字怎么来的 [W4]团队数字必须主动拆开说明自己负责哪部分 [W4]准备面试时，把写在简历上的东西当重点复习，尤其是项目经历和技能部分 [W2]面,,,1,llm,open,“要点：”下面的 5 条本应是分行列表，但整理时被合并成一大段，条目之间没有分隔符，导致阅读时逻辑断裂，需要重新分行。
+6008,qa,RAG 检索增强生成：原理、与微调的选型及私有知识库搭建,style,LLM终审,可能编一个听着很合理的答案，这就有点危险过时了：无需漫长的模型重训，就能获取训练截止日期之后的最新资讯幻觉：基于检索到的真实文档生成内容,,,1,llm,open,「过时了」「幻觉」两个并列小标题被并入上一段，句子读不通（「这就有点危险过时了」），属于列表项粘连导致逻辑断裂，需要分段重写
+6008,qa,RAG 检索增强生成：原理、与微调的选型及私有知识库搭建,style,LLM终审,但意思很近 [2]向量数据库：专门存放这些向量、快速找出相似内容的地方 [2],,,1,llm,open,Embedding 与向量数据库两个独立条目被拼成一段，需要断开
+6008,qa,RAG 检索增强生成：原理、与微调的选型及私有知识库搭建,style,LLM终审,只需更新文档索引 [W1][W2]要求可溯源、可解释,,,1,llm,open,选型理由的多个并列条目在转录中丢失了分隔和换行，整段串成流水账
+6008,qa,RAG 检索增强生成：原理、与微调的选型及私有知识库搭建,style,LLM终审,按固定模板写报告 [W2]模仿特定表达风格,,,1,llm,open,「输出格式固定」「模仿风格」「固定推理范式」「调用量极大」四条被压缩为一段，需要拆分为列表
+6009,video,Docker 常用命令实战：从拉取镜像到推送 Docker Hub,frame,LLM终审,Google 搜索 docker 时展开的自动补全列表，背景标签页包含 EC2 和容器服务页面,,,1,llm,open,这是搜索框自动补全下拉界面，未展示 Docker Hub 实际页面，也没有教学信息，属于浏览器界面废帧
+6010,video,种设计模式全景,typo,LLM终审,种设计模式全景,,23种设计模式全景,1,llm,open,标题缺少数量词“23”，与正文“23 种设计模式”不一致，语义不完整。
+6010,video,种设计模式全景,typo,LLM终审,历史编辑器上的撤销重做,,文本编辑器上的撤销重做,1,llm,open,备忘录模式的典型示例是文本编辑器，“历史编辑器”不合语境。
+6010,video,种设计模式全景,typo,LLM终审,空间联动,,控件联动,1,llm,open,中介者模式常以对话框/控件联动为例，“空间联动”在此语境下高度可疑。
+6011,video,AI 入门地图：19 个核心概念速通,typo,LLM终审,可以叫「慢剧」,,可以叫「漫剧」,1,llm,open,AI 短剧/漫画剧行业术语是「漫剧」，「慢剧」在此语境不成立。
+6011,video,AI 入门地图：19 个核心概念速通,typo,LLM终审,汇报或商业录影用的口播动画,,汇报或商业路演用的口播动画,1,llm,open,「商业路演」是常见搭配，「商业录影」在此语境生硬且高度疑似误听。
+6013,video,PPO 基本原理：给策略更新加限速,typo,LLM终审,不能再提高这一项的目標值；算出经过 Clip 处理的目標值，再把这些目標值取平均,,目标值,1,llm,open,简体正文中三处混入繁体字「目標」，应为「目标」
+6013,video,PPO 基本原理：给策略更新加限速,typo,LLM终审,新位置的未来价值 = 这一刻拿到的价值 + 折扣系数 × 新位置的未来价值,,当前状态的价值 = 这一刻拿到的奖励 + 折扣系数 × 新位置的未来价值,1,llm,open,贝尔曼递推等式左边写错，成了自我指涉，与下文「当场的 5 分 + 新位置折算后的 54 分 = 59 分」自相矛盾
+6015,video,国债：定义、由来与投资要点,style,LLM终审,这张“欠条”包含本金、利息和期限三个核心要素：国家约定三年或五年后归还本金，并在持有期间每年支付一定利息。……国债里包含本金、利息和期限：例如国家规定三年后或五年后还钱，这期间每年支付一定利息。,,,1,llm,open,本金、利息、期限三要素及三年/五年还本付息的表述前后几乎原样重复，属于未合并的重复段落，建议删去后一处或改为递进式表述。
+6089,doc,Docker 与 Git 速查笔记,style,LLM终审,git switch -c feature-x：从当前分支新建并切换到 feature-xgit rebase main：把当前分支的提交搬到 main 之上禁止对已推送到远端的公共分支执行 reba,,,1,llm,open,四条独立要点被硬拼成一段，出现「feature-xgit rebase main」这种粘连，条目边界丢失，应拆成列表项
+6089,doc,Docker 与 Git 速查笔记,style,LLM终审,先执行 git pull --rebase 拉取远端最新代码打开出冲突的文件，搜索 <<<<<<< 标记定位冲突位置保留正确的内容，删除三行标记用 git add 暂存后继续 rebase,,,1,llm,open,同样是多条步骤无分隔地串成一大段，读者无法分辨步骤边界，应还原为有序步骤
+6090,video,Python 编程的 5 个好习惯,typo,LLM终审,Auto Docstring 插件（视频里称 AutodocStream）,,删除括号内的「AutodocStream」，只保留「Auto Docstring 插件」,1,llm,open,"「AutodocStream」是口播里对插件名 Auto Docstring 的错听,整篇笔记里不应保留这个错名"
+7081,video,洞穿 AI 泡沫迷雾：美国 AI 泡沫破灭与全球金融变局推演,typo,LLM终审,梁文峰和 DeepSeek 横空出世,,梁文锋,1,llm,open,DeepSeek 创始人名为梁文锋，「峰」为同音误写
+7082,video,财富自由计算的完整框架：从月开销到 480 倍乘数,typo,LLM终审,如果你手里已经有 48 万，那么每个月可以毫无心理负担地多花 100 块；如果有 4800 块，每个月就可以多花 1 块。今天的 480 块，就是一辈子每个月多花 1 块钱的底气,,48 万对应每月多花 1000 块；4800 块对应每月多花 10 块；480 块对应每月多花 1 块,1,llm,open,按 480 倍乘数换算，48万÷480=1000元、4800÷480=10元，前两句量级各差 10 倍，只有最后一句「480 块→1 块」自洽
+6096,video,财富自由的计算逻辑与 480 倍法则,typo,LLM终审,这个公式得出了一个今天非常神秘的乘数——480,,这个公式得出了一个非常神奇的乘数——480,1,llm,open,「今天非常神秘」语意不通，应为「非常神奇」的错听/错写
