@@ -79,17 +79,17 @@
 > seed=42 随机抽 5 篇:note 161, 3605, 4260, 6095, 70。
 该篇全部 flag 列在下面;flag 为空也要抽查(看 AI 是不是漏报了)。
 
-### note 161「Agent 应用开发学习指南」(doc/core)——**0 flag(重点抽查:AI 说它干净)**
+### note 161「Agent 应用开发学习指南」(doc/core)——**0 flag(重点抽查:AI 说它干净)** → [打开笔记](http://localhost:5173/notes/161)
 
-### note 3605「你需要多少钱，才能财富自由？」(doc/core)——**0 flag(重点抽查:AI 说它干净)**
+### note 3605「你需要多少钱，才能财富自由？」(doc/core)——**0 flag(重点抽查:AI 说它干净)** → [打开笔记](http://localhost:5173/notes/3605)
 
-### note 4260「【后厨重地·网关】Nginx、API网关、Ingress、G」(video/core)——2 flag
+### note 4260「【后厨重地·网关】Nginx、API网关、Ingress、G」(video/core)——2 flag → [打开笔记](http://localhost:5173/notes/4260)
   note 4260「【后厨重地·网关】Nginx、API网关」[术语错字/LLM终审]「名为 “Ingress Not Made” 的漏洞组」 → 建议改 **名为 “IngressNightmare” 的漏洞组**(这是 ingress-nginx 漏洞组的专有名，原文明显错听/错写。) → [打开笔记](http://localhost:5173/notes/4260)
   note 4260「【后厨重地·网关】Nginx、API网关」[术语错字/LLM终审]「Kong：内部由 Nginx 和 OpenResty 组成，使用 etcd 存储配置」 → 建议改 **Kong：内部由 Nginx 和 OpenResty 组成，使用 PostgreSQL/Cassandra 存储配置（或**(Kong 的传统配置存储不是 etcd，etcd 是 Kubernetes 等系统常用键值存储，此处专有名词误写。) → [打开笔记](http://localhost:5173/notes/4260)
 
-### note 6095「从夯到拉：39 个前端技术全景评价」(video/normal)——**0 flag(重点抽查:AI 说它干净)**
+### note 6095「从夯到拉：39 个前端技术全景评价」(video/normal)——**0 flag(重点抽查:AI 说它干净)** → [打开笔记](http://localhost:5173/notes/6095)
 
-### note 70「Git Bash 常用命令备忘」(doc/core)——**0 flag(重点抽查:AI 说它干净)**
+### note 70「Git Bash 常用命令备忘」(doc/core)——**0 flag(重点抽查:AI 说它干净)** → [打开笔记](http://localhost:5173/notes/70)
 
 ## 分析层补充(执行会话手写,以下不属于脚本输出)
 

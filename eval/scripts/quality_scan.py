@@ -859,6 +859,8 @@ def phase_report(notes: list[dict]) -> None:
         mine = [r for r in rows if r["note_id"] == sid and r["verdict"] != "dismissed"]
         head = f"### note {sid}「{n['title'][:30]}」({n['layer']}/{n['quality']})——"
         head += f"{len(mine)} flag" if mine else "**0 flag(重点抽查:AI 说它干净)**"
+        # 条目头也要直达链接:0-flag 篇没有 flag 行,没有它就无处可点(主人抽查漏报靠它)
+        head += f" → [打开笔记]({FRONTEND_NOTE_URL.format(sid)})"
         lines.append(head)
         for r in mine:
             lines.append("  " + fmt_row(r)[2:])
