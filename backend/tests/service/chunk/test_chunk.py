@@ -388,6 +388,39 @@ class TestParentDisplayText:
         assert "- 决策:输出动作分布。" in ptext
         assert "1. 第一步" in ptext and "2. 第二步" in ptext, "orderedList 必须编号"
 
+    def test_parent_ordered_list_respects_start_attr(self):
+        """段落打断的有序列表拆成多个 ol,第二段 attrs.start=3 的展示文本必须从 3 起编
+        (8093 倒金字塔「先 1、2 又 1、2」实锤——固定从 1 编会让笔记页编号重复)。"""
+        doc = {
+            "type": "doc",
+            "content": [
+                _heading(1, "倒金字塔"),
+                {
+                    "type": "orderedList",
+                    "content": [
+                        {"type": "listItem", "content": [_text("代码本身")]},
+                        {"type": "listItem", "content": [_text("静态工具")]},
+                    ],
+                },
+                _text("前两层都是确定性的。" * 3),
+                {
+                    "type": "orderedList",
+                    "attrs": {"start": 3},
+                    "content": [
+                        {"type": "listItem", "content": [_text("验证")]},
+                        {"type": "listItem", "content": [_text("散文")]},
+                    ],
+                },
+                _text("结尾段落补足长度。" * 10),
+            ],
+        }
+        r = chunk(doc, token_counter=FAKE_TC)
+        ptext = self._parent_text(r)
+        assert "1. 代码本身" in ptext and "2. 静态工具" in ptext
+        assert "3. 验证" in ptext and "4. 散文" in ptext, (
+            "attrs.start=3 的列表父块文本必须从 3 起编,否则前端编号重复"
+        )
+
     def test_parent_keeps_bold_inline_code_blockquote(self):
         para = {
             "type": "paragraph",

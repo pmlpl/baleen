@@ -170,3 +170,45 @@ PUT 留痕(重切 12/43 块),PUT 后二次 PUT **no-op**(往返定点)。
 **新增测试**:`backend/tests/service/test_notes_edit_roundtrip.py` 9 条(粗体边界 trapped close/open(xfail)/ASCII/普通形态、字面下划线标题+正文、嵌套不拍平+两位数编号、子弹 2 格回归、三坑合体恒等+md 定点)。**pytest 全量 651 passed = 基线 641 + 新增 9 + xfail 1,零回归**。
 
 **干净版重 PUT(替代修正批 workaround)**:6090/4983 PUT 当前 md → **content_changed=false(no-op)= 往返定点证明**;4982 去 ZWSP 重 PUT(重切 3/6 块)→ 二次 PUT no-op;6096 修正后二次 PUT no-op。**DB 全库直查 U+200B 残留:无**。
+
+---
+
+## 追加批 #2 · 新语料终审修正(2026-11-22,主人对终审 14 条 flag 隐含拍板,全部执行)
+
+7 篇 14 条:13 条内容修正走 PUT(留痕 `backend/tmp/qfix/apply_log_round3.json`),1 条(8093③)取证后根因在展示链,代码修+缓存刷新(见下)。
+
+| # | note | before → after | 状态 |
+|---|---|---|---|
+| F1 | 8093 | 「Brett Taylor  famously」→「Bret Taylor famously」(真名拼写+多余空格) | ✅ |
+| F2 | 8093 | 「bombadill」→「Bombadil」×2(小节标题+正文全改净) | ✅ |
+| F3 | 8093 | 倒金字塔列表「先 1、2 又 1、2」→ 接续 3、4 | ✅ **取证改道**(下详) |
+| F4 | 8095 | 「收到几分简历」→「收到几份简历」 | ✅ |
+| F5 | 8095 | 「温克罗（WinClaw）检索到」→「WinClaw 检索到」(删音译+补中英空格,全篇唯一一处温克罗) | ✅ |
+| F6 | 8097 | 「配置项有两个取值。」→「配置项有两个取值：interrupt 与 enqueue。」(**source 原始转写查证**:「两个选项…左边是叫 interrupt…」+提纲「interrupt 与 enqueue 的区别」;笔记 §4.2 亦写 enqueue——有据补全,非编造) | ✅ |
+| F7 | 8098 | 「升值和加薪」→「升职和加薪」(篇内唯一) | ✅ |
+| F8 | 8098 | 「财务要“抛息”（追问）」→「财务要刨根问底（追问）」(保留括号注释形式) | ✅ |
+| F9 | 8099 | 「白崇恩」→「白重恩」 | ✅ |
+| F10 | 8099 | 「朱士额和杨主带」→「朱天和杨汝岱」 | ✅ |
+| F11 | 8099 | 「利润都滤了」→「脸都绿了」(工人调侃引语内) | ✅ |
+| F12 | 8101 | 删「（字幕识别为中士/中施）」转写残留 | ✅ |
+| F13 | 8102 | 删「（原文口播/字幕中也写作 OpenCloud）」括号注(正文统一 OpenClaw,全篇唯一 OpenCloud) | ✅ |
+| F14 | 8102 | 删重复句「他大学玩乐队，但当时买不起吉他。」(§五人物底色与 §一 L19 叙述重复,按「删后一处」惯例删 §五处) | ✅ |
+
+### F3 取证改道:源 md 本来就是 3、4,根因在展示链
+
+取证链(以 DB 为准):
+1. **doc 真源正确**:第二个有序列表 `attrs.start=3`(DB 直查);GET markdown 也是 `3. 4.`——flag 引文「先 1、2 又 1、2」是**渲染产物**;
+2. **渲染链两层都丢 start**:①后端 chunk 展示文本序列化(`chunker.py` `_block_display_text`)对 orderedList **固定从 1 编号**,无视 attrs.start → 笔记页渲染的父块文本(「父块才是真源」)写的就是 `1. **验证…`;②前端 `section.ts` 组装 `<ol class="sec-list">` 不带 start 属性(markdown.ts 同病);
+3. **修复**:后端 `chunker.py` 有序列表从 `attrs.start` 起编(+chunker 测试 1 条);前端 `section.ts`/`markdown.ts` 开 `<ol>` 带首项编号的 `start` 属性(内容捕获组同步位移,vue-tsc 通过);
+4. **缓存刷新**:8093 父块存量用「拆段→合并」两步 PUT 刷新(中间态毫秒级,终态 markdown 与原文逐字节一致,三次 PUT 后 no-op 验证通过)——PUT no-op 判定挡住同内容重切,这是契约内唯一刷新路径,同时让新 chunker 落地;
+5. **验证**:DB 直查刷新后 chunk=`3. **验证…`;前端 `<ol class="sec-list" start="3">` 渲染;识图终验「1、2 → 正文 → 3、4 接续,无异常」。
+
+### 追加批 #2 验证汇总
+
+| 验证项 | 结果 |
+|---|---|
+| 后置断言(7 篇必含/必不含,篇内 grep 改净:温克罗/升值/OpenCloud 各无复现) | **7/7 PASS** |
+| 每篇 PUT 后二次 PUT no-op(往返定点) | 7/7 ✓ |
+| 前端渲染抽查(8093 列表编号+8099 两处人名,截图+识图) | 通过 |
+| pytest 全量 | **652 passed, 1 xfailed**(+chunker start 测试 1 条),基线不破 |
+| doc_lint | 0 ERROR |

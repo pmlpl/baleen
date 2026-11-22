@@ -139,7 +139,10 @@ def _block_display_text(block: dict) -> str:
         return _table_to_text(block)
     if t in ("bulletList", "orderedList"):
         lines: list[str] = []
-        for i, item in enumerate(block.get("content") or [], 1):
+        # 有序列表从 attrs.start 起编(段落打断的列表会拆成多个 ol,start=3 的第二段
+        # 若固定从 1 编,笔记页就渲染成「先 1、2 又 1、2」——8093 倒金字塔实锤,2026-11-22)
+        start = int((block.get("attrs") or {}).get("start", 1) or 1)
+        for i, item in enumerate(block.get("content") or [], start):
             inner = _block_display_text(item).strip()
             if not inner:
                 continue

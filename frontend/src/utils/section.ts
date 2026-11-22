@@ -291,7 +291,7 @@ const FENCE_RE = /^\s*```/
 const UL_ITEM_RE = /^\s*[-] +(.*)$/
 
 /** 有序列表项:1. 后必须跟空格 */
-const OL_ITEM_RE = /^\s*\d+\. +(.*)$/
+const OL_ITEM_RE = /^\s*(\d+)\. +(.*)$/
 
 /** 引用行:> 后可跟空格也可直接接内容 */
 const QUOTE_RE = /^\s*?> ?(.*)$/
@@ -457,13 +457,16 @@ export function renderSectionText(
     if (ulm !== null || olm !== null) {
       flush()
       const itemRe = ulm !== null ? UL_ITEM_RE : OL_ITEM_RE
+      // OL_ITEM_RE 带编号捕获组(为了 <ol start>),内容在 m[2];UL 内容仍在 m[1]
+      const itemContentGroup = ulm !== null ? 1 : 2
       const items: string[][] = []
+      const olStart = olm !== null ? (olm[1] as string) : null
       let j = i
       while (j < lines.length) {
         const cur = lines[j] as string
         const m = itemRe.exec(cur)
         if (m !== null) {
-          items.push([(m[1] as string).trim()])
+          items.push([(m[itemContentGroup] as string).trim()])
           j += 1
           continue
         }
@@ -485,7 +488,9 @@ export function renderSectionText(
         )
         .join('')
       out.push(
-        ulm !== null ? `<ul class="sec-list">${lis}</ul>` : `<ol class="sec-list">${lis}</ol>`,
+        ulm !== null
+          ? `<ul class="sec-list">${lis}</ul>`
+          : `<ol class="sec-list"${olStart !== null && olStart !== '1' ? ` start="${olStart}"` : ''}>${lis}</ol>`,
       )
       i = j - 1
       continue

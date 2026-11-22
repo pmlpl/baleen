@@ -250,36 +250,40 @@ export function renderMarkdown(markdown: string): string {
 
     // ---- 列表项(支持一级嵌套:缩进 ≥2 空格 → 上一 <li> 里开子列表) ----
     const indent = line.length - line.trimStart().length
-    const ordered = /^\s*\d+\.\s+(.*)$/.exec(line)
+    const ordered = /^\s*(\d+)\.\s+(.*)$/.exec(line)
     const bullet = /^\s*[-*+]\s+(.*)$/.exec(line)
     const listItem = ordered ?? bullet
     if (listItem !== null) {
       flushParagraph()
       const tag = ordered === null ? 'ul' : 'ol'
+      // 有序列表开新 <ol> 时带上首项编号:段落会打断列表,后一段 3. 开头的新列表
+      // 不带 start 会从 1 重数(8093 倒金字塔「先 1、2 又 1、2」实锤)
+      const listAttr =
+        ordered !== null && ordered[1] !== '1' ? ` start="${ordered[1]}"` : ''
       const top = listStack[listStack.length - 1]
       const nested = indent >= 2 && listStack.length === 1
       if (top === undefined) {
-        out.push(`<${tag}>`)
+        out.push(`<${tag}${listAttr}>`)
         listStack.push({ tag, liOpen: true })
       } else if (nested) {
         // 关键:父 <li> 保持开放(不 closeLi),子列表才能嵌在它内部
-        out.push(`<${tag}>`)
+        out.push(`<${tag}${listAttr}>`)
         listStack.push({ tag, liOpen: true })
       } else if (listStack.length === 2 && indent < 2) {
         // 从嵌套层回到顶层:先收掉嵌套列表(其 </li></ul>),再收父 <li>,再开新项
         closeOneList()
         closeLi()
         const parent = listStack[listStack.length - 1]
-        out.push(`<li>${renderInline(listItem[1])}`)
+        out.push(`<li>${renderInline(listItem[2])}`)
         if (parent !== undefined) parent.liOpen = true
         continue
       } else {
         closeLi()
-        out.push(`<li>${renderInline(listItem[1])}`)
+        out.push(`<li>${renderInline(listItem[2])}`)
         top.liOpen = true
         continue
       }
-      out.push(`<li>${renderInline(listItem[1])}`)
+      out.push(`<li>${renderInline(listItem[2])}`)
       continue
     }
 
