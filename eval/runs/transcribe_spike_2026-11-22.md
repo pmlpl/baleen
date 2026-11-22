@@ -95,3 +95,13 @@
 `noun_scan.json`、`t_turbo.json`（CPU int8 482.7s/155 段）、
 脚本 `spike_{download,whisper,sensevoice,llm_fix,downstream,judge}.py`；
 SenseVoice 缓存 `~/.cache/modelscope`（936MB），隔离 venv `backend/tmp/spike_venv`（未碰 backend/.venv）。
+
+## 接入前置验证（2026-11-22，三件套实跑）
+
+主人拍板先验证再接入。实测（同音频）：
+
+- **turbo + language=None**：29.8s（自动检测零速度代价，显存 Δ2.3GB）
+- **+ LLM 自校正**：9 处提议 9 处全中（含清单外：SpaceX SI→xAI、slow→slop、cloud agents→Claude agents、tech dep→tech debt）
+- **四方案对比**：错误形态残留 small 5 种 → turbo+zh 2 种 → **turbo+None+LLMfix 0 种**；GrokBot 正确拼写 0→10 次
+- ⚠️ 一条待主人裁决：LLM 把 GrokBot 修成 Grok×3（产品真名 vs 创作者品牌，可能是过度修正）
+- 时间结论：每条视频新增开销 ≈1 分钟，可行性成立
