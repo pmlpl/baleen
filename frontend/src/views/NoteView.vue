@@ -393,7 +393,6 @@ async function removeNote(): Promise<void> {
           ></textarea>
         </label>
         <p class="muted editor-hint">
-          保存后按新内容重建检索索引(切块 + 向量化),同内容重复保存不会重嵌。
           图片以 <code>![说明](baleen-image:N)</code> 标记出现:挪动标记行图片就跟着挪,删掉标记行图片也会删除。
         </p>
         <p v-if="saveError !== ''" class="note note--error">{{ saveError }}</p>
@@ -447,8 +446,6 @@ async function removeNote(): Promise<void> {
           </section>
 
           <p v-if="toc.length === 0" class="empty">这条笔记没有可显示的内容。</p>
-
-          <p class="sec-end muted">— 全文完 —</p>
         </article>
       </div>
     </template>
@@ -845,15 +842,6 @@ async function removeNote(): Promise<void> {
 .sec :deep(.img-missing) {
   color: var(--ink-3);
   font-size: 13px;
-}
-
-.sec-end {
-  margin-top: 8px;
-  color: var(--ink-3);
-  font-family: var(--font-serif);
-  font-size: 12.5px;
-  letter-spacing: 0.25em;
-  text-align: center;
 }
 
 /* 窄屏:目录折到上方 */

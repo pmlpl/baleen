@@ -952,9 +952,6 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   <section class="page qa-page">
     <header class="page-head">
       <h1 class="page-title">问答</h1>
-      <p class="page-desc">
-        和笔记库对话:它用笔记内容答、标出处,多轮追问记得上文。「平均缓存命中率」是模型前缀缓存的会话级命中占比,显示在输入框下方。
-      </p>
     </header>
 
     <div class="qa-layout">
@@ -1010,10 +1007,6 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
       <div class="chat-main" @dragover.prevent @drop.prevent="onChatDrop">
         <div ref="msgListEl" class="msg-list">
-          <p v-if="messages.length === 0 && !sending" class="empty">
-            问一句,比如「闭包是什么」;再追问「那怎么用」——它记得上文。
-          </p>
-
           <div
             v-for="(m, i) in messages"
             :key="m.id"
@@ -1094,12 +1087,6 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
                   </li>
                 </ul>
               </details>
-              <p
-                v-else-if="m.role === 'assistant' && m.citations.length === 0"
-                class="cite-empty muted"
-              >
-                (本次没有引用笔记片段)
-              </p>
             </div>
           </div>
 
@@ -1631,11 +1618,6 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   line-clamp: 2;
   overflow-wrap: anywhere;
   word-break: break-all;
-}
-
-.cite-empty {
-  margin: 8px 0 0;
-  font-size: 12.5px;
 }
 
 .chat-input {

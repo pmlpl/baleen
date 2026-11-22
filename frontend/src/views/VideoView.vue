@@ -323,9 +323,6 @@ onMounted(async () => {
   <section class="page">
     <header class="page-head">
       <h1 class="page-title">视频笔记</h1>
-      <p class="page-desc">
-        粘贴 B 站视频链接，看视频的同时把它变成可检索的笔记。
-      </p>
     </header>
 
     <div class="video-layout">
@@ -358,15 +355,11 @@ onMounted(async () => {
             <a :href="cleanUrl" target="_blank" rel="noopener noreferrer" class="douyin-link">
               在抖音中打开 →
             </a>
-            <p class="muted">支持 whisper 转写导入</p>
           </div>
         </div>
         <div v-else-if="urlInput.trim() !== ''" class="player-hint muted">
           <p>⚠️ 无法识别视频链接。</p>
           <p>支持 B 站（BV号/b23.tv）和抖音（v.douyin.com）链接。</p>
-        </div>
-        <div v-else class="player-hint muted">
-          <p>📺 粘贴链接后这里会显示视频播放器，你可以边看视频边等导入完成。</p>
         </div>
       </div>
 
@@ -404,12 +397,13 @@ onMounted(async () => {
                 B 站已登录{{ biliStatus.uid ? `（${biliStatus.uid}）` : ''
                 }}<template v-if="biliStatus.logged_at">· 上次扫码 {{ formatBiliAt(biliStatus.logged_at) }}</template>
               </template>
-              <template v-else>B 站未登录（平时不用登录，被风控时导入会自动弹出扫码）</template>
+              <template v-else>B 站未登录（平时不用登录）</template>
             </span>
             <button
               class="btn bili-login-btn"
               type="button"
               :disabled="biliLogging"
+              title="被风控时导入会自动弹出扫码窗，也可提前扫码备用"
               @click="doBiliLogin"
             >
               {{ biliLogging ? '等待扫码中…' : biliStatus?.logged_in ? '重新扫码' : 'B 站登录（扫码）' }}
@@ -616,6 +610,9 @@ onMounted(async () => {
 .mode-label {
   font-size: 14px;
   font-weight: 550;
+  /* 标签列不被 desc 挤压折行(「字幕快/速」断词难读);说明文字在右列自己换行 */
+  flex-shrink: 0;
+  white-space: nowrap;
 }
 
 .mode-desc {

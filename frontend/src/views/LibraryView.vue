@@ -323,9 +323,6 @@ function onShelfDrop(event: DragEvent): void {
   <section class="page">
     <header class="page-head">
       <h1 class="page-title">笔记库</h1>
-      <p class="page-desc">
-        你的书架 —— 共 {{ total }} 本，每页 {{ PAGE_SIZE }} 本。点一本书进详情看全文。
-      </p>
     </header>
 
     <div class="search-bar">
@@ -421,7 +418,7 @@ function onShelfDrop(event: DragEvent): void {
       @drop.prevent="onShelfDrop"
     >
       {{ appliedKeyword === ''
-        ? '书架上还没有书。点上方「导入笔记」(或把文件拖到这里),处理完就会出现在这里。'
+        ? '书架还是空的——把文件拖到这里即可导入。'
         : `没有标题匹配「${appliedKeyword}」的笔记。` }}
     </p>
 

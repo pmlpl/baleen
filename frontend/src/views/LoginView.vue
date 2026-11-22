@@ -21,7 +21,6 @@ const password = ref('')
 const submitting = ref(false)
 const errorText = ref('')
 
-const title = computed(() => (mode.value === 'login' ? '登录' : '注册'))
 const submitLabel = computed(() => {
   if (submitting.value) return mode.value === 'login' ? '登录中…' : '注册中…'
   return mode.value === 'login' ? '登录' : '注册并开始使用'
@@ -29,11 +28,6 @@ const submitLabel = computed(() => {
 const canSubmit = computed(
   () => username.value.trim().length >= 3 && password.value.length >= 8,
 )
-
-function switchMode(): void {
-  mode.value = mode.value === 'login' ? 'register' : 'login'
-  errorText.value = ''
-}
 
 async function submit(): Promise<void> {
   if (submitting.value || !canSubmit.value) return
@@ -57,9 +51,6 @@ async function submit(): Promise<void> {
   <section class="page login-page">
     <div class="card login-card">
       <h1 class="login-title">baleen</h1>
-      <p class="muted login-sub">
-        个人智能笔记库 —— 导入笔记、检索、问答，都在这一个地方。
-      </p>
 
       <div class="tabs">
         <button
@@ -105,15 +96,7 @@ async function submit(): Promise<void> {
           {{ submitLabel }}
         </button>
       </form>
-
-      <p class="muted login-hint">
-        <template v-if="mode === 'login'">还没有账号？</template>
-        <template v-else>已经有账号？</template>
-        <a @click="switchMode">{{ mode === 'login' ? '去注册' : '去登录' }}</a>
-      </p>
     </div>
-
-    <p class="muted login-foot">{{ title }}后即可导入自己的笔记，数据按账号隔离。</p>
   </section>
 </template>
 
@@ -173,12 +156,6 @@ async function submit(): Promise<void> {
   vertical-align: 5px;
 }
 
-.login-sub {
-  margin: 0 0 20px;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
 .tabs {
   display: flex;
   gap: 4px;
@@ -227,20 +204,5 @@ async function submit(): Promise<void> {
   width: 100%;
   margin-top: 4px;
   padding: 9px 0;
-}
-
-.login-hint {
-  margin: 16px 0 0;
-  text-align: center;
-  font-size: 13px;
-}
-
-.login-hint a {
-  margin-left: 4px;
-  cursor: pointer;
-}
-
-.login-foot {
-  font-size: 12.5px;
 }
 </style>

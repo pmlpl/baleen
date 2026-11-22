@@ -66,7 +66,6 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
   <section class="page">
     <header class="page-head">
       <h1 class="page-title">个人中心</h1>
-      <p class="page-desc">账号信息与使用概览。配置修改在设置页,章程编辑在章程向导。</p>
     </header>
 
     <p v-if="loading" class="muted">加载中…</p>
@@ -94,10 +93,11 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
       <div class="card">
         <h2 class="section-title">知识库章程</h2>
         <template v-if="profile.charter.has_charter && profile.charter.preview">
-          <pre class="charter-preview">{{ profile.charter.preview }}</pre>
-          <p v-if="charterTruncated" class="muted hint">仅显示前 300 字,完整章程在章程页查看。</p>
+          <pre
+            class="charter-preview"
+            :title="charterTruncated ? '完整章程在章程页查看，此处仅预览前 300 字' : undefined"
+            >{{ profile.charter.preview }}</pre>
         </template>
-        <p v-else class="muted">还没有章程——填写问卷后,AI 会按你的偏好整理与判定笔记。</p>
         <button class="btn" type="button" @click="router.push({ name: 'charter' })">
           {{ profile.charter.has_charter ? '查看 / 编辑章程' : '去填写章程问卷' }}
         </button>
@@ -105,7 +105,6 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
 
       <div class="card">
         <h2 class="section-title">模型与偏好配置</h2>
-        <p class="muted hint">密钥只显示是否已设置与末四位;修改请到设置页。</p>
         <dl class="config-list">
           <div class="config-row">
             <dt>网关地址</dt>
@@ -197,7 +196,8 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
 }
 
 .charter-preview {
-  margin: 0;
+  /* 截断预览底部与按钮留一口气(截断提示行砍掉后,这里不再有间距来源) */
+  margin: 0 0 10px;
   padding: 12px 14px;
   border-radius: 8px;
   background: var(--bg-soft);

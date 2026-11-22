@@ -94,9 +94,7 @@ onMounted(() => {
   <section class="page">
     <header class="page-head">
       <h1 class="page-title">设置</h1>
-      <p class="page-desc">
-        模型与网关配置,保存后立即生效(问答/改写热加载,无需重启)。留空 = 保持当前值。
-      </p>
+      <p class="page-desc">留空 = 保持当前值。</p>
     </header>
 
     <p v-if="loading" class="muted">加载中…</p>
@@ -104,7 +102,7 @@ onMounted(() => {
 
     <div class="card form">
       <label class="field">
-        <span class="field-label">网关地址(LLM_BASE_URL)</span>
+        <span class="field-label" title="对应后端配置 LLM_BASE_URL">网关地址</span>
         <input
           v-model="baseUrl"
           class="input"
@@ -113,7 +111,7 @@ onMounted(() => {
         />
       </label>
       <label class="field">
-        <span class="field-label">模型(LLM_MODEL)</span>
+        <span class="field-label" title="对应后端配置 LLM_MODEL">模型</span>
         <input v-model="model" class="input" type="text" placeholder="deepseek-flash / glm-5.2 …" />
       </label>
       <label class="field">
@@ -141,9 +139,8 @@ onMounted(() => {
           class="input"
           type="number"
           min="0"
-          placeholder="留空=不截断,整篇喂模型"
+          placeholder="填模型上下文长度，留空=整篇喂"
         />
-        <span class="muted key-hint">填你模型的上下文长度;留空默认全文喂</span>
       </label>
       <label class="field">
         <span class="field-label">输出上限(可选,token)</span>
@@ -152,18 +149,16 @@ onMounted(() => {
           class="input"
           type="number"
           min="0"
-          placeholder="留空=默认 131072"
+          placeholder="填模型最大输出，留空=131072"
         />
-        <span class="muted key-hint">填你模型的最大输出;留空默认 131072</span>
       </label>
 
-      <label class="field field--switch">
+      <label
+        class="field field--switch"
+        title="仅当内容是并列清单或流程阶段时才画(系统按标题结构判定)；节点对不上原文的图会被自动丢弃。关掉则一律不生成"
+      >
         <input v-model="allowDiagrams" type="checkbox" class="switch" />
         <span class="field-label">导入时生成结构图</span>
-        <span class="muted key-hint">
-          只在内容确实是「并列清单」或「流程阶段」时才画(由系统按标题结构判定，不是让
-          AI 自由发挥)；画出来的图若节点对不上原文会被自动丢弃。关掉则一律不生成。
-        </span>
       </label>
 
       <button class="btn btn--primary" type="button" :disabled="saving" @click="save">
@@ -174,9 +169,7 @@ onMounted(() => {
 
     <div class="card charter-section">
       <h2 class="section-title">知识库章程</h2>
-      <p class="muted">
-        章程决定导入时哪些笔记收、哪些不收。可以查看当前章程、直接改文字，或重新填一遍问卷。
-      </p>
+      <p class="muted">章程决定导入时哪些笔记收、哪些不收。</p>
       <button class="btn" type="button" @click="router.push({ name: 'charter' })">
         查看 / 修改章程
       </button>
@@ -185,10 +178,12 @@ onMounted(() => {
 </template>
 
 <style scoped>
-.field--switch {
+/* .field(display:block,声明在后)会盖掉单类选择器,这里必须双类提特异性 */
+.field.field--switch {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
 }
 
 .field--switch .switch {
