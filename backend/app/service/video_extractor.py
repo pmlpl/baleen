@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import json
 import logging
 import re
 import subprocess
@@ -55,10 +56,11 @@ MAX_SCENE_FRAMES = 30
 DHASH_DEDUP_THRESHOLD = 5
 # 算 dHash 前裁掉底部比例：视频字幕条常驻底部，字幕逐句变会让同一画面判成不同帧
 DHASH_CROP_BOTTOM = 0.25
-# faster-whisper 模型名（small：benchmark 实测比 base 正确率高——base 把「一致性」错写成
-# 「移植性」且输出繁体，small 正确且简体；GPU 上 15x 实时，速度不是瓶颈。
-# 中文需要多语言模型不是 .en）
-WHISPER_MODEL = "small"
+# faster-whisper 模型名（2026-11-22 转写治本批：small → large-v3-turbo——spike 实测
+# 专名原生准确率接近 large-v3、速度等同 small（RTF 34x）、显存 Δ2.3GB（6G 卡贴上限）；
+# large-v3 full 在本卡 2.7 倍实时+加载 63min，淘汰。模型文件预置在仓库根之外的
+# models/faster-whisper-large-v3-turbo/（.env WHISPER_MODEL_DIR 指路，禁运行时在线下载）
+WHISPER_MODEL = "large-v3-turbo"
 
 
 @dataclass
@@ -90,15 +92,32 @@ class VideoContent:
     # 抽出的候选帧数（去重后、视觉筛选前）：>0 但 frame_images 空 = 全被筛除/失败,
     # worker 依此显式告警（2026-11-19 P1a）
     frame_candidates: int = 0
+    # 转写 LLM 自校正留痕（2026-11-22 治本批）：{n_proposed, n_applied, corrections[],
+    # n_missed, missed[]} 或 {"skipped": 原因} / {"error": 原因}——worker 写进
+    # source.parse_meta.llm_transcript_fix（pipeline video_keep 白名单已放行）。
+    # None = 非 whisper 路径（字幕模式无转写）
+    transcript_fix: dict | None = None
 
 
 def _load_whisper(device: str):
-    """按设备构建 faster-whisper 模型。GPU 用 float16，CPU 用 int8。"""
+    """按设备构建 faster-whisper 模型。GPU 用 float16，CPU 用 int8。
+
+    模型来源优先取 settings.whisper_model_dir（本地目录，spike 实测 load 4.3s；
+    生产禁止运行时在线下载——spike 实测在线 load 63min 教训），未配置/目录不存在
+    则退回 hub 模型名（首次会在线下载，HF 需代理）。
+    """
     from faster_whisper import WhisperModel
 
+    model_source = WHISPER_MODEL
+    local_dir = get_settings().whisper_model_dir
+    if local_dir and Path(local_dir).exists():
+        model_source = local_dir
+    elif local_dir:
+        log.warning("WHISPER_MODEL_DIR=%s 不存在,退回 hub 模型名 %s(可能在线下载)", local_dir, WHISPER_MODEL)
+
     if device == "cuda":
-        return WhisperModel(WHISPER_MODEL, device="cuda", compute_type="float16")
-    return WhisperModel(WHISPER_MODEL, device="cpu", compute_type="int8")
+        return WhisperModel(model_source, device="cuda", compute_type="float16")
+    return WhisperModel(model_source, device="cpu", compute_type="int8")
 
 
 def _register_cuda_dll_dirs() -> None:
@@ -322,7 +341,8 @@ def transcribe_audio(audio_path: Path) -> list[dict]:
     def _run(model) -> list[dict]:
         segments_iter, _info = model.transcribe(
             str(audio_path),
-            language="zh",  # 强制中文（视频来源主要是中文）
+            language=None,  # 自动检测（2026-11-22 治本批：zh 强制对英文视频是灾难放大器——
+            # 8093 英文演讲被按中文强解码，专名错字 ≥20；spike 实测 None 零速度代价）
         )
         return [
             {"start": seg.start, "end": seg.end, "text": seg.text.strip()}
@@ -339,6 +359,98 @@ def transcribe_audio(audio_path: Path) -> list[dict]:
         _whisper_model = _load_whisper("cpu")
         _whisper_device = "cpu"
         return _run(_whisper_model)
+
+
+# ---------------------------------------------------------------- 转写 LLM 自校正（2026-11-22 治本批）
+# spike 实测（eval/runs/transcribe_spike_2026-11-22.md）：whisper 专名错听是转写错字的根源，
+# LLM 盲修（零词典、只出修改清单、程序化应用留痕）11 修 0 漏；v1「让模型重发全文」必截断，
+# v2 只出 corrections 清单（spike_llm_fix.py 同款 prompt）。
+# 成本上限 3 万字符（spike 同款）；max_tokens 16000（推理网关把 8000 全烧在 reasoning 上 0 输出的教训）。
+
+TRANSCRIPT_FIX_PROMPT = (
+    "你是「智能笔记库」的转写自校正员。输入是一段视频语音转写的原始文本(未经整理,可能全英文)。"
+    "请凭你自己的知识,只找一类错误:**疑似错听的专有名词/成语/术语**(人名、产品名、库名、"
+    "技术名词的拼写错误,如 Claude 被写成 Cloud 这类错听)。"
+    "判据:结合上下文,这个词在这个语境里几乎不可能是对的,而你的修正几乎必然是对的。"
+    "宁缺毋滥——没把握的不要动;普通单词、大小写、标点、分段、语法、粘连断句都不要动;不要改写句子。\n\n"
+    "只输出一个 JSON 对象(不要多余文字、不要 markdown 围栏):\n"
+    '{"corrections":[{"evidence":"原文中的错误片段(逐字符来自原文,够定位即可)","fixed":"修正后片段","reason":"一句话"}]}\n'
+    "没有要修的就给空数组。不要输出修正后的全文。"
+)
+TRANSCRIPT_FIX_MAX_CHARS = 30000
+TRANSCRIPT_FIX_MAX_TOKENS = 16000
+
+
+def correct_transcript_segments(
+    segments: list[dict], client, progress_cb=None
+) -> tuple[list[dict], dict]:
+    """转写后、organizer 前：LLM 盲修疑似错听的专名/成语/术语，逐段程序化应用并留痕。
+
+    - 输入封顶 3 万字符（超长掐头留尾，spike 同款）；LLM 只出 corrections 清单，
+      应用端逐段 replace（evidence 跨段/找不到 → 记 missed，不硬改）。
+    - **凡失败必留痕、绝不抛**：LLM 调用/解析失败 → 原转写原样继续（organizer 不受阻），
+      留痕记 {"error": …}；无 client / 空转写 → {"skipped": …}。留痕由 worker 写进
+      parse_meta.llm_transcript_fix。
+    - client 可注入（worker 传生产 LLMClient，测试传 FakeClient）。
+    """
+    full_text = " ".join(seg.get("text", "") for seg in segments)
+    if client is None:
+        return segments, {"skipped": "no_client"}
+    if not full_text.strip():
+        return segments, {"skipped": "empty_transcript"}
+
+    if progress_cb:
+        progress_cb("转写校正中…", 70)
+
+    body = (
+        full_text
+        if len(full_text) <= TRANSCRIPT_FIX_MAX_CHARS
+        else full_text[: TRANSCRIPT_FIX_MAX_CHARS // 2]
+        + "\n……(中段截断)……\n"
+        + full_text[-TRANSCRIPT_FIX_MAX_CHARS // 2 :]
+    )
+    try:
+        chat = client.chat(
+            [
+                {"role": "system", "content": TRANSCRIPT_FIX_PROMPT},
+                {"role": "user", "content": f"转写原始文本:\n{body}"},
+            ],
+            temperature=0.0,
+            max_tokens=TRANSCRIPT_FIX_MAX_TOKENS,
+        )
+        content = chat.content or ""
+        m = re.search(r"\{.*\}", content, re.S)
+        if not m:
+            raise ValueError(f"LLM 输出无 JSON: {content[:120]!r}")
+        corrections = json.loads(m.group(0)).get("corrections", [])
+    except Exception as exc:  # noqa: BLE001 —— 降级：原转写继续，不让导入失败
+        log.warning("转写 LLM 自校正失败,降级用原转写: %s", exc)
+        return segments, {"error": f"{type(exc).__name__}: {str(exc)}"[:300]}
+
+    applied: list[dict] = []
+    missed: list[dict] = []
+    for c in corrections:
+        ev, fx = str(c.get("evidence", "")), str(c.get("fixed", ""))
+        if not ev:
+            missed.append({"evidence": ev, "fixed": fx, "why": "empty-evidence"})
+            continue
+        hit = next((s for s in segments if ev in s.get("text", "")), None)
+        if hit is None:
+            missed.append({"evidence": ev[:80], "fixed": fx[:80], "why": "evidence-not-found"})
+            continue
+        occurrences = hit["text"].count(ev)
+        hit["text"] = hit["text"].replace(ev, fx, 1)
+        applied.append({"evidence": ev[:80], "fixed": fx[:80], "reason": str(c.get("reason", ""))[:120], "occurrences": occurrences})
+        log.info("转写校正: %r -> %r", ev[:40], fx[:40])
+
+    record = {
+        "n_proposed": len(corrections),
+        "n_applied": len(applied),
+        "corrections": applied,
+        "n_missed": len(missed),
+        "missed": missed,
+    }
+    return segments, record
 
 
 def detect_scenes(
@@ -768,6 +880,11 @@ def _content_from_media(
             # est=视频时长是保守上限（faster-whisper 通常数倍于实时），前端据此插值画进度条
             progress_cb("whisper 转写中…", 30, est_seconds=duration_s)
         transcript_segments = transcribe_audio(wav_path)
+        # LLM 自校正（2026-11-22 治本批）：转写后、画面识别前，盲修专名错听并留痕；
+        # 内部任何失败都降级用原转写（不抛），留痕由 worker 写进 parse_meta
+        transcript_segments, transcript_fix = correct_transcript_segments(
+            transcript_segments, client, progress_cb
+        )
         if progress_cb:
             progress_cb("识别画面中…", 72)
 
@@ -794,6 +911,7 @@ def _content_from_media(
         frame_contents=frame_contents,
         markdown=markdown,
         frame_candidates=frame_candidates,
+        transcript_fix=transcript_fix,
         frame_images=[
             {
                 "index": i,

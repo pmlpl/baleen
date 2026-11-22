@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:5173"
     # bge-large-zh-v1.5 的本地 HF cache 路径(AGENTS.md §6:.env.example 有,代码不许硬编码绝对路径)
     embedding_model_path: str = ""
+    # faster-whisper large-v3-turbo 的本地模型目录(2026-11-22 转写治本批:生产禁运行时在线
+    # 下载——spike 实测在线 load 63min 教训;未配置/目录不存在退回 hub 模型名,首次会在线下载)
+    whisper_model_dir: str = ""
     # 首答提速:API 进程启动后后台线程预加载嵌入模型(消除第一问的冷启动等待)
     embed_warmup_on_startup: bool = True
     # 评测候选自动归档(C 路线「使用即积累」):真实导入完成后把原文件副本归档进

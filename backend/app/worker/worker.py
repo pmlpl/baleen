@@ -213,6 +213,24 @@ async def _update_video_stage(
         await session.commit()
 
 
+async def _merge_parse_meta_fields(source_id: int, owner_id: int, fields: dict) -> None:
+    """把若干键合并进 source.parse_meta（保留其余键），供 worker 阶段写留痕字段。
+
+    独立 DB session（同 _update_video_stage 的模式）。注意：G0 落盘会用
+    video_keep 白名单重建 parse_meta——新键必须同步加进 pipeline.video_keep，
+    否则会在 G0 阶段被静默丢弃。
+    """
+    async with session_factory() as session:
+        repos = Repos(session, owner_id=owner_id)
+        source = await repos.sources.get(source_id)
+        if source is None:
+            return
+        meta = dict(source.parse_meta or {})
+        meta.update(fields)
+        await repos.sources.update_parse_meta(source_id, meta)
+        await session.commit()
+
+
 def _make_progress_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEventLoop):
     """线程安全进度回调：extract_video_content 在 to_thread 线程里同步调 cb，
     通过 run_coroutine_threadsafe 调度回 worker 事件循环写 DB。"""
@@ -388,6 +406,12 @@ async def extract_and_import_video(
             )
             markdown_content = vc.markdown
             video_title = vc.title
+            # 转写 LLM 自校正留痕（2026-11-22 治本批）：写进 parse_meta.llm_transcript_fix
+            # （pipeline video_keep 白名单已放行该键，G0 落盘不丢）
+            if getattr(vc, "transcript_fix", None):
+                await _merge_parse_meta_fields(
+                    source_id, owner_id, {"llm_transcript_fix": vc.transcript_fix}
+                )
             if not vc.frame_images:
                 # 6014 教训:帧全军覆没不能静默——候选>0 全被筛除/提取失败/场景数为 0,
                 # 都写进白盒日志(video_log 持久化在 parse_meta,导入完成后仍可见)

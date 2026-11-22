@@ -412,6 +412,7 @@ async def run_import_async(
                     for k in (
                         "video_url", "video_mode", "video_progress",
                         "video_est_seconds", "content_sha256", "video_log",
+                        "llm_transcript_fix",  # 转写 LLM 自校正留痕（2026-11-22 治本批）
                     )
                     if k in prev_meta
                 }

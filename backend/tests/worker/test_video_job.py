@@ -899,3 +899,84 @@ def test_bilibili_login_cb_persists_and_reports(db_scope, monkeypatch) -> None:
         assert any("扫码成功" in s for s in stages)
 
     asyncio.run(db_scope(scenario))
+
+
+def test_transcript_fix_lands_in_parse_meta(
+    db_scope, tmp_path: Path, monkeypatch
+) -> None:
+    """转写 LLM 自校正留痕（2026-11-22 治本批）：vc.transcript_fix 在 pipeline 前写进
+    parse_meta.llm_transcript_fix，且 fake pipeline 执行时已可读到（video_keep 白名单
+    同步放行该键的配套证明——G0 落盘若不放行该键会被静默丢弃）。"""
+    import app.service.imports as imports_pkg
+    import app.service.video_extractor as vextract
+
+    fix_record = {
+        "n_proposed": 1,
+        "n_applied": 1,
+        "corrections": [{"evidence": "ploy crests", "fixed": "pull requests"}],
+    }
+
+    async def scenario(factory) -> None:
+        async with factory() as session:
+            repos = Repos(session, 1)
+            source, _ = await repos.sources.create_or_get_by_sha256(
+                sha256="video:BVfix:whisper",
+                filename="BVfix.md",
+                ext=".md",
+                size_bytes=10,
+                storage_path="",
+                mime="text/markdown",
+                parse_status="pending",
+            )
+            meta = {"video_mode": "whisper", "video_stage": "排队中"}
+            await repos.sources.update_parse_meta(source.id, meta)
+            job, _ = await repos.jobs.create_or_get(
+                dedupe_key="import:video:BVfix:whisper",
+                payload={"url": "test", "mode": "whisper"},
+                kind="import",
+            )
+            await session.commit()
+            source_id, job_id = source.id, job.id
+
+        monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path)
+        monkeypatch.setattr(worker_module, "session_factory", factory)
+
+        fake_vc = type(
+            "VC",
+            (),
+            {"markdown": "# 测试视频",
+             "title": "测试视频",
+             "frame_images": [], "frame_candidates": 0,
+             "transcript_fix": fix_record},
+        )()
+
+        def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None):
+            return fake_vc
+
+        monkeypatch.setattr(vextract, "extract_video_content", fake_extract)
+
+        async def fake_run(path: str, **kwargs: Any) -> ImportResult:
+            # pipeline 执行时 parse_meta 必须已带留痕（worker 在 Phase 1 后合并写入）
+            async with factory() as session:
+                repos = Repos(session, 1)
+                meta = await repos.sources.get_parse_meta(source_id)
+            assert meta is not None
+            assert meta.get("llm_transcript_fix") == fix_record, (
+                "pipeline 跑起来之前留痕必须已落 parse_meta（video_keep 白名单的配套前提）"
+            )
+            return ImportResult(source_id=source_id, note_id=None, parse_status="ok")
+
+        monkeypatch.setattr(imports_pkg, "run_import_async", fake_run)
+
+        result = await extract_and_import_video(
+            {}, "https://www.bilibili.com/video/BVfix/",
+            owner_id=1, source_id=source_id, mode="whisper",
+        )
+        assert result["parse_status"] == "ok"
+
+        async with factory() as session:
+            repos = Repos(session, 1)
+            meta = await repos.sources.get_parse_meta(source_id)
+            assert meta.get("llm_transcript_fix") == fix_record, "导入完成后留痕仍在 parse_meta"
+
+    asyncio.run(db_scope(scenario))

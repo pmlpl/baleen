@@ -1,4 +1,4 @@
-# API 契约 v34
+# API 契约 v35
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -114,7 +114,7 @@ B 站 / 抖音视频链接导入。两种模式：
 | `mode` | string | ❌ | `"subtitle"`（默认，秒级，同步） \| `"whisper"`（分钟级，异步，内容可靠） |
 
 响应与 `POST /api/sources` 完全一致（`{ source_id, job_id, job_status, deduped }`）。
-轮询 `GET /api/sources/{source_id}` 拿全链路状态。whisper 模式通过 `video_stage`（阶段文案）+ `video_progress`（0-100 进度）+ `video_est_seconds`（转写阶段预计秒数，前端据此插值）三个字段驱动进度条；另有 `video_log`（v27 新增）——提取+整理全程的白盒日志数组，每条 `{ts, stage, pct}`（时间戳/阶段文本/百分比），前端渲染滚动日志区，让用户看到「排队→下载→whisper→识别画面→解析完成→AI 整理」每一步走到哪了。抖音模式**免 cookie**：worker 用系统浏览器（Playwright，channel=msedge）打开视频页拦截详情接口获取元信息和播放地址，用户零配置。
+轮询 `GET /api/sources/{source_id}` 拿全链路状态。whisper 模式通过 `video_stage`（阶段文案）+ `video_progress`（0-100 进度）+ `video_est_seconds`（转写阶段预计秒数，前端据此插值）三个字段驱动进度条；另有 `video_log`（v27 新增）——提取+整理全程的白盒日志数组，每条 `{ts, stage, pct}`（时间戳/阶段文本/百分比），前端渲染滚动日志区，让用户看到「排队→下载→whisper→转写校正中→识别画面→解析完成→AI 整理」每一步走到哪了。**转写校正中**（v35 新增）：whisper 转写完成后、画面识别前，LLM 盲修疑似错听的专名/术语（spike 实测：零词典、只出修改清单、程序化应用留痕；输入 3 万字符封顶；LLM 失败自动降级用原转写不让导入失败），修正留痕写 `parse_meta.llm_transcript_fix`（`{n_proposed, n_applied, corrections[], n_missed, missed[]}`，失败/跳过记 `error`/`skipped`）。同时 whisper 模型 small→large-v3-turbo、语言参数 zh 强制→None 自动检测（英文视频不再被强解码，8093 专名错字 ≥20 的根源修复）抖音模式**免 cookie**：worker 用系统浏览器（Playwright，channel=msedge）打开视频页拦截详情接口获取元信息和播放地址，用户零配置。
 
 - `mode="whisper"` 时 API 立即返回 201，不阻塞；worker 后台提取（最多 2 小时，支持 ≤60 分钟视频）。
 - whisper 模式的 source.sha256 是占位值（`"video:{bvid}:whisper"`），真实 sha 存在 `parse_meta.content_sha256`；dedupe 基于 BVID。
@@ -574,6 +574,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-22 | v35 | **转写治本三件套**（spike 实测拍板，eval/runs/transcribe_spike_2026-11-22.md）：①whisper 模型 small→**large-v3-turbo**（专名原生准确率接近 large-v3、速度等同 small、显存 Δ2.3GB）+**language=None 自动检测**（zh 强制对英文视频是灾难放大器——8093 专名错字 ≥20 的根源）；模型文件预置在仓库根之外的 models/ 目录（.env `WHISPER_MODEL_DIR` 指路，生产禁运行时在线下载——spike 在线 load 63min 教训；未配置退回 hub 名）。②worker 管线转写后、organizer 前插 **LLM 自校正 pass**：盲修疑似错听的专名/术语（零词典宁缺毋滥，只出修改清单程序化应用），修正留痕写 `parse_meta.llm_transcript_fix`；LLM 失败降级用原转写（凡失败必留痕），输入 3 万字符封顶，max_tokens 16000（推理网关 8000 全烧 reasoning 教训）；client 可注入可 mock。③`video_log` 新 stage「转写校正中…」；pipeline video_keep 白名单放行新键。测试 +7（turbo/None 参数断言、校正应用/降级/skipped/封顶、留痕 merge）；真链路验证留给下一批喂料 |
 | 2026-11-20 | v34 | **agent 流式输出**（主人验收反馈：「我希望前端流式输出AI内容，而不是从『思考中』之后直接跳出整段内容」）：①`chat_stream` 加 `tools`/`tool_choice`/`timeout` 透传 + `tool_calls` 流式分片拼装（流末事件，与非流式 `ChatResult.tool_calls` 同形）。②`agent.py` 重构为 `run_agent_iter` 异步生成器：`streaming=True` 产 `status`/`delta` 事件、[NO_KB] 首行门扣下标记答案、流式不做假引用修复轮（已放行文本无法收回——幻觉编号只从 citations 剔除，死徽章与决策树流式同语义）；`run_agent` 为薄包装，非流式行为不变（含修复轮）。③流式端点 agent loop 移入 `gen()`：事件序 `meta → status* → delta* → done`，最终答案**逐段放行**（多帧 delta），工具轮发 status（带检索词）；agent 回落时决策树前置（4.5 预检+附图）gen 内现算，最坏=现状；`meta.agent` 语义改为「本轮是否按 agent 模式跑」。④前端 `qa.ts` 加 `onStatus`；问答页思考行显示工具轮进度。测试 +7（client 3 + iter 4）；真链路实测：直答题 386 帧 delta、换词/转网题 3 条 status + 594 帧 delta |
 | 2026-11-20 | v33 | **会话「最近活跃」排序 + 每用户保留最新 50 个**（主人 2026-11-20 拍板）：§5 会话列表从「按创建时间」改为「按最近活跃」（`updated_at desc`）——落一条消息（user/assistant）即刷该会话活跃时间，旧会话发一轮新对话上浮到顶；仅打开/查看/导出不刷新。保留策略：每用户只留最新 50 个会话，更旧的**硬删**（消息/摘要 FK CASCADE 连带删），只在新建会话时触发裁剪（删几个记日志不建表）。迁移 0018：`qa_sessions.updated_at`（NOT NULL，server_default now()）+ `(owner_id, updated_at DESC)` 索引 + 存量回填 `updated_at = created_at`；老用户零感知（只加列回填，digest/缓存不受影响）。响应字段不变（`created_at` 照旧返回，前端不显示日期）。已知边界：闲置旧会话开在别的标签页时可能被裁 → 之后发消息 404，前端兜底「已开新对话」 |
 | 2026-11-20 | v32 | **问答 agent 默认开**（主人验收拍板：「还要我手动去打开吗，我们都已经是 agent 模式了，旧对话模式不要再是默认」）：`agent_enabled` 语义翻转——NULL/true = agent loop（**默认**），false = 显式关回旧决策树（紧急开关/A-B 对照）。迁移 0017：`app_settings.agent_enabled` server_default false→true + 存量行全部置 true；agent 失败回落决策树的代码层兜底不变（ADR 0010「最坏情况=现状」不拆）。`negative_eval.py` 加 `--no-agent`（临时关 agent 跑决策树基线，跑完恢复原值；`--agent` 改为显式确保开）。§5/§6 描述同步；测试基线 631（旧决策树测试在 fixture 显式关 agent，agent 默认开有专项测试） |
