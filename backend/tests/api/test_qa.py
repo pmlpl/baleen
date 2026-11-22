@@ -815,7 +815,8 @@ def test_chat_with_referenced_note_puts_it_in_prompt(
     if isinstance(last_body, bytes):
         last_body = last_body.decode("utf-8")
     assert "REF_MARKER_XYZ" in last_body
-    assert "<referenced_notes>" in last_body
+    # 块形态 = 标签后紧跟换行;prompt 规则文字里的行中提及(<…/…referenced_notes> 里的内容)不算
+    assert "<referenced_notes>\\n" in last_body
     # 检索照跑(fake_retrieve 记录了检索词)
     assert qa_setup.queries == ["闭包是什么"]
 
@@ -832,7 +833,8 @@ def test_chat_with_bogus_note_ids_ignored(
     last_body = qa_setup.transports[-1].calls[-1]["body"]
     if isinstance(last_body, bytes):
         last_body = last_body.decode("utf-8")
-    assert "<referenced_notes>" not in last_body
+    # 同上:只断言块形态缺席——system prompt 规则文字提到该标签是常态,裸子串会误伤
+    assert "<referenced_notes>\\n" not in last_body
 
 
 def test_chat_no_kb_marker_triggers_web_search(
