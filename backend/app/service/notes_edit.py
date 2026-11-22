@@ -5,8 +5,11 @@
 回填的幂等闸(parse_meta.headings_rewritten)保持原值,后续回填也不会覆写用户 edits。
 
 已知取舍(诚实记录):
-- 序列化不做全文 markdown 转义,只挡最危险的行首元字符(# > - 数字.);段落含
-  成对 ** 等符号时往返可能变样式——编辑器给的是 markdown 源,用户自己可见可改。
+- 序列化挡两类转义:行首元字符(# > - 数字.,防段落往返变标题/列表)+正文文本里的
+  emphasis/strike 语法字符(* _ ~,防 ``__name__`` 往返成粗体/``a*b*c`` 往返成斜体,
+  2026-11-22 追加批)。其余 markdown 语法字符(反引号/方括号等)仍不转义——
+  编辑器给的是 markdown 源,用户自己可见可改;粗体闭合受困(标点+紧邻正文)由
+  md_parser 的 scanDelims 松弛在解析侧兜底(见该模块「往返友好 emphasis 松弛」节)。
 - **图片块(2026-11-02 v16):改为位置标记往返**。序列化时每张图写成
   ``![alt](baleen-image:N)``(N = 文档顺序),保存时按 N 把编辑前的原 image 节点
   原样放回原位——图片字节本来就不在 doc 里(只有 alt/index),所以「重关联」
@@ -51,12 +54,23 @@ def _escape_leading(text: str) -> str:
     return re.sub(r"^(#{1,6} |>|-|\+|\*|\d+[.)])", r"\\\1", text)
 
 
+def _escape_inline_text(text: str) -> str:
+    """正文文本里的 emphasis/strike 语法字符转义(2026-11-22 追加批)。
+
+    doc_to_markdown 的输出会被 parse_md_text 再解析(PUT 往返;前端编辑器就是
+    对 GET markdown 源码直接改),裸 ``__name__`` 往返成粗体(6090)、裸 ``a*b*c``
+    往返成斜体。转义后往返恒等;code mark 内不转义(反引号里 ``\\*`` 会原样显示)。
+    """
+    return text.replace("*", "\\*").replace("_", "\\_").replace("~", "\\~")
+
+
 def _inline_to_md(node: dict) -> str:
     text = node.get("text", "")
     marks = node.get("marks") or []
     types = [m.get("type") for m in marks]
     if "code" in types:
         return f"`{text}`"
+    text = _escape_inline_text(text)
     if "bold" in types:
         text = f"**{text}**"
     if "italic" in types:
@@ -71,9 +85,15 @@ def _inline_to_md(node: dict) -> str:
 
 
 def _inlines_to_md(inlines: list[dict] | None, *, escape_lead: bool = False) -> str:
-    parts = [_inline_to_md(n) for n in inlines or []]
-    text = "".join(parts)
-    return _escape_leading(text) if escape_lead else text
+    nodes = inlines or []
+    parts = [_inline_to_md(n) for n in nodes]
+    if escape_lead and parts:
+        # 行首转义只作用于首个「无 mark 的纯文本」节点:段落以粗体/链接/行内代码开头时,
+        # 首字符是语法(**、[、`)不是内容,转义会破坏往返(2026-11-22 追加批修)。
+        first = nodes[0]
+        if first.get("type") == "text" and not (first.get("marks") or []):
+            parts[0] = _escape_leading(parts[0])
+    return "".join(parts)
 
 
 def _cell_text(cell: dict) -> str:
@@ -96,7 +116,12 @@ def _table_to_md(block: dict) -> str:
 def _list_to_md(
     block: dict, *, ordered: bool, indent: str = "", image_counter: list[int] | None = None
 ) -> list[str]:
-    """列表序列化;嵌套列表缩进两格(与前端渲染器同款的一层口径)。
+    """列表序列化;嵌套内容的延续行缩进 = 父项标记宽度(2026-11-22 追加批)。
+
+    之前嵌套固定缩两格:有序项 ``4. `` 标记宽 3 格,2 格缩进在 CommonMark 里
+    不构成嵌套,PUT 往返会把子弹拍平一层(质检修正批 4982/4983 实锤)。
+    改成按 ``len(prefix)`` 缩进:子弹项 ``- `` 仍是 2 格(与旧行为一致),
+    ``4. `` 是 3 格、``10. `` 是 4 格(顺带修掉两位数编号的潜伏 bug)。
 
     ``image_counter`` 透传:列表项里的 image 块也要参与位置标记编号
     (v16 边界测试抓到的真 bug——不传的话列表内的图会被静默丢弃)。
@@ -105,6 +130,7 @@ def _list_to_md(
     start = int((block.get("attrs") or {}).get("start", 1) or 1)
     for i, item in enumerate(block.get("content") or []):
         prefix = f"{start + i}. " if ordered else "- "
+        item_indent = indent + " " * len(prefix)
         pieces: list[str] = []
         for child in item.get("content") or []:
             t = child.get("type")
@@ -112,13 +138,13 @@ def _list_to_md(
                 pieces.append(_inlines_to_md(child.get("content")))
             elif t in ("bulletList", "orderedList"):
                 nested = _list_to_md(
-                    child, ordered=t == "orderedList", indent=indent + "  ",
+                    child, ordered=t == "orderedList", indent=item_indent,
                     image_counter=image_counter,
                 )
                 pieces.append("\n" + "\n".join(nested) if nested else "")
             elif t == "codeBlock":
                 code = "".join(n.get("text", "") for n in child.get("content") or [])
-                pieces.append("\n" + indent + "  " + code.replace("\n", "\n" + indent + "  "))
+                pieces.append("\n" + item_indent + code.replace("\n", "\n" + item_indent))
             elif t == "image" and image_counter is not None:
                 # 图片块在列表项里:产出标记行,与块级图共用同一计数器。
                 # 标记行用「item 内容缩进」的延续行写法(不能带空行——空行会终结列表,
@@ -126,7 +152,7 @@ def _list_to_md(
                 alt = (child.get("attrs") or {}).get("alt", "") or "图片"
                 index = image_counter[0]
                 image_counter[0] += 1
-                pieces.append(indent + "  " + f"![{alt}]({IMAGE_SCHEME}{index})")
+                pieces.append(item_indent + f"![{alt}]({IMAGE_SCHEME}{index})")
         body = pieces[0] if pieces and pieces[0] != "" else ""
         rest = [p for p in pieces[1:] if p]
         lines.append(indent + prefix + body)

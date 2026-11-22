@@ -17,6 +17,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from markdown_it import MarkdownIt
+from markdown_it.common.utils import isMdAsciiPunct, isPunctChar, isWhiteSpace
+from markdown_it.rules_inline.state_inline import Scanned, StateInline
 from markdown_it.token import Token
 
 from . import blocks
@@ -29,6 +31,62 @@ ImageResolver = Callable[[str, str], dict | None]
 
 # 笔记编辑往返用的伪 scheme:``![alt](baleen-image:0)`` 指回原 doc 里的第 0 张图
 IMAGE_SCHEME = "baleen-image:"
+
+
+# ---------------------------------------------------------------- 往返友好 emphasis 松弛(2026-11-22)
+# CommonMark flanking 规则会让「标点紧邻正文」的 delimiter run 既闭不上也打不开:
+#   ``**组合得到电荷分布 $\rho$**将上述…**连续体电荷分布**`` —— 闭合 ** 前是 $、后是「将」,
+#   right-flanking(2b) 不成立 → 粗体闭不上 → 整行塌成纯文本/堆叠 mark(质检修正批 4982 实锤);
+#   ``中文**（说明）**正文`` —— 开头 ** 前是「文」、后是（,left-flanking(2b) 不成立 → 打不开(同批实验 A4)。
+# doc→md→doc 往返恒等依赖这里:doc 里 [粗体|正文|粗体] 相邻是合法结构,序列化输出
+# ``**A**t**B**`` 是唯一 md 写法(不许塞空格/零宽字符),解析侧必须认得它。
+# 松弛规则(受困 run 单角色化,思路同 markdown-it-cjk-friendly):
+#   形态=「前面是标点 + 后面紧邻正文 + 按 spec 闭不上」的 run(如 ``**…$x$**将``,闭合
+#   ** 前是 $ 后是「将」):spec 下它只能当 opener,而它当 opener 必然造出错误粗体跨度
+#   (4982 实锤)→ 若前面存在未匹配的同 marker opener(pending>0),强制翻成「只闭合」。
+#   pending 计数是关键守卫:``**加粗**、*斜体*`` 的 ``*``(、 之后)同是「标点前+打不开」,
+#   但它前面没有未匹配 opener(run1 已被 run2 预订),翻走会毁掉斜体——实验矩阵实测。
+#   ⚠️ 只做闭合侧:打开侧松弛(「中文**（说明）**正文」)会偷走合法闭合符,不做;
+#   该形态往返仍会丢粗体,属已知限制(语料未现,根治需 emphasis 规则层,另批再议)。
+# 单角色化同时绕开 rule-of-3(balance_pairs 的整除 3 检查只作用于「既可开又可闭」的 run)。
+# 有意取舍:``**foo.**bar`` 这类 ASCII 场景由「字面」变「粗体+正文」——与用户直觉一致;
+#   ``_`` 的行内词保护不变(snake_case 单下划线仍不触发,受困双下划线才松)。
+
+_orig_scan_delims = StateInline.scanDelims
+
+
+def _scan_delims_roundtrip_friendly(self: StateInline, start: int, can_split_word: bool) -> Scanned:
+    scanned = _orig_scan_delims(self, start, can_split_word)
+    marker = self.src[start]
+    if marker not in ("*", "_", "~"):
+        return scanned
+    last_char = self.src[start - 1] if start > 0 else " "
+    end = start + scanned.length
+    next_char = self.src[end] if end < self.posMax else " "
+    last_punct = isMdAsciiPunct(ord(last_char)) or isPunctChar(last_char)
+    next_punct = isMdAsciiPunct(ord(next_char)) or isPunctChar(next_char)
+    last_ws = isWhiteSpace(ord(last_char))
+    next_ws = isWhiteSpace(ord(next_char))
+    if (
+        scanned.can_open
+        and not scanned.can_close
+        and last_punct
+        and not last_ws
+        and not next_ws
+        and not next_punct
+    ):
+        # 受困 opener-only:前面若有未匹配 opener,翻成只闭合(pending 守卫见上)
+        pending = 0
+        for d in self.delimiters:
+            if d.marker == ord(marker):
+                pending += 1 if d.open else 0
+                pending -= 1 if d.close else 0
+        if pending > 0:
+            return Scanned(can_open=False, can_close=True, length=scanned.length)
+    return scanned
+
+
+StateInline.scanDelims = _scan_delims_roundtrip_friendly  # type: ignore[method-assign]
 
 
 def _mark_for_open(tok: Token) -> dict | None:
