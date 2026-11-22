@@ -1,18 +1,30 @@
 ﻿note_id,layer,title,dim,signal,evidence,location,near,count,source,verdict,reason
-157,doc,Fetch / Axios 完全指南,typo,近似词(距离2),Worker,1.9.1 用 fetch 的场合 > 用 fetch 的场合,docker(2),1,heur,,
 159,doc,变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）,typo,近似词(距离1),coro,1.4.1 通用约定 > 3.1 通用约定,cors(1),1,heur,,
 159,doc,变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）,typo,近似词(距离1),httpx,1.4.1 通用约定 > 3.1 通用约定,https(1),1,heur,,
 159,doc,变更 016：5 个核心工具补单测（file_tool / registry / script_tool / mcp_capture / crawl_tool）,typo,近似词(距离1),base,1.4.2.1 file_tool.py > file_tool.py,bash(1),1,heur,,
 160,doc,缺陷反馈：VIP音乐播放能力缺失（最终版）,typo,近似词(距离2),Solara,1.3.2 已突破的部分 > 已突破的部分,sora(2),3,heur,,
 164,doc,轻量化发票 OCR 识别与校验系统,typo,近似词(距离2),Engine,1.9 运行环境 > 运行环境,nginx(2),1,heur,,
-296,doc,实验方案 · 轨道 B 泛化验证(exp-03),style,超长段落,"651字:语料:10 部左右真实公开中国法律法规(劳动法、劳动合同法等,与制度问答场景最近的文体),目标 3-10 万字 / 15",1.3 实验设计 > 二、实验设计,,1,heur,,
-2704,qa,Workflow 工作流：从信息卡到触发器与设计类型,style,超长段落,955字:[1] Agent 应用开发学习指南 · Agent 应用开发学习指南 — /notes/161[W1] 工作流触发器 ,可继续深入的方向 > 出处,,1,heur,,
-4982,qa,电磁场中屏蔽势与电荷分布推导,style,超长段落,1237字:起点：泊松方程在无限空间中，势 $\phi$ 满足 $\nabla^2\phi = -\rho/\varepsilon_,电磁场中屏蔽势与电荷分布推导 > 核心思路与关键步骤,,1,heur,,
-4983,qa,圆锥曲线基础与椭圆错题解析,style,超长段落,"664字:基础参数：$a^2=12, b^2=3 \Rightarrow c^2=a^2-b^2=9, c=3$。焦点坐标：焦点在",1. 椭圆离心率计算（第5题） > 2. 椭圆焦点与中点纵坐标（第6题）,,1,heur,,
 5468,video,一条视频搞懂15个主流AI热词：从LLM到Workspace Agent的完整逻辑线,typo,近似词(距离1),Window,四、上下文窗口（Context Window）：一次能装下多少 Token > 4.1 定义,windows(1),1,heur,,
-6002,qa,闭包到底是什么？用大白话解释,style,超长段落,643字:[1] 闭包 —— 面试必问，装逼必备 · 闭包 —— 面试必问，装逼必备 > 一、闭包到底是个什么玩意儿？ > 官方定,怎么解决 > 出处,,1,heur,,
-6007,qa,容器化技术演进与 API 网关辨析,style,超长段落,774字:[1] kube_evolution · 一、容器化技术栈演进路线 > 1.1 技术栈总体演进逻辑 — /notes/4,通用网关辨析框架 > 出处,,1,heur,,
-6008,qa,RAG 检索增强生成：原理、与微调的选型及私有知识库搭建,style,超长段落,734字:[1] 一条视频搞懂15个主流AI热词：从LLM到Workspace Agent的完整逻辑线 · 六、RAG（检索增强生,两个实用提醒 > 出处,,1,heur,,
 6009,video,Docker 常用命令实战：从拉取镜像到推送 Docker Hub,typo,近似词(距离1),httpd,三、构建并运行自定义镜像 > 3.1 编写 Dockerfile,https(1),1,heur,,
 6009,video,Docker 常用命令实战：从拉取镜像到推送 Docker Hub,frame,界面元素,Chrome 地址栏输入 EC2 公网 IP 54.186.61.160，准备访问容器服务,ts=438s 3.2 docker build 构建镜像 > 3.3 端口映射运行与访问验证,,1,heur,,
 6013,video,PPO 基本原理：给策略更新加限速,typo,近似词(距离2),decide,一、PPO 基本原理：给策略更新加限速 > 1.1 用机器人行走建立全局认知,decoder(2),1,heur,,
+8093,video,从 Slop 到 Gold：给 Agent 打造可信开发环境的工程方法论,typo,近似词(距离2),diagram,1.4.3 禁止注释：不给 Agent 留逃生通道 > 1.5 验证：让 Code Review 变成「看验证产物」,bigram(2),1,heur,dismissed,
+8093,video,从 Slop 到 Gold：给 Agent 打造可信开发环境的工程方法论,typo,近似词(距离1),outer,1.8 落地建议：先修地基，再做自动化 > 1.9 GrokBot 作为外围循环：自动 Fuzz 与自动修复,router(1),1,heur,dismissed,
+8094,video,PostgreSQL 与 MySQL 全面对比：数据库选型指南,typo,近似词(距离2),PostGIS,4.1 传统多库架构的痛点 > 4.2 PostgreSQL 的插件化能力,postgres(2),1,heur,dismissed,
+8095,video,WinClaw 新版本实测：从本地知识库到 AI 专家与 MCP 服务,frame,互动引导,专家广场主页,ts=24s 三、专家广场：知识服务的发现与交易 > 3.1 寻找专家与发起提问,,1,heur,,
+8095,video,WinClaw 新版本实测：从本地知识库到 AI 专家与 MCP 服务,typo,LLM终审,最近公司招聘收到几分简历,,最近公司招聘收到几份简历,1,llm,open,"简历应按「份」计量的量词,用户原本说的是「几份」,「几分」在这里语义不通,属于同音错字"
+8095,video,WinClaw 新版本实测：从本地知识库到 AI 专家与 MCP 服务,typo,LLM终审,温克罗（WinClaw）检索到一份仅含图片的签收单照片,,WinClaw 检索到一份仅含图片的签收单照片,1,llm,open,"全文其余各处都写成 WinClaw,只有这一处把它误写成了音译名「温克罗」,属于语音转录时把专有名词听错,统一改成 WinClaw"
+8097,video,异步 Agent 架构：前台编排者 + 后台 Worker,style,LLM终审,"这是可配置的，配置项有两个取值。
+interrupt 是默认值。收到更新后子 Agent 立刻停下……
+新消息先放到一边，等手上这件干完再继续处理。此时任务状态会显示为 pending。",,,1,llm,open,前面说「配置项有两个取值」，但只给出了 interrupt 一个取值名，第二种模式直接跳到行为描述、没有名称或小标题，属于明显的结构断裂。
+8098,video,财务思维：把钱当工具，看透赚钱的底层逻辑,typo,LLM终审,会直接影响一个人在公司的升值和加薪,,升职和加薪,1,llm,open,同音错写，“升值”指价值上升，此处语境应为职位晋升
+8098,video,财务思维：把钱当工具，看透赚钱的底层逻辑,typo,LLM终审,这时候财务要“抛息”（追问）,,刨根问底（追问）,1,llm,open,“抛息”不成词，据括号注释应为“刨根问底/追问”一类说法
+8099,video,效率工资：低工资为什么换不来真效率,typo,LLM终审,清华大学白崇恩教授,,清华大学白重恩教授,1,llm,open,清华大学经济学教授姓名应为白重恩，白崇恩系错写/错听
+8099,video,效率工资：低工资为什么换不来真效率,typo,LLM终审,经济学家朱士额和杨主带,,经济学家朱天和杨汝岱,1,llm,open,两位经济学家姓名明显错听，相关作者应为朱天、杨汝岱
+8099,video,效率工资：低工资为什么换不来真效率,typo,LLM终审,吃完这饭我利润都滤了,,吃完这饭我脸都绿了,1,llm,open,与“两个素菜”的调侃语境不符，应为“脸都绿了”的错听/错写
+8102,video,小镇男孩靠 AI 翻身：从上门安装 OpenClaw 到 FDE,typo,LLM终审,再靠上门安装 OpenClaw（原文口播/字幕中也写作 OpenCloud）赚到第一桶金,,再靠上门安装 OpenClaw 赚到第一桶金,1,llm,open,OpenCloud 是 OpenClaw 的口播错听写法，正文已统一用 OpenClaw，无需在正文保留该变体拼写，容易被二次传播成错名。
+8102,video,小镇男孩靠 AI 翻身：从上门安装 OpenClaw 到 FDE,style,LLM终审,他大学玩乐队，但当时买不起吉他。,,,1,llm,open,与前文“他大学玩乐队，但买不起吉他”几乎逐句重复，属段落拼接残留，建议删去其一。
+8093,video,从 Slop 到 Gold：给 Agent 打造可信开发环境的工程方法论,typo,LLM终审,Brett Taylor  famously 在一个周末重写了整个 Google Maps,,Bret Taylor famously,1,llm,open,人名 Bret Taylor 被写成 Brett，且中间多了一个空格
+8093,video,从 Slop 到 Gold：给 Agent 打造可信开发环境的工程方法论,typo,LLM终审,用的库叫 bombadill,,Bombadil,1,llm,open,Antithesis 面向 Web UI 的属性测试工具正确拼写是 Bombadil，此处多了一个 l
+8093,video,从 Slop 到 Gold：给 Agent 打造可信开发环境的工程方法论,style,LLM终审,2. 静态与确定性工具：lint 规则、类型系统、编译器、各类测试。……1. 验证（verification）：分为运行时验证和形式化验证。……2. 少量「散文」（prose）：rules、skill,,,1,llm,open,同一个倒金字塔列表的编号重复（先 1、2，又出现 1、2），应是 3、4，列表层级断裂
+8101,video,暃（新版）打法思路与出装：2200 巅峰赛实战解析,style,LLM终审,（字幕识别为中士/中施）,,,1,llm,open,正文残留字幕识别说明，属于未清理的转写痕迹，应删除。

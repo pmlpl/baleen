@@ -54,7 +54,7 @@ if str(BACKEND_DIR) not in sys.path:
 RUNS_DIR = EVAL_DIR / "runs"
 OWNER_ID = 1
 CONTENT_BUDGET = 12000  # LLM 终审喂给单篇的正文预算(头尾各半)
-MAX_TOKENS = 4000
+MAX_TOKENS = 8000  # 4000 不够:长引文 evidence 会撑爆 JSON(8093 实证);AI 复核员同款教训「judge max_tokens 要给足」
 RANDOM_SEED = 42
 SAMPLE_N = 5  # 主人抽查包篇数
 
@@ -236,6 +236,34 @@ def walk_doc(doc: dict) -> dict:
     def loc() -> str:
         return " > ".join(current_path[-2:]) or "(文首)"
 
+    def walk_list(node: dict, ordered: bool, depth: int) -> None:
+        """列表 → 每个 listItem 一个段(带 - / N. 前缀与嵌套缩进)。
+        整串拼接会把列表拍平成一段,LLM 看到「条目粘连」误判成笔记缺陷
+        (2026-11-21 十五条假 flag 实证,#99 同源);逐项出段与真源对齐。"""
+        for i, li in enumerate(node.get("content") or [], 1):
+            if li.get("type") != "listItem":
+                continue
+            parts: list[str] = []
+            nested: list[tuple[dict, bool]] = []
+            for child in li.get("content") or []:
+                ct = child.get("type")
+                if ct in ("bulletList", "orderedList"):
+                    nested.append((child, ct == "orderedList"))
+                elif ct == "codeBlock":
+                    code_texts.append(flatten_block(child))
+                elif ct == "image":
+                    walk(child)
+                else:
+                    txt = collect_text(child)
+                    if txt.strip():
+                        parts.append(txt.strip())
+            if parts:
+                indent = "    " * depth
+                mark = f"{i}. " if ordered else "- "
+                paras.append({"path": loc(), "text": indent + mark + " ".join(parts)})
+            for child, child_ordered in nested:
+                walk_list(child, child_ordered, depth + 1)
+
     def walk(node: dict) -> None:
         nonlocal current_path
         t = node.get("type")
@@ -260,6 +288,14 @@ def walk_doc(doc: dict) -> dict:
             text = flatten_table(node)
             if text.strip():
                 paras.append({"path": loc(), "text": text, "table": True})
+            return
+        if t in ("bulletList", "orderedList"):
+            walk_list(node, ordered=(t == "orderedList"), depth=0)
+            return
+        if t == "blockquote":
+            # 引用块内的每个段落独立出段——整串拼接会把两条引用行粘成一段
+            for child in node.get("content") or []:
+                walk(child)
             return
         text = collect_text(node)
         if text.strip():
@@ -891,6 +927,7 @@ def main() -> int:
     ap.add_argument("--llm", action="store_true", help="LLM 终审(花 token;每篇 ≤1 调用)")
     ap.add_argument("--report", action="store_true", help="汇总分诊报告(免费)")
     ap.add_argument("--layer", choices=("video", "qa", "doc"), help="只扫某层")
+    ap.add_argument("--notes", default=None, help="只扫指定笔记 id,逗号分隔(如 8093,8094)")
     ap.add_argument("--limit", type=int, default=None, help="LLM 终审只跑前 N 篇")
     ap.add_argument("--resume", action="store_true", help="LLM 终审跳过已有结果的篇")
     ap.add_argument("--delay", type=float, default=0.5)
@@ -902,6 +939,9 @@ def main() -> int:
     notes = asyncio.run(fetch_notes())
     if args.layer:
         notes = [n for n in notes if n["layer"] == args.layer]
+    if args.notes:
+        wanted = {int(x) for x in args.notes.split(",") if x.strip()}
+        notes = [n for n in notes if n["id"] in wanted]
     if args.stats:
         phase_stats(notes)
     if args.scan:
