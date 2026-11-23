@@ -2,7 +2,7 @@
 
 只做「一次 chat 调用」+ 能力探测,不含任何业务判定:
 - 超时:默认 60s
-- 重试:仅网络错误 / 5xx,**最多 2 次**(不含首次)
+- 重试:网络错误 / 5xx / 429,**最多 DEFAULT_MAX_RETRIES=5 次**(不含首次,总尝试 ≤6)
 - 错误分类:认证失败 / 超时 / 限流 / 网络 / 其它
 - ``api_key`` 永不进日志、永不出现在异常文本里
 
@@ -52,7 +52,7 @@ class LLMTimeoutError(LLMError):
 
 
 class LLMRateLimitError(LLMError):
-    """429:限流;尊重 Retry-After 重试 2 次后仍失败才抛。"""
+    """429:限流;尊重 Retry-After,重试至多 DEFAULT_MAX_RETRIES 次后仍失败才抛。"""
 
 
 class LLMNetworkError(LLMError):

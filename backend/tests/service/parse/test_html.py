@@ -74,6 +74,22 @@ def test_html_external_image_ignored_with_warning(tmp_path) -> None:
     assert any("未导入" in w for w in r.warnings)
 
 
+def test_html_oversized_image_degrades_to_alt(tmp_path) -> None:
+    """sink 因单张超限拒收(抛 ValueError):同「无 sink」口径退 alt,不炸 G0(A1)。"""
+    b64 = base64.b64encode(PNG_1X1).decode()
+    html = f'<p>前</p><img src="data:image/png;base64,{b64}" alt="大图"><p>后</p>'
+
+    def sink(data: bytes, alt: str) -> str:
+        raise ValueError("超过单张上限")
+
+    r = parse_file(_html_file(tmp_path, html), media_sink=sink)
+    text = blocks.flatten_text(r.blocks)
+    assert r.parse_status.value == "ok"
+    assert "大图" in text, "替代文字保留"
+    assert r.meta["images"] == 0
+    assert any("单张大小上限" in w for w in r.warnings), "必须明确告知拒收原因"
+
+
 def test_html_gb18030_decoded(tmp_path) -> None:
     p = tmp_path / "legacy.html"
     p.write_bytes("<p>中文简历内容</p>".encode("gb18030"))

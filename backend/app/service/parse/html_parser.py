@@ -74,6 +74,7 @@ class _Extractor(HTMLParser):
         self.items: list[dict] = []
         self.image_count = 0
         self.dropped_imgs = 0
+        self.oversized_imgs = 0  # sink 因超限拒收的图片数(与解析失败分开计数便于提示)
         self._buf: list[str] = []
         self._skip_depth = 0
         self._heading = 0  # 当前处于 hN 内,落行时作 heading level
@@ -146,12 +147,20 @@ class _Extractor(HTMLParser):
                 self.dropped_imgs += 1
                 return
             if self._sink is not None:
+                try:
+                    key = self._sink(raw, alt)
+                except ValueError:
+                    # sink 拒收(如超过单张大小上限)→ 与「无 sink」同口径退 alt,不炸 G0
+                    self.dropped_imgs += 1
+                    self.oversized_imgs += 1
+                    self.items.append({"kind": "text", "level": 0, "text": alt})
+                    return
                 self.items.append(
                     {
                         "kind": "image",
                         "index": self.image_count,
                         "alt": alt,
-                        "media": self._sink(raw, alt),
+                        "media": key,
                     }
                 )
                 self.image_count += 1
@@ -184,8 +193,15 @@ def parse_html(path: Path, *, media_sink: Callable[[bytes, str], str] | None = N
             content.append(blocks.heading(item["level"], item["text"]))
         else:
             content.append(blocks.paragraph_from_text(item["text"]))
-    if extractor.dropped_imgs:
-        warnings.append(f"{extractor.dropped_imgs} 张外链/本地图片未导入,已保留替代文字")
+    if extractor.oversized_imgs:
+        warnings.append(
+            f"{extractor.oversized_imgs} 张图片超过单张大小上限,未导入(已保留替代文字)"
+        )
+    if extractor.dropped_imgs - extractor.oversized_imgs:
+        warnings.append(
+            f"{extractor.dropped_imgs - extractor.oversized_imgs} 张外链/本地图片未导入,"
+            "已保留替代文字"
+        )
 
     doc = {"type": "doc", "content": content}
     flat = blocks.flatten_text(doc)

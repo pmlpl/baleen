@@ -343,7 +343,14 @@ def parse_md(
             return None
         if media_sink is None:
             return {"src": src, "filename": target.name}
-        return {"media": media_sink(data, alt), "src": src, "filename": target.name}
+        try:
+            key = media_sink(data, alt)
+        except ValueError:
+            # sink 拒收该图(如超过单张大小上限 MediaTooLargeError)= 这张图落不了地:
+            # 退 alt + 警告,不炸整篇导入(md 解析层不认识具体异常类型,保持存储层解耦)
+            warnings.append(f"图片超过单张大小上限,已跳过:{alt or target.name}")
+            return None
+        return {"media": key, "src": src, "filename": target.name}
 
     content, chars = parse_md_text(raw, image_resolver=resolve, warnings=warnings)
     images = _count_images(content)

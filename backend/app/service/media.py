@@ -25,6 +25,10 @@ MAX_MEDIA_BYTES = 20 * 1024 * 1024
 _HEX = set("0123456789abcdef")
 
 
+class MediaTooLargeError(ValueError):
+    """单张媒体超过 MAX_MEDIA_BYTES;调用方应降级为「跳过这张图」而不是炸整个导入。"""
+
+
 def is_media_key(key: str) -> bool:
     """合法 key = 64 位小写 hex(sha256 的 hexdigest)。"""
     return len(key) == 64 and all(c in _HEX for c in key)
@@ -34,7 +38,12 @@ def store_media(data: bytes, _alt: str = "") -> str:
     """存字节,返回内容寻址 key(sha256 hex);同内容复用同一文件。
 
     第二个参数是 ``ImageResolver`` 的 alt(md 解析器回调约定的一部分),这里不用。
+
+    超过 ``MAX_MEDIA_BYTES`` 抛 ``MediaTooLargeError``,**不落盘**——调用方按
+    「这张图跳过、退 alt + 警告」降级,不炸整个导入。
     """
+    if len(data) > MAX_MEDIA_BYTES:
+        raise MediaTooLargeError(f"媒体 {len(data)} 字节,超过单张上限 {MAX_MEDIA_BYTES} 字节")
     key = hashlib.sha256(data).hexdigest()
     target = MEDIA_ROOT / key[:2] / key
     if target.exists():
@@ -80,6 +89,7 @@ def media_mime(key: str) -> str:
 __all__ = [
     "MAX_MEDIA_BYTES",
     "MEDIA_ROOT",
+    "MediaTooLargeError",
     "is_media_key",
     "media_mime",
     "media_path",

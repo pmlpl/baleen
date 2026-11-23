@@ -127,3 +127,39 @@ def test_store_media_content_addressed(tmp_path: Path, monkeypatch: pytest.Monke
 )
 def test_media_path_rejects_bad_key(bad: str) -> None:
     assert media_path(bad) is None, "非法 key(含路径穿越)必须拒绝"
+
+
+# ---------------------------------------------------------------- 单张大小上限(A1)
+
+
+def test_store_media_rejects_oversize(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """超过 MAX_MEDIA_BYTES 的字节直接拒收,不落盘(审查报告 A1:上限曾是摆设)。"""
+    from app.service import media as media_mod
+
+    monkeypatch.setattr(media_mod, "MEDIA_ROOT", tmp_path)
+    monkeypatch.setattr(media_mod, "MAX_MEDIA_BYTES", 8)
+    with pytest.raises(media_mod.MediaTooLargeError):
+        store_media(b"x" * 9)
+    assert list(tmp_path.rglob("*")) == [], "拒收的字节不许落盘"
+    # 恰好等于上限仍可存(边界不误伤)
+    assert is_media_key(store_media(b"x" * 8))
+
+
+def test_md_oversized_image_degrades_to_alt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """md 导入遇到超大图:G0 不炸,退 alt + 警告(与「图片未能导入」同口径)。"""
+    from app.service import media as media_mod
+
+    monkeypatch.setattr(media_mod, "MEDIA_ROOT", tmp_path / "media")
+    monkeypatch.setattr(media_mod, "MAX_MEDIA_BYTES", 4)
+    (tmp_path / "big.png").write_bytes(b"\x89PNG" + b"z" * 200)
+    md = tmp_path / "note.md"
+    md.write_text("前 ![超大的图](big.png) 后\n", encoding="utf-8")
+
+    r = parse_md(md, media_sink=store_media)
+
+    assert r.parse_status == ParseStatus.OK, "单张图超限不该炸整篇导入"
+    assert not [b for b in r.blocks["content"] if b["type"] == "image"]
+    assert "超大的图" in str(r.blocks), "替代文字保留,正文不丢"
+    assert any("单张大小上限" in w for w in r.warnings), "必须明确告知为什么没导入"
