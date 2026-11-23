@@ -237,7 +237,7 @@ def test_chat_user_image_skips_web_search_even_with_tavily(
 
     search_calls: list[str] = []
 
-    def fake_search(query, *, api_key, max_results=5):  # noqa: ANN001
+    def fake_search(query, *, api_key, max_results=5, **_kw):  # noqa: ANN001
         search_calls.append(query)
         return [{"title": "OCR 工具", "url": "https://x", "content": "图片转文字…"}]
 

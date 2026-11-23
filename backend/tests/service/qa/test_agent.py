@@ -255,6 +255,100 @@ class TestWebTool:
         assert result.citations[0].note_id is None
         assert result.citations[0].url == "https://example.com/hadoop"
 
+    def test_search_web_fallback_note_left_in_steps(self):
+        """两级链降级留痕:search_web 降级后步骤 result 带原因(响应可见处)。"""
+        client, _transport = _client(
+            [
+                (200, _tool_body("search_web", "阿司匹林 布洛芬 同服")),
+                (200, _chat("两药不建议同服。[W1]", total=60)),
+            ]
+        )
+        retrieve, _calls = _retrieve_fn({})
+
+        def degraded_web(query, *, api_key, **kw):
+            # 模拟真实 websearch.search_web 的降级契约:Tavily 败→DeepSearch 成功
+            meta_out = kw.get("meta_out")
+            if meta_out is not None:
+                meta_out["fallback"] = "Tavily HTTP 432→DeepSearch 兜底"
+            return [
+                {"title": "用药指南", "url": "https://example.com/drug", "content": "不建议同服…"}
+            ]
+
+        result = _run(
+            client, retrieve, kb_hits=[], tavily_key="tvly-x", web_search=degraded_web
+        )
+        assert result is not None
+        tool_step = result.meta["agent"]["steps"][1]
+        assert tool_step["tool"] == "search_web"
+        assert tool_step["result"].startswith("1 results")
+        assert "Tavily HTTP 432→DeepSearch 兜底" in tool_step["result"]
+
+    def test_search_web_fallback_status_event_when_streaming(self):
+        """流式降级:工具轮 status 之后补发一条「联网搜索降级」status。"""
+        groups = [
+            [
+                _sse(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_0",
+                                            "type": "function",
+                                            "function": {"name": "search_web", "arguments": ""},
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ),
+                _sse(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "function": {
+                                                "arguments": json.dumps(
+                                                    {"query": "阿司匹林 布洛芬 同服"}
+                                                )
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                ),
+                "data: [DONE]",
+            ],
+            [
+                _sse({"choices": [{"delta": {"content": "两药不建议同服。[W1]"}}]}),
+                "data: [DONE]",
+            ],
+        ]
+        client, _transport = _stream_client(groups)
+        retrieve, _calls = _retrieve_fn({})
+
+        def degraded_web(query, *, api_key, **kw):
+            meta_out = kw.get("meta_out")
+            if meta_out is not None:
+                meta_out["fallback"] = "Tavily HTTP 432→DeepSearch 兜底"
+            return [
+                {"title": "用药指南", "url": "https://example.com/drug", "content": "不建议同服…"}
+            ]
+
+        events = _run_iter(
+            client, retrieve, kb_hits=[], tavily_key="tvly-x", web_search=degraded_web
+        )
+        statuses = [ev["text"] for ev in events if ev["type"] == "status"]
+        assert "联网搜索降级:Tavily HTTP 432→DeepSearch 兜底" in statuses
+
     def test_no_web_tool_without_tavily_key(self):
         """没配 Tavily → search_web 不注册(请求里只有 search_kb)。"""
         client, transport = _client([(200, _chat("直接答 [1]"))])

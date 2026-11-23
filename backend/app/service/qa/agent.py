@@ -218,6 +218,8 @@ async def run_agent_iter(
     images: list[dict] | None = None,
     has_user_images: bool = False,
     tavily_key: str | None = None,
+    fallback_base_url: str | None = None,
+    fallback_api_key: str | None = None,
     max_steps: int = AGENT_MAX_STEPS,
     step_timeout: float = AGENT_STEP_TIMEOUT,
     time_budget_s: float = AGENT_TIME_BUDGET_S,
@@ -424,8 +426,16 @@ async def run_agent_iter(
                     if streaming:
                         yield {"type": "status", "text": f"正在联网搜索:{query[:30]}"}
                     t1 = time.monotonic()
+                    fb_meta: dict = {}  # 两级链降级留痕(见 websearch.search_web)
                     try:
-                        new_results = await asyncio.to_thread(web_search, query, api_key=tavily_key)
+                        new_results = await asyncio.to_thread(
+                            web_search,
+                            query,
+                            api_key=tavily_key,
+                            fallback_base_url=fallback_base_url,
+                            fallback_api_key=fallback_api_key,
+                            meta_out=fb_meta,
+                        )
                     except Exception as exc:  # noqa: BLE001 —— 搜索失败走「没找到」口径
                         new_results = []
                         result_text = f"(联网搜索失败:{type(exc).__name__})"
@@ -436,6 +446,9 @@ async def run_agent_iter(
                             result_text = _format_web_entries(new_results, start)
                         else:
                             result_text = "(联网搜索没有返回结果)"
+                    fb_note = fb_meta.get("fallback")
+                    if fb_note and streaming:
+                        yield {"type": "status", "text": f"联网搜索降级:{fb_note}"}
                     tool_ms = round((time.monotonic() - t1) * 1000, 1)
                     result_text, _did = truncate_to_tokens(result_text, TOOL_RESULT_TOKEN_BUDGET)
                     steps.append(
@@ -444,7 +457,10 @@ async def run_agent_iter(
                             "kind": "tool",
                             "tool": name,
                             "arg": query[:80],
-                            "result": f"{len(new_results)} results",
+                            "result": (
+                                f"{len(new_results)} results"
+                                + (f"({fb_note})" if fb_note else "")
+                            ),
                             "latency_ms": tool_ms,
                         }
                     )
@@ -580,6 +596,8 @@ async def run_agent(
     images: list[dict] | None = None,
     has_user_images: bool = False,
     tavily_key: str | None = None,
+    fallback_base_url: str | None = None,
+    fallback_api_key: str | None = None,
     max_steps: int = AGENT_MAX_STEPS,
     step_timeout: float = AGENT_STEP_TIMEOUT,
     time_budget_s: float = AGENT_TIME_BUDGET_S,
@@ -604,6 +622,8 @@ async def run_agent(
         images=images,
         has_user_images=has_user_images,
         tavily_key=tavily_key,
+        fallback_base_url=fallback_base_url,
+        fallback_api_key=fallback_api_key,
         max_steps=max_steps,
         step_timeout=step_timeout,
         time_budget_s=time_budget_s,

@@ -456,6 +456,8 @@ async def chat(
             images=user_images + await _load_hit_images(session, owner_id, kb_hits),
             has_user_images=bool(user_images),
             tavily_key=tavily_key,
+            fallback_base_url=llm.base_url,
+            fallback_api_key=llm.api_key,
         )
 
     # 4.5) 工具链兜底(决策树,agent 关/agent 回落时走):库内没命中 OR 命中但不相关
@@ -467,7 +469,13 @@ async def chat(
         kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
         if kb_irrelevant and tavily_key and not user_images:
             try:
-                web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
+                web_results = await asyncio.to_thread(
+                    search_web,
+                    search_query,
+                    api_key=tavily_key,
+                    fallback_base_url=llm.base_url,
+                    fallback_api_key=llm.api_key,
+                )
             except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
                 web_results = []
 
@@ -521,7 +529,11 @@ async def chat(
                 if tavily_key and not user_images:
                     try:
                         web_results = await asyncio.to_thread(
-                            search_web, search_query, api_key=tavily_key
+                            search_web,
+                            search_query,
+                            api_key=tavily_key,
+                            fallback_base_url=llm.base_url,
+                            fallback_api_key=llm.api_key,
                         )
                     except Exception:  # noqa: BLE001 —— 搜索失败走自身知识口径
                         web_results = []
@@ -687,7 +699,13 @@ async def chat_stream_endpoint(
         kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
         if kb_irrelevant and tavily_key and not user_images:
             try:
-                web_results = await asyncio.to_thread(search_web, search_query, api_key=tavily_key)
+                web_results = await asyncio.to_thread(
+                    search_web,
+                    search_query,
+                    api_key=tavily_key,
+                    fallback_base_url=llm.base_url,
+                    fallback_api_key=llm.api_key,
+                )
             except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
                 web_results = []
         used_web = bool(web_results)
@@ -742,6 +760,8 @@ async def chat_stream_endpoint(
                     images=user_images + hit_images,
                     has_user_images=bool(user_images),
                     tavily_key=tavily_key,
+                    fallback_base_url=llm.base_url,
+                    fallback_api_key=llm.api_key,
                     streaming=True,
                 ):
                     if ev["type"] == "status":
@@ -768,12 +788,22 @@ async def chat_stream_endpoint(
                     # 最坏情况 = 现状(不复制分支,只预置数据)
                     kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
                     if kb_irrelevant and tavily_key and not user_images:
+                        fb_meta: dict = {}  # 两级链降级留痕(见 websearch.search_web)
                         try:
                             web_results = await asyncio.to_thread(
-                                search_web, search_query, api_key=tavily_key
+                                search_web,
+                                search_query,
+                                api_key=tavily_key,
+                                fallback_base_url=llm.base_url,
+                                fallback_api_key=llm.api_key,
+                                meta_out=fb_meta,
                             )
                         except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径
                             web_results = []
+                        if fb_meta.get("fallback"):
+                            yield _sse(
+                                "status", {"text": f"联网搜索降级:{fb_meta['fallback']}"}
+                            )
                     attach_images(messages, user_images + hit_images)
                     used_web = bool(web_results)
                 if web_results:
@@ -848,12 +878,22 @@ async def chat_stream_endpoint(
                         body = buffered.removeprefix("[NO_KB]").strip()
                         web_results2: list[dict[str, str]] = []
                         if tavily_key and not user_images:
+                            fb_meta2: dict = {}  # 两级链降级留痕(见 websearch.search_web)
                             try:
                                 web_results2 = await asyncio.to_thread(
-                                    search_web, search_query, api_key=tavily_key
+                                    search_web,
+                                    search_query,
+                                    api_key=tavily_key,
+                                    fallback_base_url=llm.base_url,
+                                    fallback_api_key=llm.api_key,
+                                    meta_out=fb_meta2,
                                 )
                             except Exception:  # noqa: BLE001 —— 搜索失败走自身知识口径
                                 web_results2 = []
+                            if fb_meta2.get("fallback"):
+                                yield _sse(
+                                    "status", {"text": f"联网搜索降级:{fb_meta2['fallback']}"}
+                                )
                         if web_results2:
                             used_web = True
                             qa = await asyncio.to_thread(

@@ -520,7 +520,7 @@ def test_chat_web_fallback_when_kb_misses(
     async def fake_tavily_key(session, owner_id):  # noqa: ANN001
         return "tvly-test"
 
-    def fake_search(query, *, api_key, max_results=5):  # noqa: ANN001
+    def fake_search(query, *, api_key, max_results=5, **_kw):  # noqa: ANN001
         qa_setup.search_calls.append(query)
         return [
             {
@@ -734,7 +734,7 @@ def test_save_note_appends_citation_appendix_with_real_url(
     async def fake_tavily_key(session, owner_id):  # noqa: ANN001
         return "tvly-test"
 
-    def fake_search(query, *, api_key, max_results=5):  # noqa: ANN001
+    def fake_search(query, *, api_key, max_results=5, **_kw):  # noqa: ANN001
         return [
             {"title": "来源甲", "url": "https://a.example/one", "content": "甲内容"},
             {"title": "来源乙", "url": "https://b.example/two", "content": "乙内容"},
@@ -852,7 +852,7 @@ def test_chat_no_kb_marker_triggers_web_search(
 
     search_calls: list[str] = []
 
-    def fake_search(query, *, api_key):  # noqa: ANN001
+    def fake_search(query, *, api_key, **_kw):  # noqa: ANN001
         search_calls.append(query)
         return [
             {"title": "闭包本质详解", "url": "https://closure.example", "content": "闭包的本质是…"}
