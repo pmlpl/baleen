@@ -212,3 +212,13 @@ PUT 留痕(重切 12/43 块),PUT 后二次 PUT **no-op**(往返定点)。
 | 前端渲染抽查(8093 列表编号+8099 两处人名,截图+识图) | 通过 |
 | pytest 全量 | **652 passed, 1 xfailed**(+chunker start 测试 1 条),基线不破 |
 | doc_lint | 0 ERROR |
+
+## 追加批 #4 · 批 #2（新管线）终审残留修正（2026-11-23，主人拍板全同意，主会话直接执行——修正批会话 modelUnavailable）
+
+| # | note | before → after | 状态 |
+|---|---|---|---|
+| F1 | 8458 | 「页眉页角」→「页眉**脚**」（排版术语错听） | ✅ PUT 200 + 二次 no-op |
+| F2 | 8459 | §1.1 首句与开篇重复枚举「三款平台分别是 Meshy、Tripo、混元3D。」→ 删重复句保留方法信息 | ✅ PUT 200 + 二次 no-op |
+| F3 | 8461 | 「很大上」→「高**大上**」（掉字） | ✅ PUT 200 + 二次 no-op |
+
+对账：`backend/tmp/qfix/apply_log_round4.json`；before 全文存 `qfix/8458.md/8459.md/8461.md`。执行器 `tmp/qf_apply_batch4.py`（同 qf_apply 模式）。
