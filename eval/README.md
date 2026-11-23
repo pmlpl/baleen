@@ -18,7 +18,7 @@ uv run python ..\eval\scripts\<脚本名>
 | 目录 | 是什么 | 能不能删 |
 |---|---|---|
 | `inputs\` | 考卷原料：样本、金标准标注、候选池 | **不能**（金标准丢了要重标） |
-| `queries\` | 题集：正例 20 + 负例 8 | **不能**（人工标的期望） |
+| `queries\` | 题集：正例 19（q01-q18 + q20 内嵌负例）+ 负例 CSV 24 行（总量 25） | **不能**（人工标的期望；`negative_form_snapshot.json` 是形态/哨兵基线快照，有 flag 别删，复核后用步 6 的 `--refresh-snapshot` 刷新） |
 | `runs\` | 脚本产物（preds/报告/区间） | **随便删**，跑一下就回来 |
 | `analysis\` | 结论：消融、缺陷台账 | 不删（论文引用） |
 
@@ -31,7 +31,7 @@ uv run python ..\eval\scripts\<脚本名>
 | 3 | `uv run python ..\eval\scripts\metrics.py` | `runs\report.md`：十节报告 | 文件头部加粗的**误拒率** | 免费 |
 | 4 | `uv run python ..\eval\scripts\bootstrap.py` | 屏幕打印：每个数字带**区间** | 误拒率 `[下界, 上界]` | 免费 |
 | 5 | `uv run python ..\eval\scripts\ablation.py` | **屏幕打印**（不写文件）：切块三档对比 | `[C]` 三档 R@5 表、`[E]` 逐条名次 | 免费，GPU 几分钟 |
-| 6 | `uv run python ..\eval\scripts\negative_eval.py` | `runs\negative_report.md`：负例行为表 | PASS/FAIL（全 PASS=正常） | 免费；`--live` 要后端+token |
+| 6 | `uv run python ..\eval\scripts\negative_eval.py` | `runs\negative_report.md`：负例行为表（preflight v2 三段式+本地档） | PASS/FAIL（全 PASS=正常）；preflight 有 flag 先复核再跑 | 免费；`--refresh-snapshot` 复核虚惊后刷基线；`--live` 要后端+token |
 | 7 | `uv run python ..\eval\scripts\review_agent.py` | `runs\ai_review.csv` + `runs\ai_agreement.md`：**AI 盲审 35 样本 + 一致率 + 分歧裁决单** | 一致率行 + 分歧裁决单（你只裁决分歧） | 花 LLM token（用你设置页配的模型；`--mode candidates` 盲审候选池，`--compare` 免费重算一致率） |
 | 8 | `uv run python ..\eval\scripts\frame_eval.py` | 帧选择质量打分：无用帧混入率 / 有用帧召回率 / 零帧清单 | 三个汇总数字 + 逐条 PASS/FAIL；**FAIL 是题集抓到的真问题，不是脚本坏了** | 免费（只读库） |
 | 9 | `uv run python ..\eval\scripts\quality_scan.py --stats --scan` | 终端：全库分层统计 + 启发式嫌疑（错字/废帧/口语残留） | `[scan]` 行的条数；明细在 `runs\quality_scan_<日期>.csv` | 免费（只读库） |
@@ -69,7 +69,8 @@ node scripts\probe_section_render.mjs
 | 误拒率置信区间（ok 口径全量） | **0/47 = 0%，95% CI [0%, 7.5%]** | 步 4 |
 | 误拒率置信区间（ok 口径 test 留出集） | 0/17 = 0%，95% CI [0%, 19.5%] | 步 4 |
 | 检索 R@5（300 档生产配置） | 94.4%，CI [83%, 100%] | 步 5 |
-| 负例行为 | 8/8 PASS（瞎引即 FAIL） | 步 6 |
+| 负例行为（25 条口径：CSV 24 + queries.csv 内嵌 q20） | preflight 三段全绿；本地档 gate 23 PASS / 2 WARN / 0 FAIL；live 判据「瞎引即 FAIL」 | 步 6 |
+| 负例瞎引率（live，严格判据） | 4/25，95% CI [4.5%, 36.1%]（Clopper-Pearson）——4 条定性：b03/b06 诚实自答被误伤、f02 引用纠错属设计预期、f03 部分假引用待主人裁决；全批未联网根因=Tavily key HTTP 432；Tavily 恢复后复跑预期回落（0/25 口径 = [0%, 13.7%]） | 步 6 `--live` |
 
 数字和基线差一点别慌：真跑（步 2）是 LLM 判定，有微小波动是正常的；差很多才需要叫我。
 
@@ -83,6 +84,9 @@ node scripts\probe_section_render.mjs
 - **改了导入闸门/检索/organizer 的代码** → 步 2+3+6（回归）
 - **加了样本/改了标注** → 全跑
 - **只是想看成绩** → 步 3（不动代码不花钱）
+- **每批喂料后（~10 源落库）** → 步 9 + 步 6（负例 preflight v2 三段式：规则+形态+哨兵，分钟级零 LLM）——
+  有 flag 先复核负例标签再喂下一批（q19 式静默腐坏就是这么防的）：顺带提及=确认后 `--refresh-snapshot` 更新基线；
+  实质内容=改标签（missing→bait→false_premise 升级，q19→f01 是模板）或转正例。设计见 `runs\negative_queries_design_2026-11-23.md` §4。
 
 ## 不能删清单（防误删）
 

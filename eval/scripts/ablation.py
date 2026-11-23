@@ -35,8 +35,11 @@ import numpy as np
 
 EVAL_DIR = Path(__file__).resolve().parents[1]  # eval/
 BACKEND_DIR = EVAL_DIR.parent / "backend"
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+for _p in (str(BACKEND_DIR), str(Path(__file__).resolve().parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+from _negcheck import run_check_embedded  # noqa: E402  方案 B:内嵌负例校验(negative_eval 共享)
 
 from app.core.config import get_settings  # noqa: E402
 from app.service.chunk import chunk as production_chunk  # noqa: E402
@@ -516,6 +519,16 @@ def main() -> int:
         for p in problems:
             print(f"  - {p}")
         return 1
+
+    # 方案 B(设计报告 §3/§4.2):queries.csv 内嵌负例(kind=negative,现仅 q20)规则+哨兵段校验。
+    # q19 死于「内嵌负例零校验」盲区——正例评测每次跑顺带守住内嵌负例,同类问题不再犯。
+    # WARN 不挡:正例指标与负例标签无关,负例失效的 exit 把关归 negative_eval.py(负例主入口)。
+    if not args.limit:
+        neg_problems = run_check_embedded(dsn)
+        if neg_problems:
+            print("\n[WARN] queries.csv 内嵌负例校验未过(语料漂移,复核 kind=negative 行):")
+            for p in neg_problems:
+                print(f"  - {p}")
 
     pos = [q for q in queries if not q.is_negative]
     print(f"正例 {len(pos)} 条 / 负例 {len(queries) - len(pos)} 条")

@@ -1,15 +1,23 @@
 #!/usr/bin/env python3
 """baleen / eval · 负例评测(negative queries)——「不该答的有没有乱答」考核面。
 
-正例 20 query(eval/queries/queries.csv)考「找得准」(R@5);本集考另一半行为:
+正例 20 query(eval/queries/queries.csv,方案 B 后 q01-q18+q20=19 行)考「找得准」(R@5);
+本集考另一半行为,负例 25 条(negative_queries.csv 24 条 + queries.csv 内嵌 q20):
   missing 类:库里根本没有 → 期望联网兜底(used_web=True)或干净自答,**不许库内引用**
   bait 类:  字面相近但不相关 → 期望 [NO_KB]→联网兜底,**不许瞎引饵笔记**
+  false_premise 类:问题埋假前提 → 引用库内**纠错素材**纠正前提,或联网纠错(f02);
+  time_sensitive 类:数值随时间变 → 背景可引库、数值必须联网(t01/t02)
 
-设计要点(对应 defects_ledger.md backlog #2 与「检索无相关性阈值」悬案的评测面):
+设计要点(对应 defects_ledger.md backlog #2 与「检索无相关性阈值」悬案的评测面;
+负例集设计研究报告:eval/runs/negative_queries_design_2026-11-23.md——分类学/候选/
+preflight v2 的设计真源):
 - 负例以**行为**断言,不以检索名次断言——向量检索永远返回 top_k,负例名次无意义;
   有意义的是相关性闸(_has_relevant_hit)的去向与问答兜底行为。
-- **自校验 preflight**:bait 类的饵词必须在对应笔记正文里出现、missing 类的
-  absent 词必须全库为 0。语料漂移时 preflight 先红,防止坏标签伪象(q04 教训)。
+- **preflight v2 三段式**(_negcheck.py 共享,方案 B;喂料循环每批跑一次):
+  规则段(absent 词全库=0 + 饵/素材词对在场)/形态段(真检索 top5 比对
+  negative_form_snapshot.json 快照:top1 跳圈/饵丢位/饵丢 top1 即 flag)/
+  哨兵段(sentinel_words 计数增长即 flag——q19 死于主题级覆盖,absent 词抓不到这层)。
+  --refresh-snapshot:全绿时把快照全量刷新为本次实测(复核虚惊后用);有 flag 拒绝刷新。
 - 本地档(默认)不烧 LLM:真混合检索 + 真相关性闸,记录 gate 去向与 top 命中。
   gate 期望失配只记 WARN 不记 FAIL——负例的行为正确性最终由 live 档判定。
 - --live 走产品 HTTP 链路(后端已启动 + token),断言 used_web 与引用纪律:
@@ -41,8 +49,11 @@ from types import SimpleNamespace
 
 EVAL_DIR = Path(__file__).resolve().parents[1]  # eval/
 BACKEND_DIR = EVAL_DIR.parent / "backend"
-if str(BACKEND_DIR) not in sys.path:
-    sys.path.insert(0, str(BACKEND_DIR))
+for _p in (str(BACKEND_DIR), str(Path(__file__).resolve().parent)):
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
+
+import _negcheck  # noqa: E402  共享校验模块(方案 B;ablation.py 也用它)
 
 NEGATIVE_CSV = EVAL_DIR / "queries" / "negative_queries.csv"
 REPORT_MD = EVAL_DIR / "runs" / "negative_report.md"
@@ -67,76 +78,58 @@ def _pct(values: list, p: float):
 
 
 def load_negative_queries() -> list[dict]:
+    """全量负例行:negative_queries.csv(24 条)+ queries.csv 内嵌 kind=negative(方案 B,q20)。
+
+    内嵌行的负例特有参数(ntype/absent/sentinel/expect)住 _negcheck.EMBEDDED_NEGATIVES;
+    题面从 queries.csv 读(单一真源)。qid 撞车直接报错(两处同 qid=口径打架)。
+    """
     with NEGATIVE_CSV.open("r", encoding="utf-8-sig", newline="") as fh:
-        return [
+        rows = [
             {k: (v.strip() if isinstance(v, str) else v) for k, v in row.items()}
             for row in csv.DictReader(fh)
         ]
+    embedded = _negcheck.load_embedded_rows()
+    clash = {r["qid"] for r in rows} & {r["qid"] for r in embedded}
+    if clash:
+        raise SystemExit(f"[error] qid 两处重复 {sorted(clash)}——negative_queries.csv 与 queries.csv 内嵌行不许同 qid")
+    return rows + embedded
 
 
-async def preflight(rows: list[dict], dsn: str) -> list[str]:
-    """自校验:bait 词在对应笔记里出现 / absent 词全库为 0。返回问题列表(空=通过)。"""
-    import asyncpg
-
-    problems: list[str] = []
-    conn = await asyncpg.connect(dsn)
-    try:
-        for row in rows:
-            qid = row["qid"]
-            # bait 类:饵词必须还在对应笔记里(语料漂移检测)
-            if row["bait_note_id"]:
-                for word in [w for w in row["bait_word"].split(";") if w]:
-                    n = await conn.fetchval(
-                        "SELECT count(*) FROM chunks c JOIN notes n ON c.note_id=n.id"
-                        " WHERE n.id=$1 AND n.status='active' AND strpos(c.text,$2)>0",
-                        int(row["bait_note_id"]),
-                        word,
-                    )
-                    if not n:
-                        problems.append(
-                            f"{qid}: 饵词「{word}」已不在笔记#{row['bait_note_id']}——语料漂移,先复核标签再跑"
-                        )
-            # 两类都要:absent 词必须全库为 0(否则不是负例)
-            for word in [w for w in row["answer_absent_words"].split(";") if w]:
-                n = await conn.fetchval(
-                    "SELECT count(*) FROM chunks c JOIN notes n ON c.note_id=n.id"
-                    " WHERE n.status='active' AND n.owner_id=$1 AND strpos(c.text,$2)>0",
-                    OWNER_ID,
-                    word,
-                )
-                if n:
-                    problems.append(
-                        f"{qid}: absent 词「{word}」在库里出现 {n} 次——语料已含该主题,负例标签失效"
-                    )
-    finally:
-        await conn.close()
-    return problems
+# ---------------------------------------------------------------- preflight v2 三段式 + 本地档
 
 
-# ---------------------------------------------------------------- 本地档
+async def run_preflight_and_local(
+    rows: list[dict], dsn: str, *, refresh: bool = False
+) -> tuple[list[str], list[dict], int]:
+    """preflight v2(规则+形态+哨兵)与本地档合跑——检索只跑一遍,两个考核面共用结果。
 
-
-async def run_local(rows: list[dict]) -> tuple[list[dict], int]:
-    """真混合检索 + 真相关性闸。返回 (逐条结果, 语料笔记数)。"""
+    返回 (preflight 问题列表, 本地档逐条结果, 语料笔记数)。
+    快照写盘(_negcheck.apply_snapshot):新 qid/新哨兵词基线总是写入;已有基线
+    只有 refresh 且**全绿**才重写(negative_eval.main 约定,防自我洗白)。
+    """
     from app.api.qa import _has_relevant_hit  # 复用生产实现,不另写判据
-    from app.core.config import get_settings
     from app.service.retrieve import retrieve
     import asyncpg
 
-    settings = get_settings()
-    dsn = settings.database_url.replace("+asyncpg", "")
     conn = await asyncpg.connect(dsn)
     try:
         note_count = await conn.fetchval(
             "SELECT count(*) FROM notes WHERE status='active' AND owner_id=$1", OWNER_ID
         )
+        # 规则段 + 哨兵段数据收集(纯 strpos,秒级)
+        problems = await _negcheck.check_rules(conn, rows)
+        counts = await _negcheck.collect_sentinels(conn, rows)
     finally:
         await conn.close()
 
+    # 真混合检索一遍:形态段收集(forms)+ 本地档判定(gate/verdict)共用
+    forms: dict = {}
     out: list[dict] = []
     for row in rows:
         result = await retrieve(row["query"], top_k=TOP_K, owner_id=OWNER_ID)
         hits = result.hits
+        top5 = list(dict.fromkeys(h.note_id for h in hits))
+        forms[row["qid"]] = {"top5": top5, "top1": top5[0] if top5 else None}
         gate = _has_relevant_hit(
             [SimpleNamespace(parent_text=h.parent_text) for h in hits], row["query"]
         )
@@ -144,7 +137,7 @@ async def run_local(rows: list[dict]) -> tuple[list[dict], int]:
         # 严重级:失配只 WARN——负例的行为正确性由 live 档断言,本地只记录去向
         if gate == expect_gate:
             verdict = "PASS"
-        elif row["ntype"] == "bait":
+        elif row["ntype"] == "bait" or row["ntype"].startswith("bait_"):
             verdict = "WARN"  # 饵没进 top_k 或闸没中:联网兜底接管,行为仍正确,记录观察
         else:
             verdict = "WARN"  # 噪音触发进 KB 路径:行为由 [NO_KB] 兜底,需人眼看
@@ -165,7 +158,17 @@ async def run_local(rows: list[dict]) -> tuple[list[dict], int]:
                 ],
             }
         )
-    return out, int(note_count or 0)
+
+    # 形态段 + 哨兵段比对(纯内存)
+    snapshot = _negcheck.load_snapshot()
+    problems += _negcheck.check_form(forms, snapshot, rows)
+    sent_problems, snapshot = _negcheck.check_sentinel_counts(rows, counts, snapshot)
+    problems += sent_problems
+    snapshot = _negcheck.apply_snapshot(
+        snapshot, forms, counts, rows, refresh=refresh and not problems
+    )
+    _negcheck.save_snapshot(snapshot)
+    return problems, out, int(note_count or 0)
 
 
 # ---------------------------------------------------------------- live 档
@@ -325,25 +328,33 @@ def write_report(local_rows: list[dict], note_count: int, live_rows: list[dict])
         "# 负例评测报告(negative_report)",
         "",
         f"> 生成:{datetime.now().isoformat(timespec='seconds')} · 语料:owner {OWNER_ID} active {note_count} 篇 ·"
-        f" query 集:[negative_queries.csv](queries/negative_queries.csv)({len(local_rows)} 条)",
+        f" 负例 {len(local_rows)} 条([negative_queries.csv](queries/negative_queries.csv)"
+        " + queries.csv 内嵌 kind=negative 行,方案 B)",
         "",
         "## 考核面",
         "",
         "正例 20 query 考「找得准」(R@5);本集考「不该答的有没有乱答」——",
-        "missing 类期望联网兜底/干净自答,bait 类期望 [NO_KB]→联网。",
+        "missing 类期望联网兜底/干净自答,bait 类期望 [NO_KB]→联网,",
+        "false_premise 类期望引用库内**纠错素材**纠正前提或联网纠错(f02),time_sensitive 类背景可引库、数值必须联网。",
         "**真混合作答 = 库内引用 且 未联网**(答案内容由 [n] 背书 = 瞎引),决策树/agent 两档同判 FAIL。",
         "agent 档(ADR 0010,2026-11-20)例外:答案主体已联网([W n])时,开头明示「笔记库里只有 X、",
         "以下来自联网」的**背景句库内真归因**记 PASS(answer_head 留档人工抽查);决策树档 web 答案天然无库内引用。",
         "gate = 生产 `_has_relevant_hit`(qa.py)对真混合检索 top5 的判定;本地档失配只记 WARN。",
         "",
-        "> ⚠️ agent 批(ADR 0010)怎么读:agent 只改「检索之后怎么决策」,**不改检索本身**——",
+        "> ⚠️ agent 批(ADR 0010)怎么读:agent 只改「检索之后怎么决策**,**不改检索本身**——",
         "> 首轮检索与现状同链路同参数,20 题 R@5 不会因 agent 变化(升也不会)。",
         "> 本批的胜负手在**负例/边缘题的工具路径正确率**(换词再搜→判定答不了→转联网)",
         "> 与引用纪律(不许假引用),R@5 不是本批的考核面。",
         "",
-        "## preflight(自校验)",
+        "## preflight(v2 三段式,自校验)",
         "",
-        "见运行输出;通过 = bait 词都在对应笔记里、absent 词全库为 0。",
+        "规则段:饵/纠错素材词对在指定笔记在场 + absent 词全库=0 + 有饵类防呆;",
+        "形态段:真检索 top5 与 [negative_form_snapshot.json](queries/negative_form_snapshot.json) 快照比对——"
+        "top1 跳出快照圈/饵笔记丢位/饵丢 top1 即 flag;",
+        "哨兵段:sentinel_words 计数增长即 flag(主题级覆盖守门员,q19 死因)。",
+        "q20(queries.csv 内嵌,方案 B)同样纳入三段校验;ablation.py 跑正例集时对 kind=negative 行"
+        "执行规则+哨兵段(WARN 不挡)。见运行输出;三段全绿才继续。",
+        "设计真源:[negative_queries_design_2026-11-23.md](runs/negative_queries_design_2026-11-23.md) §4。",
         "",
         "## 本地档(真检索 + 真闸,无 LLM)",
         "",
@@ -478,7 +489,12 @@ def main() -> int:
         print("        (或先激活 venv: .venv\\Scripts\\Activate.ps1 再 python ..\\eval\\scripts\\negative_eval.py)")
         return 2
 
-    ap = argparse.ArgumentParser(description="负例评测:行为断言(preflight+真检索+真闸)")
+    ap = argparse.ArgumentParser(description="负例评测:行为断言(preflight v2 三段式+真检索+真闸)")
+    ap.add_argument(
+        "--refresh-snapshot",
+        action="store_true",
+        help="全绿时把形态/哨兵快照全量刷新为本次实测(复核虚惊后用);有 flag 时拒绝刷新",
+    )
     ap.add_argument("--live", action="store_true", help="追加跑产品 HTTP 链路(需后端+token)")
     ap.add_argument(
         "--agent",
@@ -495,24 +511,30 @@ def main() -> int:
     args = ap.parse_args()
 
     rows = load_negative_queries()
-    print(f"负例集: {len(rows)} 条({sum(1 for r in rows if r['ntype'] == 'missing')} missing /"
-          f" {sum(1 for r in rows if r['ntype'] == 'bait')} bait)")
+    by_type: dict[str, int] = {}
+    for r in rows:
+        by_type[r["ntype"]] = by_type.get(r["ntype"], 0) + 1
+    type_desc = " / ".join(f"{v} {k}" for k, v in sorted(by_type.items()))
+    print(f"负例集: {len(rows)} 条({type_desc})")
 
     from app.core.config import get_settings
 
     dsn = get_settings().database_url.replace("+asyncpg", "")
 
-    print("[1/3] preflight(自校验)……")
-    problems = asyncio.run(preflight(rows, dsn))
+    print("[1/2] preflight v2 三段式(规则+形态+哨兵)· 含本地档真检索+真闸……")
+    problems, local_rows, note_count = asyncio.run(
+        run_preflight_and_local(rows, dsn, refresh=args.refresh_snapshot)
+    )
     for p in problems:
         print(f"  [FAIL] {p}")
     if problems:
+        if args.refresh_snapshot:
+            print("  --refresh-snapshot:有 flag,已有基线未刷新——"
+                  "先复核(改标签或确认虚惊),全绿后再跑一次。")
         print("preflight 未过:语料漂移或坏标签,先复核 negative_queries.csv 再跑。", file=sys.stderr)
         return 1
-    print("  preflight 通过")
-
-    print("[2/3] 本地档(真混合检索 + 真相关性闸)……")
-    local_rows, note_count = asyncio.run(run_local(rows))
+    print("  preflight 三段全绿"
+          + ("(快照已全量刷新为本次实测)" if args.refresh_snapshot else ""))
     for r in local_rows:
         print(f"  [local] {r['qid']} gate={r['gate']}(期望 {r['expect_gate']}) {r['verdict']}")
 
@@ -529,13 +551,13 @@ def main() -> int:
         target: bool | None = True if args.agent else (False if args.no_agent else None)
         prev_agent: bool | None = None
         if target is True:
-            print("[3/3] live 档(产品 HTTP 链路,--agent 显式确保 agent 开)……")
+            print("[2/2] live 档(产品 HTTP 链路,--agent 显式确保 agent 开)……")
             prev_agent = _set_agent_enabled(args.api_url, args.token, True)
         elif target is False:
-            print("[3/3] live 档(产品 HTTP 链路,--no-agent 临时关 agent=旧决策树基线)……")
+            print("[2/2] live 档(产品 HTTP 链路,--no-agent 临时关 agent=旧决策树基线)……")
             prev_agent = _set_agent_enabled(args.api_url, args.token, False)
         else:
-            print("[3/3] live 档(产品 HTTP 链路,按当前设置跑——agent 默认开)……")
+            print("[2/2] live 档(产品 HTTP 链路,按当前设置跑——agent 默认开)……")
         try:
             live_rows = run_live(rows, args.api_url, args.token)
         finally:
@@ -543,7 +565,7 @@ def main() -> int:
                 _set_agent_enabled(args.api_url, args.token, prev_agent)
                 print(f"  agent 开关已恢复原值({'开' if prev_agent else '关'})")
     else:
-        print("[3/3] live 档跳过(--live 未开)")
+        print("[2/2] live 档跳过(--live 未开)")
 
     write_report(local_rows, note_count, live_rows)
     n_fail = sum(1 for r in live_rows if r.get("verdict") == "FAIL")

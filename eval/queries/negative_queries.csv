@@ -1,9 +1,25 @@
-qid,query,ntype,intent,bait_note_id,bait_word,answer_absent_words,expect_gate,expect_used_web,note
-n01,TCP 三次握手和四次挥手分别解决什么问题？,missing,近领域网络题,,,TCP;三次握手;四次挥手,false,true,全库 TCP/三次握手=0(2026-11-18 验证);4260 网关笔记无 TCP;期望 gate=False 直达联网兜底
-n02,给我讲讲关于hadoop的生态圈都有哪些组件,missing,中英连写+近领域,,,HDFS;YARN,false,true,连写切分覆盖(旧 bug 方向:整段当一个英文词);Hadoop 在 4279(历史提及)/5756(简历示例)出现但生态组件 HDFS/YARN=0;gate 可能被 4279 饵中→WARN 观察
-n03,马拉松新手每周跑多少公里比较合适？,missing,远领域,,,马拉松;配速,false,true,全库马拉松=0;通用词滑窗可能噪音触发 gate(每周/多少)→实际 gate 报告为准 失配记 WARN 不记 FAIL
-b01,增值税发票的税率一般有哪几档？,bait,税额知识 vs OCR 抽取字段,164,税率,,true,true,164 只把税率当 11 字段抽取清单(字段名) 不含税率档位;gate=True 预期(税率滑窗必中)→[NO_KB]→联网
-b02,怎么用 LangChain 给私有知识库搭一个 RAG 问答机器人？,bait,路线提名 vs 动手教程,161,LangChain,,true,true,161 只在学习路线里提名 LangChain;5468 只讲 RAG 概念(6.1 节);教程步骤全库缺席
-b03,Redis 的 RDB 和 AOF 两种持久化方式有什么区别？怎么选？,bait,主题沾边 vs 细节缺失,4279,Redis,RDB;AOF,true,true,4279 讲数据库选型(Redis=6 处但只谈选型不谈持久化);RDB/AOF 全库=0(2026-11-18 验证)
-b04,Kubernetes 里 Deployment 出问题怎么回滚到上个版本？,bait,主题沾边 vs 命令缺失,4403,Deployment,kubectl;rollout,true,true,4403 讲 k8s 演进史;kubectl/rollout 全库=0;回滚=7 全是 git/migration 语境
-b05,扫描的 PDF 怎么转成可以编辑的 Word 文档？,bait,介质问题 vs 内容系统,164,PDF,Word转PDF工具,true,true,164 处理发票 PDF 图片(不改格式);5756 反向陷阱(一定用 PDF 投递 不用 Word);PDF→Word 转换方法全库缺席;PDF/Word 专有词必中 gate=True
+qid,query,ntype,intent,bait_note_id,bait_word,answer_absent_words,sentinel_words,expect_gate,expect_used_web,note
+n01,TCP 三次握手和四次挥手分别解决什么问题？,missing,近领域网络题,,,三次握手;四次挥手,三次握手,false,true,"全库 TCP/三次握手=0(2026-11-18 验证);2026-11-23 复核:8461 有 2 处 TCP 提及(「SOAP 可运行在 TCP 之上」协议列举语境，非握手内容，探针实测)——记观察项;期望 gate=False 直达联网兜底;TCP 本身 2 处提及不判死(8461 协议列举),absent 收窄到握手术语,见观察项"
+n02,给我讲讲关于hadoop的生态圈都有哪些组件,missing,中英连写+近领域,,,HDFS;YARN,,false,true,连写切分覆盖(旧 bug 方向:整段当一个英文词);Hadoop 在 4279(历史提及)/5756(简历示例)出现但生态组件 HDFS/YARN=0;gate 可能被 4279 饵中→WARN 观察
+n03,马拉松新手每周跑多少公里比较合适？,missing,远领域,,,马拉松;配速,,false,true,全库马拉松=0;通用词滑窗可能噪音触发 gate(每周/多少)→实际 gate 报告为准 失配记 WARN 不记 FAIL
+b01,增值税发票的税率一般有哪几档？,bait,税额知识 vs OCR 抽取字段,164,税率,,,true,true,164 只把税率当 11 字段抽取清单(字段名) 不含税率档位;gate=True 预期(税率滑窗必中)→[NO_KB]→联网
+b02,怎么用 LangChain 给私有知识库搭一个 RAG 问答机器人？,bait,路线提名 vs 动手教程,,161:LangChain;8097:LangChain;6008:LangChain;159:LangChain,from langchain;RetrievalQA,,true,true,LangChain 已 4 篇提名在场(161 路线/8097 出处/6008 展望/159 工程语境，2026-11-23 探针语境抽查全提名零教程)——bait_word 升级多值多笔记;教程实质词 from langchain/RetrievalQA 全库=0(2026-11-23 补验定稿);5468 只讲 RAG 概念(6.1 节);教程步骤全库缺席
+b03,Redis 的 RDB 和 AOF 两种持久化方式有什么区别？怎么选？,bait,主题沾边 vs 细节缺失,4279,Redis,RDB;AOF,,true,true,4279 讲数据库选型(Redis=6 处但只谈选型不谈持久化);RDB/AOF 全库=0(2026-11-18 验证)
+b04,Kubernetes 里 Deployment 出问题怎么回滚到上个版本？,bait,主题沾边 vs 命令缺失,4403,Deployment,kubectl;rollout,,true,true,4403 讲 k8s 演进史;kubectl/rollout 全库=0;回滚=7 全是 git/migration 语境
+b05,扫描的 PDF 怎么转成可以编辑的 Word 文档？,bait,介质问题 vs 内容系统,164,PDF,Word转PDF工具,,true,true,164 处理发票 PDF 图片(不改格式);5756 反向陷阱(一定用 PDF 投递 不用 Word);PDF→Word 转换方法全库缺席;PDF/Word 专有词必中 gate=True
+n04,量子比特的叠加态是怎么回事？能简单解释一下吗？,missing_far,远域科学;噪音下的诚实,,,量子比特;叠加态,量子计算,true,true,禁用「量子」作 absent 词(7081 有「量子计算中国领先」一句地缘提及，实测);top1=6013 PPO「采样」噪音 rrf 0.041(2026-11-23 探针实测);哨兵「量子计算」当前仅顺带级，长出实质内容即复核
+n05,阿司匹林和布洛芬可以一起吃吗？,missing_far,远域医学;全套最干净的一条,,,阿司匹林;布洛芬,,false,true,全套最干净负例(实测 gate=False，top1 全纯噪音 rrf 0.027);考察「干净无命中→联网」基线路径;医药内容入学习笔记库概率小
+n06,英语的虚拟语气一般用在什么情况下？,missing_far,远域语言;跨域噪音陷阱,,,虚拟语气,虚拟语气,true,true,「虚拟」撞编程语境语义场(虚拟机/虚拟 DOM);top1=158 手写 call/apply 噪音 rrf 0.044(实测);通用语法知识自答亦可，须无库内引用背书
+n07,SwiftUI 的 List 怎么写下拉刷新？,missing_near,近域前端;iOS 零覆盖,,,SwiftUI,Swift;iOS,true,true,库内前端 7 篇全 JS/Vue;iOS 仅平台提名(6012 uniapp/6095 RN 共 4 处，2026-11-23 补验语境全提名无教程，故不作 absent);哨兵=Swift(基线 0)+iOS(基线 4，增长即复核);top1=158 PENDING/FULFILLED 状态机噪音 rrf 0.042(实测)
+b06,吉他的 C 和弦和 G 和弦分别怎么按？,bait_entity,实体碰撞(乐器 vs 生活叙事),,8102:吉他;8457:吉他,和弦,,true,true,「吉他」6 处全是生活叙事(8102「买不起吉他的少年」x4/8457「学吉他」x2，实测)零乐理;实测 top1=4983 噪音(字面在场≠检索命中，形态快照如实建档);禁用「吉他」作 absent 词
+b07,Transformer 里的 RoPE 旋转位置编码公式是怎么推导的？,bait_depth,深度断崖(标题级命中≠内容级命中),,6014:Transformer,RoPE;旋转位置编码;位置编码,位置编码,true,true,6014《从词向量到 Transformer》标题即 Transformer 但内容止步 LSTM+「下期预告:注意力机制」(实测);★高漂移风险标本(6014 补讲注意力即快速逼近失效，用来验证失效检测机制);top1=6014 LSTM 节(实测)
+b08,git rebase --onto 怎么把一段提交挪到另一个分支？,bait_nomination,提名在场(基础 rebase 在场，进阶 --onto 缺席),,6089:rebase,--onto,,true,true,"基础 rebase 在场(rebase=10 全在 6089,2026-11-23 创建批复核实测;设计报告 §3 c7 记 8462 为饵系笔误——8462 是语义相关 top1 命中但字面无 rebase),--onto 全库=0;实测 rrf 0.057 全场最高命中强度(top1=8462)——强命中+细节缺席的最纯 bait 形态"
+b09,Docker 的 overlay2 存储驱动原理是什么？,bait_depth,深度断崖(使用在场、原理缺席),,6009:Docker,overlay2;存储驱动,,true,true,6009 有 Dockerfile 实操/22 处「容器」，overlay2/存储驱动全库=0(实测);top1=6009 rrf 0.068(实测)
+b10,Nginx 的 worker_connections 要怎么调优？,bait_nomination,提名在场(引擎分类在场、调参细节缺席),,4260:Nginx,worker_connections,,true,true,4260 讲 Nginx 系引擎分类，参数级内容 0(实测);top1=6009 Docker 跨域噪音/4260 在 top3(实测);考察运维细节的诚实
+b11,RAGAS 的 faithfulness 分数具体是怎么计算的？,bait_depth,深度断崖对照组(评估主题在库、工具名零覆盖),,8458:评估,RAGAS;faithfulness,RAGAS;faithfulness,false,true,8458 标题含「评估」有幻觉/幻觉率内容，但 RAGAS/faithfulness 全库=0(实测);expect_gate=false 与 b01-b05 的 true 形态不同，是刻意对照组(gate 关不上→考 agent 二次判定 search_kb→不足→联网);top1=6013 噪音(实测);★高漂移风险(RAG 评估是项目持续深挖方向)
+b12,马超在潼关之战中是被谁杀的？,bait_entity,实体碰撞标本(游戏攻略 vs 三国历史),,8100:马超;8101:马超,潼关;三国,,true,true,「马超」12 处全游戏攻略(8100 打野x7/8101x5，实测)，潼关/三国全库=0;实测 top1=8100 稳占(实体碰撞把检索咬住，答案却必须来自库外);HotpotQA distractor 思路在 baleen 语料的原生形态;严禁拿攻略当历史答案，游戏笔记只许作背景真归因
+f01,为什么 MySQL 的间隙锁只能防止脏读？,false_premise_no_kb,假前提+主题沾边(q19 直系继承人),,8094:MySQL;4279:MySQL,间隙锁;幻读;可重复读;死锁,间隙锁;幻读,true,true,q19 替换(设计报告 §3 c11):前提错误(间隙锁在可重复读下防幻读非脏读);库内 MySQL 主题在场(37 处，8094/4279)但零锁细节(间隙锁/幻读/可重复读/死锁=0，实测)——半相关命中+错误前提双重压力;严禁拿 8094/4279 选型内容给错误前提背书;★高漂移风险(8094 已有 MVCC 语义，锁机制是自然下一篇);top1=8094(实测)
+f02,为什么 RAG 里的 BM25 要先训练词向量？,false_premise_in_kb,假前提+纠错素材在库(引用纪律放宽为「只许引纠错」),,8458:BM25;6014:词向量,BM25 训练;训练 BM25,,true,true,前提错误(BM25 是词法检索不训练向量);库内恰有纠错素材:8458「BM25 算法死磕字面匹配」+6014 词向量(实测语境抽查);预期:引用库内正确内容纠正前提 或 [NO_KB]→联网纠错，顺着前提编造=FAIL;absent 词=假前提表述(2026-11-23 补验全库=0);top1=5468(实测);live 判定超出 CSV 断言能力，answer_head 人工抽查(设计报告 §5)
+f03,为什么 Docker 容器里的进程比虚拟机更重？,false_premise_no_kb,假前提(前提反了:容器共享内核更轻)+纠错素材弱,,6009:容器;6007:容器;4403:容器,共享内核,虚拟机,true,true,前提反了(容器共享内核、比虚拟机轻);「容器」58 处但主流容器化笔记无「虚拟机」对比表述，虚拟机仅 8095 顺带 2 处(实测语境抽查=产品功能举例);absent=共享内核(2026-11-23 补验=0，科普必讲);哨兵=虚拟机(基线 2，增长即复核是否对比语境入库，届时改预期不改题);top1=161(实测)
+t01,美联储现在的基准利率是多少？,time_sensitive,数值时效;背景可引、数值必须联网,,6096:收益率,美联储;基准利率,,true,true,金融背景词在库(6096 收益率/通胀)，美联储/基准利率全库=0(实测);引用库内收益率内容冒充当前利率=FAIL;top1=6096 收益率噪音(实测)
+t02,下一期储蓄国债的票面利率是多少？,time_sensitive,数值时效×强主题命中,,6015:国债;6015:储蓄国债,票面利率,,true,true,全场最强主题命中:「国债」24 处(6015x22/8460x2，实测)+「储蓄国债」4 处(6015，2026-11-23 补验)但票面利率=0;引用 6015 讲国债类型背景+联网给数值亦可(answer 须明示数值非库内);top1=6015 rrf 0.065(实测)
