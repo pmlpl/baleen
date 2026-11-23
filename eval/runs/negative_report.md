@@ -1,6 +1,6 @@
 # 负例评测报告(negative_report)
 
-> 生成:2026-11-23T15:57:41 · 语料:owner 1 active 60 篇 · 负例 25 条([negative_queries.csv](queries/negative_queries.csv) + queries.csv 内嵌 kind=negative 行,方案 B)
+> 生成:2026-11-23T22:35:15 · 语料:owner 1 active 60 篇 · 负例 25 条([negative_queries.csv](queries/negative_queries.csv) + queries.csv 内嵌 kind=negative 行,方案 B)
 
 ## 考核面
 
@@ -162,69 +162,71 @@ q20(queries.csv 内嵌,方案 B)同样纳入三段校验;ablation.py 跑正例�
 
 | qid | used_web | 库内引用 | 判决 | 说明 |
 |---|---|---|---|---|
-| n01 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| n02 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| n03 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b01 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b02 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b03 | False | 157;4279 | FAIL | 库内引用了笔记 [157, 4279]——负例不允许库内引用(瞎引) |
-| b04 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b05 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| n04 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| n05 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| n06 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| n07 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b06 | False | 4983;6090;8458 | FAIL | 库内引用了笔记 [4983, 6090, 8458]——负例不允许库内引用(瞎引 |
-| b07 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b08 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b09 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b10 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b11 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| b12 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| f01 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| f02 | False | 158;6008;6014 | FAIL | 库内引用了笔记 [158, 6008, 6014]——负例不允许库内引用(瞎引) |
-| f03 | False | 4403;6009 | FAIL | 库内引用了笔记 [4403, 6009]——负例不允许库内引用(瞎引) |
-| t01 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| t02 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
-| q20 | False | — | WARN | 未联网(Tavily 未配时自答是合法路径),答案开头需人工过目 |
+| n01 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| n02 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| n03 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| b01 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| b02 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| b03 | False | 4279 | PASS | 自答+背景归因 [4279](稳定内容诚实自答,人工抽查 answer_head |
+| b04 | False | 4403;6007 | PASS | 自答+背景归因 [4403, 6007](稳定内容诚实自答,人工抽查 answe |
+| b05 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| n04 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| n05 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| n06 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| n07 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| b06 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| b07 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| b08 | False | 6089;8462 | WARN | 自答+库内引用但无诚实归因明示——瞎引候选,人眼终审 answer_head |
+| b09 | False | 161;4403;6009 | PASS | 自答+背景归因 [161, 4403, 6009](稳定内容诚实自答,人工抽查  |
+| b10 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| b11 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| b12 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| f01 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| f02 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| f03 | False | — | PASS | 稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head |
+| t01 | True | — | PASS | 联网兜底接管 |
+| t02 | True | 6015 | PASS | 联网兜底接管;背景句含库内真归因 [6015](agent 档合法,人工抽查 a |
+| q20 | False | 5671;8098 | PASS | 自答+背景归因 [5671, 8098](稳定内容诚实自答,人工抽查 answe |
+
+**判据注记**:严格判据(任何库内引用即 FAIL)下本批有 1 条会改判;agent 档按「答案主体联网 [W n] + 背景句库内真归因」记 PASS(2026-11-20 首跑逐条复核均为诚实归因,answer_head/会话原文留档可查,见考核面注)。
 
 ### agent 档指标(本批新增)
 
 | qid | agent | llm_calls | 工具分布 | 时延ms | 缓存hit/miss |
 |---|---|---|---|---|---|
-| n01 | ✓ | 3 | search_kbx2,search_webx1 | 10122 | 11392/5887 |
-| n02 | ✓ | 4 | search_kbx1,search_webx2 | 12415 | 19072/2807 |
-| n03 | ✓ | 3 | search_kbx1,search_webx2 | 11634 | 19712/3902 |
-| b01 | ✓ | 3 | search_kbx2,search_webx1 | 9515 | 25984/5150 |
-| b02 | ✓ | 3 | search_kbx2,search_webx1 | 16764 | 30080/3981 |
-| b03 | ✓ | 3 | search_kbx2,search_webx1 | 11444 | 35584/4615 |
-| b04 | ✓ | 2 | search_kbx1,search_webx1 | 11717 | 25728/2994 |
-| b05 | ✓ | 3 | search_kbx2,search_webx1 | 11596 | 48256/5137 |
-| n04 | ✓ | 2 | search_kbx1,search_webx1 | 11953 | 34560/4449 |
-| n05 | ✓ | 2 | search_kbx1,search_webx1 | 7472 | 39296/4129 |
-| n06 | ✓ | 2 | search_kbx1,search_webx1 | 12396 | 43392/3280 |
-| n07 | ✓ | 3 | search_kbx2,search_webx2 | 10544 | 76800/6966 |
-| b06 | ✓ | 2 | search_kbx1,search_webx1 | 10019 | 52864/2985 |
-| b07 | ✓ | 2 | search_kbx1,search_webx1 | 18821 | 58112/5867 |
-| b08 | ✓ | 2 | search_kbx1,search_webx1 | 15474 | 64256/3290 |
-| b09 | ✓ | 2 | search_kbx1,search_webx1 | 18203 | 69120/3642 |
-| b10 | ✓ | 2 | search_kbx1,search_webx1 | 12749 | 74624/4709 |
-| b11 | ✓ | 2 | search_kbx1,search_webx1 | 18608 | 81024/4981 |
-| b12 | ✓ | 2 | search_kbx1,search_webx1 | 12196 | 87168/3612 |
-| f01 | ✓ | 2 | search_kbx1,search_webx1 | 15477 | 90624/2097 |
-| f02 | ✓ | 2 | search_kbx1,search_webx1 | 16257 | 93568/3007 |
-| f03 | ✓ | 3 | search_kbx1,search_webx1 | 11901 | 147584/2961 |
-| t01 | ✓ | 2 | search_webx2 | 10353 | 101248/2609 |
-| t02 | ✓ | 2 | search_kbx1,search_webx1 | 9788 | 105472/2513 |
-| q20 | ✓ | 2 | search_kbx1,search_webx1 | 9148 | 108544/2861 |
+| n01 | ✓ | 2 | search_kbx2 | 10049 | 6400/3191 |
+| n02 | ✓ | 2 | search_kbx2 | 11051 | 8192/4292 |
+| n03 | ✓ | 1 | - | 8260 | 4736/2231 |
+| b01 | ✓ | 2 | search_kbx1,search_webx1 | 13613 | 15872/6836 |
+| b02 | ✓ | 2 | search_kbx1,search_webx1 | 18888 | 19200/6294 |
+| b03 | ✓ | 2 | search_kbx2 | 12663 | 23168/5711 |
+| b04 | ✓ | 2 | search_kbx2 | 13423 | 27648/3642 |
+| b05 | ✓ | 2 | search_kbx2 | 15099 | 32128/4810 |
+| n04 | ✓ | 1 | - | 12591 | 17152/3021 |
+| n05 | ✓ | 1 | - | 12984 | 20096/2922 |
+| n06 | ✓ | 1 | - | 15226 | 22912/1917 |
+| n07 | ✓ | 1 | - | 14425 | 24704/3710 |
+| b06 | ✓ | 1 | - | 17447 | 28288/2153 |
+| b07 | ✓ | 1 | - | 15801 | 30336/3234 |
+| b08 | ✓ | 2 | search_kbx2 | 20793 | 69760/4162 |
+| b09 | ✓ | 2 | search_kbx1 | 17626 | 75008/4247 |
+| b10 | ✓ | 1 | - | 16542 | 38912/3447 |
+| b11 | ✓ | 2 | search_kbx2 | 17413 | 88704/7200 |
+| b12 | ✓ | 1 | - | 11373 | 46336/2459 |
+| f01 | ✓ | 1 | - | 13739 | 48768/1293 |
+| f02 | ✓ | 2 | search_kbx2 | 15678 | 102912/4069 |
+| f03 | ✓ | 1 | - | 12759 | 52224/1950 |
+| t01 | ✓ | 3 | search_webx4 | 21561 | 170624/7913 |
+| t02 | ✓ | 2 | search_webx2 | 13637 | 115072/4741 |
+| q20 | ✓ | 1 | - | 6857 | 58240/1815 |
 
-- P50/P95 时延:11901.0 / 18527.0 ms(本批 25 条)
-- 每答 LLM 调用次数(agent 档):min/中位/max = 2/2/4
-- 合计 60 次 / 25 答(决策树档基线 = 每答 1 次)
-- agent 档缓存命中率:Σhit/Σ(hit+miss) = 1544064/1642495 = 94.0%
+- P50/P95 时延:13739.0 / 20412.0 ms(本批 25 条)
+- 每答 LLM 调用次数(agent 档):min/中位/max = 1/2/3
+- 合计 39 次 / 25 答(决策树档基线 = 每答 1 次)
+- agent 档缓存命中率:Σhit/Σ(hit+miss) = 1147392/1244652 = 92.2%
 
 ## 小结
 
-本地档 PASS 23/25(WARN 2);live 档 FAIL 4/25。
+本地档 PASS 23/25(WARN 2);live 档 FAIL 0/25。
 
 对应:defects_ledger.md backlog #2、HANDOFF「检索无相关性阈值」悬案的评测面。

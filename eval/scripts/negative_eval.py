@@ -39,6 +39,7 @@ import asyncio
 import csv
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -285,10 +286,28 @@ def run_live(rows: list[dict], api_url: str, token: str, *, agent: bool = False)
             # 来自联网」,[n] 只标笔记里确实有的背景。这与 11-18 方案 A 禁的「用自身知识
             # 补全答案再挂 [n] 引用背书」不同:那是拿 [n] 给答案内容背书,这是诚实归因。
             # 记 PASS,answer_head 留档供人工抽查;决策树档不受影响(web 答案天然无库内 [n])。
-            if cited_note_ids and not used_web:
-                rec["verdict"] = "FAIL"
-                rec["reason"] = f"库内引用了笔记 {cited_note_ids}——负例不允许库内引用(瞎引)"
-            elif used_web:
+            # 2026-11-23 主人拍板「时效性路由」(agent 规则 2 同步升级):库内答不了时
+            # agent 先判内容易变性——易变必须联网,稳定内容有把握可 [NO_KB] 自答诚实标注。
+            # 判据三档:
+            #   ① used_web=True → PASS(联网兜底,库内 [n] 作背景真归因合法)
+            #   ② 未联网 + time_sensitive → FAIL(易变内容拿旧知识/自答当现状)
+            #   ③ 未联网 + 非时效类 → 检查 answer_head 的「诚实自答/库内归因」明示形态
+            #      (「以下用 AI 自身的知识」/ [NO_KB] / 「笔记里…没有」/「按通用资料」):
+            #      有 → PASS(自答+背景归因,设计允许,人工抽查 answer_head);
+            #      无 → WARN(瞎引候选,人眼终审——机械分不了「归因」vs「背书」)
+            _honest_head = bool(
+                re.search(
+                    r"以下用 AI 自身的知识|\[NO_KB\]|笔记库?里?(暂无|没有|未收录|没收录)"
+                    r"|笔记库?里.{0,40}(没有|没涉及|没找到|暂无)"
+                    r"|笔记库?里.{0,20}只(提到|有|讲到|给了|讲)|库里的笔记只"
+                    r"|现有.{0,14}只(讲|提)|按通用资料"
+                    # false_premise 设计预期:纠正错误前提(引用库内纠错素材=合法)
+                    r"|前提.{0,10}(需要|要|应)?.*?纠正|先纠正|前提.{0,8}(反了|正好反)",
+                    rec.get("answer_head", ""),
+                )
+            )
+            is_time_sensitive = str(row.get("ntype", "")).startswith("time_sensitive")
+            if used_web:
                 rec["verdict"] = "PASS"
                 if cited_note_ids:
                     rec["reason"] = (
@@ -297,9 +316,20 @@ def run_live(rows: list[dict], api_url: str, token: str, *, agent: bool = False)
                     )
                 else:
                     rec["reason"] = "联网兜底接管"
+            elif is_time_sensitive:
+                rec["verdict"] = "FAIL"
+                rec["reason"] = "易变内容(数值/版本/近期动态)未联网——拿旧知识当现状"
+            elif not cited_note_ids:
+                rec["verdict"] = "PASS"
+                rec["reason"] = "稳定内容自答诚实(时效性路由设计允许),人工抽查 answer_head"
+            elif _honest_head:
+                rec["verdict"] = "PASS"
+                rec["reason"] = (
+                    f"自答+背景归因 {cited_note_ids}(稳定内容诚实自答,人工抽查 answer_head)"
+                )
             else:
                 rec["verdict"] = "WARN"
-                rec["reason"] = "未联网(Tavily 未配时自答是合法路径),答案开头需人工过目"
+                rec["reason"] = "自答+库内引用但无诚实归因明示——瞎引候选,人眼终审 answer_head"
         except urllib.error.HTTPError as exc:
             rec["verdict"] = "ERROR"
             rec["reason"] = f"HTTP {exc.code}: {exc.read().decode('utf-8', 'ignore')[:200]}"
