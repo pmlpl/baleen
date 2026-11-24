@@ -370,9 +370,15 @@ function loadDraft(): void {
   input.value = saved
 }
 
-// 草稿随打字持久化;picker/slash 模式下输入框被复用为筛选/命令词,不存
+// 草稿随打字持久化;picker/slash 模式下输入框被复用为筛选/命令词,不存。
+// ⚠️ slashOpen 不能当唯一判据:它在 @input 的 updateSlash 里才置位,而 v-model 的
+// 赋值监听先于 updateSlash 执行,watch 的 flush 可能落在两者之间的窗口里(C2 探针
+// 实测:fill 整词与逐字键入都复现)——窗口内 slashOpen 仍是 false,命令词会被当草稿
+// 写进 localStorage,之后 /新对话 一执行,loadDraft() 又把命令词还原进输入框。
+// 所以再加一道值判据:以 / 开头的输入就是命令词(updateSlash 对每个输入事件都会
+// 重算 slashOpen = startsWith('/')),一律不存,不依赖置位时序。
 watch(input, () => {
-  if (notePicker.value || slashOpen.value) return
+  if (notePicker.value || slashOpen.value || input.value.startsWith('/')) return
   try {
     localStorage.setItem(draftKey(), input.value)
   } catch {

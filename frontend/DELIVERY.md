@@ -337,3 +337,35 @@ uvicorn.exe：(空)
 ### 需要确认的问题
 
 - 已知限制第 3 条的草稿竞态要不要修(动 updateSlash/草稿 watch,建议单开一批)?
+
+---
+
+## 2026-11-24 · 草稿竞态修复批(DRAFIX)· 斜杠命令词不再写入会话草稿 · 执行者：前端代理
+
+主人拍板修 C2 批发现的既有草稿竞态(上一块「已知限制」第 3 条,就此闭环)。
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 改 | `src/views/QaView.vue` | 草稿 watch 守卫加**值判据**:`if (notePicker.value \|\| slashOpen.value \|\| input.value.startsWith('/')) return`,并补注释写明根因与时序 |
+
+**根因与修法**:slashOpen 只在 `@input` 的 `updateSlash` 里置位,而 v-model 的赋值监听先于 updateSlash 执行,watch 的 flush 可能落在两者之间的窗口里——窗口内 slashOpen 仍是 false,守卫放行,命令词被写进 localStorage 草稿;/新对话 一执行 `loadDraft()` 又把命令词还原进输入框。修法不加任何时序假设:以 `/` 开头的输入就是命令词(updateSlash 对每个输入事件都会重算 `slashOpen = startsWith('/')`),一律不存——flush 落在窗口内由值判据拦、落在窗口后由标志判据拦,**物理键盘按 flush 语义推理天然覆盖**(不是只堵 Playwright 复现路径)。
+
+### 自测(先红后绿,证明探针灵敏度)
+
+- Playwright 探针 `backend/tmp/probe_draft_race.py`(真后端 8000 + 真库,admin 登录;纯只读,不发送不建会话):
+  - **修复前(红)**:17/26——9 个失败全是污染断言:fill 整词(草稿实得 `'/新对话'`)、逐字键入(草稿实得 `'/'`)、`/usr/local 路径正文`、`/检索` 四条污染路径全中
+  - **修复后(绿)**:**26/26**——T1 fill 整词:预置草稿 `我的原草稿T1` 未被污染,`/新对话` Enter 后输入框**还原原草稿**(不再是命令词);T2 逐字键入:全程草稿不含 `/`,命令后输入框空;T3 正常文本照常存草稿 + 整页刷新后 loadDraft 还原进输入框(既有语义不变);T4 `/usr/local 路径正文` 菜单照常弹出、Esc 后输入仍在、之后正常文本照常存草稿(④ 不误伤);T5 选择器筛词/命令词不进草稿;0 pageerror
+- **C2 回归**(同后端,`probe_c2_split.py`):functional **27/27** + 5 状态 DOM/截图对比 **10/10 逐字节相同**(本修复不改变任何已捕获的 DOM/视觉状态)
+- `pnpm type-check` 0 错误;`pnpm build` ✓ 34.52s;`python scripts/doc_lint.py` 0 ERROR
+- 服务进程用完 `taskkill /T /F` 收净,8000/5173 与 uvicorn/python(baleen)/vite 进程复查为空
+
+### 已知限制
+
+- 历史 localStorage 里已被污染的草稿(如有)不主动清洗:loadDraft 会原样还原,直到用户下次输入正常文本才被覆盖。正常 flush 下 `/` 开头的草稿本来就存不进去,污染值只可能来自本竞态,存量极少;要自愈可在 loadDraft 加一行 `/` 开头归空,未加(保持最小改动)
+- executeSlash「先清输入再关菜单」的既有顺序纪律未动(③):空串非 `/` 开头,值判据不影响它,窗口内仍由标志判据兜住
+
+### 需要确认的问题
+
+- （无）
