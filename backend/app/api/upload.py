@@ -5,6 +5,8 @@
   415 只留给系统完全不认识的扩展名。格式语义只存在 G0 一处。
 - 大小上限 50 MB(样本最大 12 MB,4 倍余量);请求体上限 55 MB:先按 Content-Length 头
   挡一轮(在解析 multipart 之前),再流式落盘边读边限,不把大文件整个读进内存。
+- 魔数判头(B3,2026-11-24):主文件与附件流式落盘时用首块判魔数,内容与扩展名不符 → 415,
+  垃圾(如 .exe 改名 .pdf)不落暂存区(此前只查扩展名白名单,G0 虽会拒但垃圾已落盘)。
 - dedupe:同 sha256 且 job done → 不再入队,返回已有 source;job 在途(running)不重复入队;
   其余情况(queued/failed)重复入队由 arq 的 _job_id 幂等挡掉。
 - no_llm=true:流水线跳过 G2(不写 G2 判定行),worker 成功后在 parse_meta 打 g2_skipped=true,
@@ -49,6 +51,44 @@ ALLOWED_EXTS = set(PARSERS) | set(IMAGE_EXTS) | set(UNSUPPORTED_MESSAGES)
 MAX_ATTACHMENTS = 40
 # 附件允许的扩展名:只有图片(md 的插图;其它类型没有引用场景)
 ATTACHMENT_EXTS = set(IMAGE_EXTS)
+
+# 魔数判头(B3):有可靠魔数的扩展名才校验,不符 → 415「文件内容与扩展名不符」。
+# 不校验的:.txt/.md/.csv/.html 等文本格式没有可靠魔数(开头可以是任意文本/BOM/空白);
+# .doc/.xlsx 等仅报话术的扩展名(UNSUPPORTED_MESSAGES 键)本来就不解析,交给 G0 报话术。
+# .tif/.tiff 任务书魔数表未列,但同属 ATTACHMENT_EXTS 且有公认无歧义魔数,一并补入。
+# webp 的 RIFF 容器魔数要看到第 8..12 字节的 WEBP 标记 → 判头最多要攒 MAGIC_HEAD_BYTES 字节。
+MAGIC_HEAD_BYTES = 12
+_MAGIC_PREFIXES: dict[str, tuple[bytes, ...]] = {
+    ".pdf": (b"%PDF",),
+    ".docx": (b"PK\x03\x04",),
+    ".pptx": (b"PK\x03\x04",),
+    ".png": (b"\x89PNG",),
+    ".jpg": (b"\xff\xd8\xff",),
+    ".jpeg": (b"\xff\xd8\xff",),
+    ".gif": (b"GIF8",),
+    ".webp": (b"RIFF",),  # 另需 head[8:12] == b"WEBP"(见 _verify_magic)
+    ".bmp": (b"BM",),
+    ".tif": (b"II\x2a\x00", b"MM\x00\x2a"),
+    ".tiff": (b"II\x2a\x00", b"MM\x00\x2a"),
+}
+
+
+def _verify_magic(ext: str, head: bytes, display_name: str) -> None:
+    """首块判头(在现有流式循环里调用,不为校验把文件读第二遍)。
+
+    ``head`` 是首块攒出的前 ``MAGIC_HEAD_BYTES`` 字节;表外的扩展名(无可靠魔数的
+    文本格式/仅报话术格式)直接放行,维持 G0 原语义。
+    """
+    if ext == ".webp":
+        ok = head[:4] == b"RIFF" and head[8:12] == b"WEBP"
+    else:
+        prefixes = _MAGIC_PREFIXES.get(ext)
+        ok = prefixes is None or any(head.startswith(p) for p in prefixes)
+    if not ok:
+        raise HTTPException(
+            status_code=415,
+            detail=f"文件内容与扩展名不符:{display_name}",
+        )
 
 router = APIRouter(prefix="/api", tags=["sources"])
 
@@ -101,7 +141,8 @@ async def _write_attachments(attachments: list[UploadFile], target_dir: Path) ->
     """附件按原始相对路径写进本次上传的暂存目录(md 里的相对引用才能解析)。
 
     multipart 里的文件名可能带路径(webkitdirectory 上传),保留相对层级但挡掉
-    ``..`` 与绝对路径——绝不允许写出暂存目录。
+    ``..`` 与绝对路径——绝不允许写出暂存目录。附件全是图片(ATTACHMENT_EXTS),
+    落盘时同样首块判魔数(B3),不符由调用方的暂存清理路径删除整个暂存目录。
     """
     root = target_dir.resolve()
     for att in attachments:
@@ -113,9 +154,17 @@ async def _write_attachments(attachments: list[UploadFile], target_dir: Path) ->
         if root not in target.parents:  # 防穿越(理论上上面已挡,.resolve 后双保险)
             continue
         target.parent.mkdir(parents=True, exist_ok=True)
+        att_ext = Path(parts[-1]).suffix.lower()
+        head = b""  # 首块判头(B3),与主文件同一套魔数表
         with target.open("wb") as out:
             while chunk := await att.read(READ_CHUNK):
+                if len(head) < MAGIC_HEAD_BYTES:
+                    head = (head + chunk)[:MAGIC_HEAD_BYTES]
+                    if len(head) == MAGIC_HEAD_BYTES:
+                        _verify_magic(att_ext, head, parts[-1])
                 out.write(chunk)
+            if len(head) < MAGIC_HEAD_BYTES:
+                _verify_magic(att_ext, head, parts[-1])  # 文件比魔数还短:用已有字节判
         await att.close()
 
 
@@ -229,9 +278,14 @@ async def upload_source(
     staging = staging_dir / raw_name
     digest = hashlib.sha256()
     size = 0
+    head = b""  # 首块判头(B3):攒够 MAGIC_HEAD_BYTES 就判,不等流读完、不读第二遍
     try:
         with staging.open("wb") as out:
             while chunk := await file.read(READ_CHUNK):
+                if len(head) < MAGIC_HEAD_BYTES:
+                    head = (head + chunk)[:MAGIC_HEAD_BYTES]
+                    if len(head) == MAGIC_HEAD_BYTES:
+                        _verify_magic(ext, head, raw_name)
                 size += len(chunk)
                 if size > MAX_UPLOAD_BYTES:
                     raise HTTPException(
@@ -240,6 +294,8 @@ async def upload_source(
                     )
                 digest.update(chunk)
                 out.write(chunk)
+            if len(head) < MAGIC_HEAD_BYTES:
+                _verify_magic(ext, head, raw_name)  # 文件比魔数还短:用已有字节判
         await _write_attachments(attachments, staging_dir)
     except HTTPException:
         shutil.rmtree(staging_dir, ignore_errors=True)

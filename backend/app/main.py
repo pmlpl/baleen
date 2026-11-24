@@ -58,12 +58,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="baleen", lifespan=lifespan)
+    # CORS 收紧(B5,2026-11-24):methods/headers 从 "*" 改显式清单,白名单依据=实测
+    # ① 后端路由只用 GET/POST/PUT/DELETE(grep @router.* 无 PATCH/HEAD/OPTIONS);
+    # ② 前端实际发送的头只有 Authorization/Content-Type/Accept(src/api/{http,qa}.ts、
+    #    QaView.vue;multipart 上传故意不设 Content-Type,由浏览器带 boundary 自动写)。
+    # origins 白名单与 allow_credentials 维持原逻辑不动。
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
         allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_headers=["Authorization", "Content-Type", "Accept"],
     )
     app.include_router(health_router)
     app.include_router(auth_router)

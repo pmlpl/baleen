@@ -334,3 +334,57 @@ def test_upload_same_file_after_note_delete_enqueues_again(env) -> None:
             assert job.status == "queued", "旧 done 行必须被重置回 queued"
 
     _portal_call(env, job_requeued)
+
+
+# ---------------------------------------------------------------- 魔数判头(B3,2026-11-24)
+
+# 真 PDF 头(G0 不在测试里真跑,只要能过魔数判头即可)
+MINIMAL_PDF = b"%PDF-1.4\n1 0 obj\nendobj\ntrailer\n%%EOF\n"
+
+
+def test_upload_renamed_exe_rejected_415_by_magic(env) -> None:
+    """B3:.exe 改名 .pdf → 首块魔数判头 415,垃圾不落暂存区、不入队。"""
+    resp = _upload(env, name="trojan.pdf", content=b"MZ\x90\x00\x03" + b"\x00" * 64)
+    assert resp.status_code == 415
+    assert "文件内容与扩展名不符" in resp.json()["detail"]
+    assert env.calls == []
+    uploads = env.tmp_path / "uploads"
+    assert not uploads.exists() or list(uploads.iterdir()) == []  # 暂存已清理
+
+
+def test_upload_plain_text_as_docx_rejected_415_by_magic(env) -> None:
+    """B3:纯文本存 .docx(PK 头不符)→ 415,暂存清理。"""
+    resp = _upload(env, name="fake.docx", content="这不是 docx,只是普通文本。".encode())
+    assert resp.status_code == 415
+    assert "文件内容与扩展名不符" in resp.json()["detail"]
+    assert env.calls == []
+    uploads = env.tmp_path / "uploads"
+    assert not uploads.exists() or list(uploads.iterdir()) == []
+
+
+def test_upload_valid_pdf_and_image_unaffected_by_magic(env) -> None:
+    """B3:真 %PDF 头 / 真 PNG 头 → 原流程不受影响(201 + 入队 + 暂存保留)。"""
+    pdf = _upload(env, name="ok.pdf", content=MINIMAL_PDF)
+    img = _upload(env, name="photo.png", content=PNG_1X1)
+    assert pdf.status_code == 201, pdf.text
+    assert img.status_code == 201, img.text
+    assert len(env.calls) == 2
+    for call in env.calls:  # 暂存文件保留,等 worker 用
+        assert Path(call["file_path"]).exists()
+        assert Path(call["file_path"]).suffix in (".pdf", ".png")
+
+
+def test_upload_attachment_renamed_exe_rejected_415_by_magic(env) -> None:
+    """B3:附件里 .exe 改名 .png → 415,整个暂存目录(含已写的主文件)清理。"""
+    resp = env.client.post(
+        "/api/sources",
+        files={
+            "file": ("note.md", b"# hi\n", "text/markdown"),
+            "attachments": ("evil.png", b"MZ\x90\x00\x03" + b"\x00" * 32, "image/png"),
+        },
+    )
+    assert resp.status_code == 415
+    assert "文件内容与扩展名不符" in resp.json()["detail"]
+    assert env.calls == []
+    uploads = env.tmp_path / "uploads"
+    assert not uploads.exists() or list(uploads.iterdir()) == []
