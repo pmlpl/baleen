@@ -35,6 +35,9 @@ import { renderMarkdown } from '../utils/markdown'
 import { renderMermaidIn } from '../utils/mermaid'
 import { renderSvgsIn } from '../utils/svg'
 
+import NotePicker from '../components/NotePicker.vue'
+import SlashMenu from '../components/SlashMenu.vue'
+
 const TOP_K = 5
 
 const router = useRouter()
@@ -221,7 +224,7 @@ function onChatDrop(event: DragEvent): void {
   }
 }
 
-// ---------------- 斜杠命令 ----------------
+// ---------------- 斜杠命令(菜单 UI 在 components/SlashMenu.vue;输入框是共享的,开关/过滤/键盘路由留在本页) ----------------
 
 interface ChatCommand {
   name: string
@@ -232,16 +235,6 @@ interface ChatCommand {
 
 const slashOpen = ref(false)
 const slashActive = ref(0)
-const slashMenuEl = ref<HTMLElement | null>(null)
-
-// 高亮项跟着滚进可视区(命令多时菜单内部会滚动)
-watch(slashActive, () => {
-  void nextTick(() => {
-    slashMenuEl.value
-      ?.querySelector('.slash-item--active')
-      ?.scrollIntoView({ block: 'nearest' })
-  })
-})
 
 // ---------------- 输入历史(↑ 召回上一条发送内容,↓ 回到草稿) ----------------
 
@@ -340,7 +333,7 @@ const CHAT_COMMANDS: ChatCommand[] = [
   },
 ]
 
-// ---------------- 引用笔记(告诉 AI「在问什么」;检索仍会跑找关联笔记) ----------------
+// ---------------- 引用笔记(告诉 AI「在问什么」;检索仍会跑找关联笔记;弹层 UI 在 components/NotePicker.vue) ----------------
 
 interface NoteRef {
   id: number
@@ -406,6 +399,14 @@ function toggleNoteRef(note: NoteRef): void {
   else referencedNotes.value.push(note)
 }
 
+/** 从选择器选中一篇笔记:回填引用 chip → 关选择器(还原草稿) → 清输入。
+ * 列表点击(NotePicker 的 select 事件)与 Enter 选第一篇走同一条路,顺序与拆分前一致。 */
+function pickNote(note: NoteRef): void {
+  toggleNoteRef(note)
+  closeNotePicker()
+  input.value = ''
+}
+
 function removeNoteRef(id: number): void {
   referencedNotes.value = referencedNotes.value.filter((r) => r.id !== id)
 }
@@ -447,9 +448,7 @@ function onPickerKeydown(event: KeyboardEvent): void {
     event.preventDefault()
     const first = pickerNotes.value[0]
     if (first !== undefined) {
-      toggleNoteRef({ id: first.id, title: first.title })
-      closeNotePicker()
-      input.value = ''
+      pickNote({ id: first.id, title: first.title })
     }
   }
 }
@@ -1192,46 +1191,24 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
         </div>
 
         <form v-else class="chat-input chat-input--anchor" @submit.prevent="send">
-          <!-- / 命令菜单:绝对定位在输入框上方 -->
-          <div v-if="slashOpen" ref="slashMenuEl" class="slash-menu card">
-            <button
-              v-for="(c, i) in slashMatches"
-              :key="c.name"
-              class="slash-item"
-              :class="{ 'slash-item--active': i === slashActive }"
-              type="button"
-              @click="executeSlash(c)"
-              @mouseenter="slashActive = i"
-            >
-              <span class="slash-name mono">{{ c.name }}</span>
-              <span class="slash-desc">{{ c.desc }}</span>
-            </button>
-            <p v-if="slashMatches.length === 0" class="muted slash-empty">
-              没有匹配的命令(输入 / 看全部)
-            </p>
-          </div>
-          <!-- /检索 的笔记选择器:输入文字按标题筛,点击引用;
+          <!-- / 命令菜单(组件):开关/过滤/亮项在本页,选择与悬停经事件回传 -->
+          <SlashMenu
+            :open="slashOpen"
+            :commands="slashMatches"
+            :active="slashActive"
+            @select="executeSlash"
+            @hover="slashActive = $event"
+          />
+          <!-- /检索 的笔记选择器(组件):候选/筛选词在本页,关闭与选择经事件回传;
                全屏遮罩兜底「点外部也能退出」,菜单本体盖在遮罩之上 -->
-          <div v-if="notePicker" class="picker-mask" aria-hidden="true" @click="closeNotePicker"></div>
-          <div v-if="notePicker" class="slash-menu card slash-menu--picker">
-            <div class="picker-head">
-              <span class="picker-title muted">选择要引用的笔记</span>
-              <button class="np-cancel" type="button" @click="closeNotePicker">取消</button>
-            </div>
-            <button
-              v-for="n in pickerNotes"
-              :key="n.id"
-              class="slash-item"
-              type="button"
-              @click="toggleNoteRef({ id: n.id, title: n.title }); closeNotePicker(); input = ''"
-            >
-              <span class="slash-name">{{ n.title }}</span>
-              <span class="slash-desc">{{ n.chunk_count }} 段 · 引用到提问</span>
-            </button>
-            <p v-if="pickerNotes.length === 0 && !pickerLoading" class="muted slash-empty">
-              {{ input.trim() === '' ? '输入标题关键词筛选' : '没有匹配的笔记' }}
-            </p>
-          </div>
+          <NotePicker
+            :open="notePicker"
+            :notes="pickerNotes"
+            :loading="pickerLoading"
+            :query="input"
+            @close="closeNotePicker"
+            @select="pickNote"
+          />
           <!-- 输入壳:chips 和文字同框(用户视角 = 文件圆角框嵌在句子里);
                壳本身长得像 input,真输入框无边框透明藏在里面 -->
           <div class="input-shell" @click="focusQaInput">
@@ -1842,85 +1819,9 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   color: var(--accent);
 }
 
-/* ---- 斜杠命令菜单 ---- */
+/* ---- 斜杠命令菜单 / 笔记选择器:弹层样式已随 UI 拆进 components/SlashMenu.vue 与 NotePicker.vue ---- */
 .chat-input--anchor {
   position: relative;
-}
-
-.slash-menu {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  right: 0;
-  z-index: 30;
-  max-height: 280px;
-  padding: 6px;
-  overflow-y: auto;
-  box-shadow: var(--shadow);
-}
-
-/* /检索 笔记选择器:全屏遮罩兜底「点外部退出」,菜单本体盖在遮罩上 */
-.picker-mask {
-  position: fixed;
-  inset: 0;
-  z-index: 29;
-  background: rgba(20, 24, 33, 0.18);
-}
-
-.slash-menu--picker {
-  z-index: 30;
-}
-
-.picker-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 6px 6px;
-}
-
-.picker-title {
-  font-size: 12.5px;
-}
-
-.picker-head .np-cancel {
-  margin-top: 0;
-}
-
-.slash-item {
-  display: flex;
-  width: 100%;
-  align-items: baseline;
-  gap: 10px;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 7px;
-  background: none;
-  cursor: pointer;
-  text-align: left;
-}
-
-.slash-item--active {
-  background: var(--accent-soft);
-}
-
-.slash-name {
-  color: var(--accent-ink);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.slash-desc {
-  overflow: hidden;
-  color: var(--ink-2);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.slash-empty {
-  padding: 10px;
-  font-size: 12.5px;
 }
 
 /* ---- 引用笔记 / 附件 chips(嵌在输入壳里) ---- */

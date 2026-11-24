@@ -297,3 +297,43 @@ uvicorn.exe：(空)
 
 ### 已知限制
 - 统计实时拉取:onActivated 初次挂载与每次重新进入都触发 load(),keep-alive 下切回个人中心统计也是新的,无缓存陈旧问题
+
+---
+
+## 2026-11-24 · C2 拆分批 · NotePicker + SlashMenu 从 QaView 拆出 · 执行者：前端代理
+
+裁决来源:`docs/review-2026-11-23.md` §7——C2 只拆 NotePicker/SlashMenu 低风险子集,会话侧栏/SSE/附件/草稿明确不动,**行为零变化是验收标准**。
+
+### 产物
+
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `src/components/SlashMenu.vue` | 斜杠命令菜单,受控展示组件(泛型 C 保住调用方完整命令类型):props `open/commands/active`,emit `select/hover`;内部只有菜单 el ref + 亮项滚进可视区的 watch(从 QaView 搬来);`.slash-menu/.slash-item` 系样式原样搬入 |
+| 新增 | `src/components/NotePicker.vue` | 引用笔记选择器弹层,受控展示组件(多根 fragment:全屏遮罩 + 菜单):props `open/notes/loading/query`,emit `close/select`;候选笔记/筛选词由父页传入,组件零 API 调用、零 store 访问 |
+| 改 | `src/views/QaView.vue` | template 的斜杠菜单/选择器两块换成 `<SlashMenu/>`/`<NotePicker/>`;script 删掉搬走的 `slashMenuEl` + 滚动跟随 watch;新增 `pickNote()`(列表点击与 Enter 选第一篇合一,顺序=toggle→关选择器→清输入,与拆分前一致);搬走的样式从 QaView 删除。1990→1890 行(+2 组件共 275 行) |
+
+**边界(什么留在 QaView、为什么)**:
+- 输入框是共享的(命令词/笔记筛选/草稿/历史回溯都走它):键盘路由(picker→slash→Backspace 删 chip→历史)与开关状态(slashOpen/slashActive/slashMatches/notePicker/pickerNotes/pickerLoading)留父页,组件只收 props 发事件
+- 笔记检索(listNotes)是 API 调用,组件内零 API 约束 → `loadPickerNotes`/300ms 防抖留父页
+- 草稿逻辑(draftBeforePicker/loadDraft/草稿 watch)任务书明确不动,原样保留
+- 引用 chips 的显示留在输入壳:与附件/图片 chips 同壳交织,Backspace 逆序删是跨三类 chip 的父级逻辑,拆出去必然碰附件关注点(明确不许)
+- 菜单与选择器共用 `.slash-menu/.slash-item` 系样式 → 两组件各带一份 scoped 副本(注释互指),换共享需建全局样式文件,不在本批授权内
+
+### 自测
+
+- `pnpm type-check`(vue-tsc)→ **0 错误**;`pnpm build` → ✓ built in 32.52s
+- Playwright 探针 `backend/tmp/probe_c2_split.py`(真后端 127.0.0.1:8000 + 真库,/healthz 预检,admin UI 登录):
+  - functional **27 项断言两阶段(before=HEAD / after=拆分后)全绿**:输入 / 弹出 4 条命令、↓/↑ 键盘轮转亮项、过滤 /检索、Enter 选命令打开选择器+遮罩、列出真库笔记(实得 8 条)、点选回填 chip、双 chip Backspace 逆序删(后选的先删)、Esc 关闭还原草稿、点遮罩关闭、空态文案随筛选词切换、/新对话 命令生效清 chips、全程 0 pageerror
+  - capture 5 状态(初始/斜杠菜单/过滤/选择器开/双 chip)前后对比 **10/10 逐字节相同**(DOM 规范化剥 data-v-*/注释/空白后逐字节同;截图 PNG 直接逐字节同)→ 视觉零变化
+- 探针纯只读(不发消息不建会话,无测试数据要清理);前后端服务用完 `taskkill /T /F` 收净,8000/5173 端口与 uvicorn/python(baleen)/vite 进程自查为空
+
+### 已知限制
+
+1. SlashMenu 根元素会继承父作用域 `data-v-*` 属性(抽组件的标准 scoped CSS 行为,属性个数 +1);截图逐字节相同证明无视觉/交互影响,DOM 对比时已规范化剥除
+2. `.slash-*` 系样式在两个组件里各有一份副本(约 40 行重复),两组件因此自包含;要消除需建共享样式文件,另批再议
+3. **拆分中发现一个既有草稿竞态(非本批引入,未动)**:输入首个 `/` 字符时,v-model 的赋值监听器先于 `@input` 的 `updateSlash` 执行,草稿 watch 的 flush 窗口落在两者之间、守卫(slashOpen 仍 false)放行,`/`(整串命令词同理)被写进 localStorage 草稿;于是 `/新对话` 执行后 `loadDraft()` 把它还原进输入框(Playwright fill 与逐字键入均可复现,两阶段行为一致;物理键盘未测)。根因在 QaView 的草稿逻辑(本批明确不碰),建议另开一批修
+4. 浏览器控制台仍有既有的 jsdelivr 字体 CDN 加载失败(环境无外网),与本批无关
+
+### 需要确认的问题
+
+- 已知限制第 3 条的草稿竞态要不要修(动 updateSlash/草稿 watch,建议单开一批)?
