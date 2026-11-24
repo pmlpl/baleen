@@ -19,6 +19,8 @@ import json
 import logging
 import re
 import time
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -29,7 +31,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentOwnerDep, SessionDep
-from app.api.library import RetrieveDep
+from app.api.library import RetrieveCallable, RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import KEEP_SESSIONS, QaRepo
 from app.service.llm import LLMClient, LLMError, estimate_tokens
@@ -361,15 +363,49 @@ async def _create_session_and_trim(repo: QaRepo, title: str, *, owner_id: int) -
     return qa_session
 
 
-@router.post("/chat", response_model=ChatResponse)
-async def chat(
+# ------------------------------------------------ chat / chat_stream 共享(C1,2026-11-24)
+# 审查报告 C1:chat 与 chat_stream 曾各自复制一整套决策树(预检联网 → 库内回答 →
+# [NO_KB] 二段兜底)。现两端点消费下面同一套共享实现,流式/非流式只差三件事:
+# ① 事件包装(流式把共享事件映射成 SSE,非流式丢弃 status/delta 只取 result);
+# ② 库内回答机制(非流式 answer() 一次拿全文 vs 流式 llm.chat_stream + [NO_KB] 首行门);
+# ③ user 消息落库时点(流式轮次开始即 commit,回答失败 user 消息不丢;非流式整体一事务)。
+# 对外行为零变化(等价性基线见 tests/api/test_qa_equivalence.py,先于重构写、跑绿)。
+
+
+@dataclass
+class _ChatRound:
+    """一轮问答的准备结果(``_prepare_chat_round`` 产出,两端点同源消费)。"""
+
+    repo: QaRepo
+    payload: ChatRequest
+    llm: LLMClient
+    owner_id: int
+    qa_session: QaSession
+    window_msgs: list
+    digest_summaries: list[str]
+    history: list[dict[str, str]]
+    history_chat: list[dict[str, str]]
+    search_query: str
+    kb_hits: list[ContextHit]
+    ref_notes: list[dict]
+    attachments: list[dict]
+    user_images: list[dict]
+    messages: list[dict[str, str]]
+    llm_user_text: str
+    tavily_key: str | None
+    agent_enabled: bool
+
+
+async def _prepare_chat_round(
     payload: ChatRequest,
-    retrieve: RetrieveDep,
-    llm: LLMClientDep,
-    session: SessionDep,
-    owner_id: CurrentOwnerDep,
-) -> ChatResponse:
-    started = time.perf_counter()
+    *,
+    retrieve: RetrieveCallable,
+    llm: LLMClient,
+    session: AsyncSession,
+    owner_id: int,
+) -> _ChatRound:
+    """两端点共享的准备段:会话(无则建+保留裁剪)→ 历史两版 → 改写 → 检索 →
+    组装本轮 LLM 消息 → 联网 key / agent 开关。原两份逐字重复,现同一实现。"""
     repo = QaRepo(session, owner_id)
 
     # 1) 会话:无则建(title = 首问前 30 字;建新会话触发保留策略裁剪,只留最新 50 个)
@@ -434,173 +470,389 @@ async def chat(
         attachments=attachments,
         digest_summaries=digest_summaries,
     )
-    llm_user_text = messages[-1]["content"]
-
-    # 4.4) 问答 agent 灰度(ADR 0010):开关开 → 脑在 loop 里选工具(换词再搜/何时转联网),
-    #   入口契约/预算三道闸/出口校验在马具;脑没给出答案(预算耗尽/LLM 失败/空答案)→
-    #   返回 None,回落下面 4.5/5 的现有决策树——最坏情况 = 现状。开关默认关,关 = 零改动。
     tavily_key = await resolve_tavily_key(session, owner_id)
-    agent_qa: QaResult | None = None
-    if await resolve_agent_enabled(session, owner_id):
-        agent_qa = await run_agent(
-            payload.question,
-            kb_hits,
-            retrieve=retrieve,
-            client=llm,
-            owner_id=owner_id,
-            top_k=payload.top_k,
-            history=history,
-            ref_notes=ref_notes,
-            attachments=attachments,
-            digest_summaries=digest_summaries,
-            images=user_images + await _load_hit_images(session, owner_id, kb_hits),
-            has_user_images=bool(user_images),
-            tavily_key=tavily_key,
-            fallback_base_url=llm.base_url,
-            fallback_api_key=llm.api_key,
-        )
-
-    # 4.5) 工具链兜底(决策树,agent 关/agent 回落时走):库内没命中 OR 命中但不相关
-    #   (正文不含查询关键词) → 联网搜索。但用户挂了图时图本身就是内容(问的常是
-    #   「这图讲什么」),搜「图片/内容」只会搜出 OCR 工具之类——所以挂图不走联网,
-    #   让视觉模型直接看图回答。
-    web_results: list[dict[str, str]] = []
-    if agent_qa is None:
-        kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
-        if kb_irrelevant and tavily_key and not user_images:
-            try:
-                web_results = await asyncio.to_thread(
-                    search_web,
-                    search_query,
-                    api_key=tavily_key,
-                    fallback_base_url=llm.base_url,
-                    fallback_api_key=llm.api_key,
-                )
-            except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
-                web_results = []
-
-    # 4) 存 user 消息(两份:content 给人看,llm_content 给下轮 LLM 重放)
-    user_msg = await repo.add_message(
-        qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
+    agent_enabled = await resolve_agent_enabled(session, owner_id)
+    return _ChatRound(
+        repo=repo,
+        payload=payload,
+        llm=llm,
+        owner_id=owner_id,
+        qa_session=qa_session,
+        window_msgs=window_msgs,
+        digest_summaries=digest_summaries,
+        history=history,
+        history_chat=history_chat,
+        search_query=search_query,
+        kb_hits=kb_hits,
+        ref_notes=ref_notes,
+        attachments=attachments,
+        user_images=user_images,
+        messages=messages,
+        llm_user_text=messages[-1]["content"],
+        tavily_key=tavily_key,
+        agent_enabled=agent_enabled,
     )
 
-    # 5) LLM(同步 → to_thread,不阻塞事件循环):agent 开且成功 → 用 agent 答案;
-    #    否则联网结果走 web 版,库内版走 answer([NO_KB] 二段兜底)——现有决策树
-    trace: list[dict] | None = None
-    if agent_qa is not None:
-        qa = agent_qa
-        agent_meta = qa.meta.get("agent") or {}
-        used_web = bool(agent_meta.get("used_web"))
-        trace = agent_meta.get("steps")
-    else:
-        used_web = bool(web_results)
-        # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图,上下文来自搜索结果)
-        hit_images = [] if used_web else await _load_hit_images(session, owner_id, kb_hits)
-        if used_web:
-            qa: QaResult = await asyncio.to_thread(
-                answer_web,
-                payload.question,
-                web_results,
-                history=history,
-                client=llm,
-                ref_notes=ref_notes,
-                attachments=attachments,
-                digest_summaries=digest_summaries,
-                images=user_images,
-            )
-        else:
-            qa = await asyncio.to_thread(
-                answer,
-                payload.question,
-                kb_hits,
-                history=history,
-                client=llm,
-                ref_notes=ref_notes,
-                attachments=attachments,
-                digest_summaries=digest_summaries,
-                images=user_images + hit_images,
-            )
-            # 二段兜底:LLM 用 [NO_KB] 标记「笔记答不了」→ 联网搜;没配 Tavily 就用它自己的
-            # 知识正面回答(带标注)。相关性检查只认字面(「数据库」会命中发票笔记),
-            # 语义层面的「答不了」由 LLM 自己判。
-            if qa.answer.startswith("[NO_KB]"):
-                body = qa.answer.removeprefix("[NO_KB]").strip()
-                # 挂了图时不走联网(图本身是内容);也没必要加「笔记库没有」前缀
-                if tavily_key and not user_images:
-                    try:
-                        web_results = await asyncio.to_thread(
-                            search_web,
-                            search_query,
-                            api_key=tavily_key,
-                            fallback_base_url=llm.base_url,
-                            fallback_api_key=llm.api_key,
-                        )
-                    except Exception:  # noqa: BLE001 —— 搜索失败走自身知识口径
-                        web_results = []
-                if web_results:
-                    qa = await asyncio.to_thread(
-                        answer_web,
-                        payload.question,
-                        web_results,
-                        history=history,
-                        client=llm,
-                        ref_notes=ref_notes,
-                        attachments=attachments,
-                        digest_summaries=digest_summaries,
-                        images=user_images,
-                    )
-                    used_web = True
-                elif user_images:
-                    # 挂图 + [NO_KB]:视觉模型已据图给的回答,直接用,不加「笔记库没有」前缀
-                    qa = qa.model_copy(update={"answer": body, "citations": []})
-                else:
-                    qa = qa.model_copy(
-                        update={
-                            "answer": (
-                                "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n" + body
-                            ),
-                            "citations": [],
-                        }
-                    )
 
-    # 5) 存 assistant 消息(出处 + 计费 + 缓存计数 + agent 留痕),整体 commit(失败全回滚)
-    assistant_msg = await repo.add_message(
-        qa_session.id,
+async def _search_web_safe(
+    rnd: _ChatRound, *, meta_out: dict | None = None
+) -> list[dict[str, str]]:
+    """决策树联网搜索统一入口(原 qa.py 里 5 处同形调用点合一):两级链的
+    fallback_base_url/fallback_api_key 参数与降级留痕(meta_out)原样保留(64c3b61);
+    任何失败走「没找到」口径,不让整轮失败。"""
+    try:
+        return await asyncio.to_thread(
+            search_web,
+            rnd.search_query,
+            api_key=rnd.tavily_key,
+            fallback_base_url=rnd.llm.base_url,
+            fallback_api_key=rnd.llm.api_key,
+            meta_out=meta_out,
+        )
+    except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」/自答口径
+        return []
+
+
+async def _web_precheck(rnd: _ChatRound, *, meta_out: dict | None = None) -> list[dict[str, str]]:
+    """决策树前置联网预检(原 3 处同形调用点合一:chat 前置 / 流式流前 / agent 回落流内)。
+
+    库内没命中 OR 命中但不相关(正文不含查询关键词)→ 联网搜索;但用户挂了图时
+    图本身就是内容(问的常是「这图讲什么」),搜「图片/内容」只会搜出 OCR 工具
+    之类——所以挂图不走联网,让视觉模型直接看图回答。
+    """
+    kb_irrelevant = not rnd.kb_hits or not _has_relevant_hit(rnd.kb_hits, rnd.search_query)
+    if not (kb_irrelevant and rnd.tavily_key and not rnd.user_images):
+        return []
+    return await _search_web_safe(rnd, meta_out=meta_out)
+
+
+async def _answer_web_round(rnd: _ChatRound, web_results: list[dict[str, str]]) -> QaResult:
+    """决策树联网回答(原 4 处 answer_web 同参调用点合一)。"""
+    return await asyncio.to_thread(
+        answer_web,
+        rnd.payload.question,
+        web_results,
+        history=rnd.history,
+        client=rnd.llm,
+        ref_notes=rnd.ref_notes,
+        attachments=rnd.attachments,
+        digest_summaries=rnd.digest_summaries,
+        images=rnd.user_images,
+    )
+
+
+_SELF_KNOWLEDGE_PREFIX = "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n"
+
+
+def _self_knowledge_answer(body: str, *, has_user_images: bool) -> str:
+    """[NO_KB] 无联网兜底(原 2 处同文案合一):挂图直接用 body(图是内容,不加前缀);
+    否则加「笔记库没有,以下用 AI 自身知识」明示前缀(防瞎编纪律:不冒充库内答案)。"""
+    return body if has_user_images else _SELF_KNOWLEDGE_PREFIX + body
+
+
+def _agent_result_fields(rnd: _ChatRound, agent_qa: QaResult) -> dict:
+    """agent 答案字段抽取(两端点同款):used_web/trace 从 meta,计费从 QaResult。"""
+    agent_meta = agent_qa.meta.get("agent") or {}
+    return {
+        "answer_text": agent_qa.answer,
+        "citations": agent_qa.citations,
+        "cost_tokens": agent_qa.cost_tokens or 0,
+        "model_name": agent_qa.model or rnd.llm.model,
+        "cache_hit": agent_qa.prompt_cache_hit_tokens or 0,
+        "cache_miss": agent_qa.prompt_cache_miss_tokens or 0,
+        "trace_steps": agent_meta.get("steps"),
+        "used_web": bool(agent_meta.get("used_web")),
+    }
+
+
+async def _kb_answer_full(rnd: _ChatRound, *, images: list[dict]) -> AsyncIterator[dict]:
+    """非流式库内回答机制:answer() 一次拿全文([NO_KB] 整体判定,无增量 delta 事件)。"""
+    qa: QaResult = await asyncio.to_thread(
+        answer,
+        rnd.payload.question,
+        rnd.kb_hits,
+        history=rnd.history,
+        client=rnd.llm,
+        ref_notes=rnd.ref_notes,
+        attachments=rnd.attachments,
+        digest_summaries=rnd.digest_summaries,
+        images=images,
+    )
+    marker = qa.answer.startswith("[NO_KB]")
+    body = qa.answer.removeprefix("[NO_KB]").strip()
+    yield {
+        "type": "kb_done",
+        "marker": marker,
+        "text": body if marker else qa.answer,
+        "cost_tokens": qa.cost_tokens or 0,
+        "model_name": qa.model,
+        "cache_hit": qa.prompt_cache_hit_tokens or 0,
+        "cache_miss": qa.prompt_cache_miss_tokens or 0,
+    }
+
+
+async def _stream_kb_answer(rnd: _ChatRound) -> AsyncIterator[dict]:
+    """流式库内回答机制:llm.chat_stream 逐段推进放线程里 + [NO_KB] 首行门
+    (缓冲到能判定首行再放行,标记答案整体扣下不外泄);usage 事件攒计费。
+
+    终事件 kb_done:marker=True 时 text=去掉标记的 body,否则 text=放行全文
+    (短回答没到放行阈值,流结束后整段放行);计费取 usage 事件。"""
+    accumulated: list[str] = []
+    usage_event: dict | None = None
+    iterator = rnd.llm.chat_stream(rnd.messages, max_tokens=3000)
+    marker = False  # [NO_KB] = 笔记答不了,LLM 会给自身知识回答(不外发)
+    buffered = ""
+    streaming = False
+    try:
+        while True:
+            event = await asyncio.to_thread(next, iterator, None)
+            if event is None:
+                break
+            if event["type"] == "usage":
+                usage_event = event
+                continue
+            if event["type"] != "content":
+                continue
+            piece = event["text"]
+            if marker:
+                buffered += piece  # 静默收完自身知识回答
+                continue
+            if streaming:
+                accumulated.append(piece)
+                yield {"type": "delta", "text": piece}
+                continue
+            buffered += piece
+            combined = buffered.lstrip()
+            if combined.startswith("[NO_KB]"):
+                marker = True
+                continue
+            # 缓冲到能判定首行再放行,防止标记漏给用户
+            if "\n" in buffered or (len(combined) >= 8 and not combined.startswith("[")):
+                streaming = True
+                accumulated.append(buffered)
+                yield {"type": "delta", "text": buffered}
+                buffered = ""
+            # else: 继续缓冲直到可判定
+    finally:
+        close = getattr(iterator, "close", None)
+        if close is not None:
+            close()
+
+    if not marker and buffered:  # 短回答没到放行阈值,流结束后整段放行
+        accumulated.append(buffered)
+        yield {"type": "delta", "text": buffered}
+    yield {
+        "type": "kb_done",
+        "marker": marker,
+        "text": (
+            buffered.removeprefix("[NO_KB]").strip()
+            if marker
+            else "".join(accumulated).strip() or _EMPTY_ANSWER
+        ),
+        "cost_tokens": (usage_event or {}).get("total_tokens") or 0,
+        "model_name": rnd.llm.model,
+        "cache_hit": (usage_event or {}).get("prompt_cache_hit_tokens") or 0,
+        "cache_miss": (usage_event or {}).get("prompt_cache_miss_tokens") or 0,
+    }
+
+
+async def _decision_tree_answer(
+    rnd: _ChatRound,
+    *,
+    web_results: list[dict[str, str]],
+    kb_answer: AsyncIterator[dict],
+) -> AsyncIterator[dict]:
+    """决策树回答段共享实现(原 chat/chat_stream 各一份,现两端点消费同一实现)。
+
+    事件序:``status*``(联网降级留痕)→ ``delta*``(答案增量)→ ``result``(终事件,
+    必有且唯一)。流式端点把事件映射成 SSE;非流式端点丢弃 status/delta(无流可发),
+    只取 result——两端对外行为零变化。
+
+    ``web_results``:调用方已算好的前置联网结果(流式在流开始前算好——meta 事件要
+    报 used_web;非流式在存 user 消息前算好;agent 回落时由流式端点在流内现算)。
+    ``kb_answer``:库内回答机制(非流式 _kb_answer_full / 流式 _stream_kb_answer),
+    产出 delta 增量事件 + 终事件 kb_done(marker/body/计费字段)。
+    """
+    if web_results:
+        # 联网兜底走非流式回答(web 上下文结构不同),整段作为一帧 delta 下发
+        qa = await _answer_web_round(rnd, web_results)
+        yield {"type": "delta", "text": qa.answer}
+        yield {
+            "type": "result",
+            "answer_text": qa.answer,
+            "citations": build_web_citations(web_results, qa.answer),
+            "cost_tokens": qa.cost_tokens or 0,
+            "model_name": qa.model or rnd.llm.model,
+            "cache_hit": qa.prompt_cache_hit_tokens or 0,
+            "cache_miss": qa.prompt_cache_miss_tokens or 0,
+            "used_web": True,
+        }
+        return
+
+    marker = False
+    kb: dict = {}
+    async for ev in kb_answer:
+        if ev["type"] == "delta":
+            yield ev  # 库内回答增量直通(流式机制才产 delta;非流式机制无增量)
+        else:
+            kb = ev
+            marker = ev["marker"]
+    if not marker:
+        yield {
+            "type": "result",
+            "answer_text": kb["text"],
+            "citations": build_citations(rnd.kb_hits, kb["text"]),
+            "cost_tokens": kb["cost_tokens"],
+            "model_name": kb["model_name"],
+            "cache_hit": kb["cache_hit"],
+            "cache_miss": kb["cache_miss"],
+            "used_web": False,
+        }
+        return
+    # 二段兜底:LLM 用 [NO_KB] 标记「笔记答不了」→ 联网搜;没配 Tavily 就用 LLM 已
+    # 给出的自身知识正面回答(带明示前缀)。相关性检查只认字面(「数据库」会命中发票
+    # 笔记),语义层面的「答不了」由 LLM 自己判。挂了图时不走联网(图本身是内容)。
+    web_results2: list[dict[str, str]] = []
+    if rnd.tavily_key and not rnd.user_images:
+        fb_meta: dict = {}  # 两级链降级留痕(见 websearch.search_web)
+        web_results2 = await _search_web_safe(rnd, meta_out=fb_meta)
+        if fb_meta.get("fallback"):
+            yield {"type": "status", "text": f"联网搜索降级:{fb_meta['fallback']}"}
+    if web_results2:
+        qa = await _answer_web_round(rnd, web_results2)
+        yield {"type": "delta", "text": qa.answer}
+        yield {
+            "type": "result",
+            "answer_text": qa.answer,
+            "citations": build_web_citations(web_results2, qa.answer),
+            "cost_tokens": qa.cost_tokens or 0,
+            "model_name": qa.model or rnd.llm.model,
+            "cache_hit": qa.prompt_cache_hit_tokens or 0,
+            "cache_miss": qa.prompt_cache_miss_tokens or 0,
+            "used_web": True,
+        }
+    else:
+        answer_text = _self_knowledge_answer(kb["text"], has_user_images=bool(rnd.user_images))
+        yield {"type": "delta", "text": answer_text}
+        yield {
+            "type": "result",
+            "answer_text": answer_text,
+            "citations": [],
+            "cost_tokens": kb["cost_tokens"],
+            "model_name": kb["model_name"],
+            "cache_hit": kb["cache_hit"],
+            "cache_miss": kb["cache_miss"],
+            "used_web": False,
+        }
+
+
+async def _persist_assistant_round(
+    rnd: _ChatRound, session: AsyncSession, *, fields: dict
+) -> QaMessage:
+    """存 assistant 消息(出处+计费+缓存计数+agent 留痕)+ commit + 冻结分段摘要
+    (近窗超阈值则异步冻结成 digest,fire-and-forget;失败静默——digest 是
+    best-effort,不能因入队失败影响已完成的回答)。两端点同款。"""
+    assistant_msg = await rnd.repo.add_message(
+        rnd.qa_session.id,
         role="assistant",
-        content=qa.answer,
-        citations=[c.model_dump() for c in qa.citations],
-        model=qa.model,
-        cost_tokens=qa.cost_tokens or 0,
-        cache_hit_tokens=qa.prompt_cache_hit_tokens or 0,
-        cache_miss_tokens=qa.prompt_cache_miss_tokens or 0,
-        trace=trace,
+        content=fields["answer_text"],
+        citations=[c.model_dump() for c in fields["citations"]],
+        model=fields["model_name"],
+        cost_tokens=fields["cost_tokens"],
+        cache_hit_tokens=fields["cache_hit"],
+        cache_miss_tokens=fields["cache_miss"],
+        trace=fields.get("trace_steps"),
     )
     await session.commit()
-
-    # 冻结分段摘要:近窗超阈值则把最老一批异步冻结成 digest(fire-and-forget,不阻塞响应;
-    # 失败静默 —— digest 是 best-effort,不能因入队失败影响已完成的回答)。
-    if sum(estimate_tokens(m["content"]) for m in history) > DIGEST_TRIGGER_TOKENS:
-        freeze = window_msgs[:DIGEST_FREEZE_BATCH]
+    if sum(estimate_tokens(m["content"]) for m in rnd.history) > DIGEST_TRIGGER_TOKENS:
+        freeze = rnd.window_msgs[:DIGEST_FREEZE_BATCH]
         try:
             from app.worker.worker import enqueue_digest
 
             await enqueue_digest(
-                qa_session.id,
-                owner_id=owner_id,
+                rnd.qa_session.id,
+                owner_id=rnd.owner_id,
                 start_msg_id=freeze[0].id,
                 end_msg_id=freeze[-1].id,
             )
         except Exception:  # noqa: BLE001 —— Redis/入队失败不影响已完成的回答
             pass
+    return assistant_msg
+
+
+@router.post("/chat", response_model=ChatResponse)
+async def chat(
+    payload: ChatRequest,
+    retrieve: RetrieveDep,
+    llm: LLMClientDep,
+    session: SessionDep,
+    owner_id: CurrentOwnerDep,
+) -> ChatResponse:
+    started = time.perf_counter()
+    rnd = await _prepare_chat_round(
+        payload, retrieve=retrieve, llm=llm, session=session, owner_id=owner_id
+    )
+
+    # 4.4) 问答 agent 灰度(ADR 0010):开关开 → 脑在 loop 里选工具(换词再搜/何时转联网),
+    #   入口契约/预算三道闸/出口校验在马具;脑没给出答案(预算耗尽/LLM 失败/空答案)→
+    #   返回 None,回落下面 4.5/5 的现有决策树——最坏情况 = 现状。
+    agent_qa: QaResult | None = None
+    if rnd.agent_enabled:
+        agent_qa = await run_agent(
+            payload.question,
+            rnd.kb_hits,
+            retrieve=retrieve,
+            client=llm,
+            owner_id=owner_id,
+            top_k=payload.top_k,
+            history=rnd.history,
+            ref_notes=rnd.ref_notes,
+            attachments=rnd.attachments,
+            digest_summaries=rnd.digest_summaries,
+            images=rnd.user_images + await _load_hit_images(session, owner_id, rnd.kb_hits),
+            has_user_images=bool(rnd.user_images),
+            tavily_key=rnd.tavily_key,
+            fallback_base_url=llm.base_url,
+            fallback_api_key=llm.api_key,
+        )
+
+    # 4.5) 工具链兜底(决策树,agent 关/agent 回落时走):前置联网预检(共享 _web_precheck)
+    web_results: list[dict[str, str]] = []
+    if agent_qa is None:
+        web_results = await _web_precheck(rnd)
+
+    # 4) 存 user 消息(两份:content 给人看,llm_content 给下轮 LLM 重放)
+    user_msg = await rnd.repo.add_message(
+        rnd.qa_session.id, role="user", content=payload.question, llm_content=rnd.llm_user_text
+    )
+
+    # 5) 回答:agent 开且成功 → agent 答案;否则共享决策树(联网/库内/[NO_KB] 二段兜底)。
+    #    非流式端点丢弃决策树事件(无流可发),只取终事件 result。
+    fields: dict = {}
+    if agent_qa is not None:
+        fields = _agent_result_fields(rnd, agent_qa)
+    else:
+        # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图,上下文来自搜索结果)
+        hit_images = [] if web_results else await _load_hit_images(session, owner_id, rnd.kb_hits)
+        async for ev in _decision_tree_answer(
+            rnd,
+            web_results=web_results,
+            kb_answer=_kb_answer_full(rnd, images=rnd.user_images + hit_images),
+        ):
+            if ev["type"] == "result":
+                fields = ev
+
+    # 5) 存 assistant 消息 + 整体 commit(失败全回滚)+ 冻结分段摘要(共享 _persist_assistant_round)
+    assistant_msg = await _persist_assistant_round(rnd, session, fields=fields)
 
     took_ms = int(round((time.perf_counter() - started) * 1000))
     return ChatResponse(
-        session_id=qa_session.id,
-        session_title=qa_session.title,
+        session_id=rnd.qa_session.id,
+        session_title=rnd.qa_session.title,
         user_message=_message_out(user_msg),
         assistant_message=_message_out(assistant_msg),
-        search_query=search_query,
-        used_web=used_web,
+        search_query=rnd.search_query,
+        used_web=fields["used_web"],
         took_ms=took_ms,
     )
 
@@ -617,125 +869,51 @@ async def chat_stream_endpoint(
     session: SessionDep,
     owner_id: CurrentOwnerDep,
 ) -> StreamingResponse:
-    """流式问答:SSE 事件流 meta → delta* → done(error 兜底)。
+    """流式问答:SSE 事件流 meta → status* → delta* → done(error 兜底)。
 
     改写与检索在流开始**之前**完成(客户端等待期间显示「思考中」);
     轮次开始即 commit 用户消息(回答失败它也不丢),回答完成再 commit 助手消息。
+    决策树回答段与非流式端点共享 ``_decision_tree_answer``,事件包装是唯一差异。
     """
     started = time.perf_counter()
-    repo = QaRepo(session, owner_id)
-
-    if payload.session_id is None:
-        qa_session = await _create_session_and_trim(
-            repo, payload.question[:TITLE_CHARS], owner_id=owner_id
-        )
-    else:
-        qa_session = await repo.get_session(payload.session_id)
-        if qa_session is None:
-            raise HTTPException(status_code=404, detail=f"会话不存在:{payload.session_id}")
-
-    # 近窗 = 最后一段 digest 之后的消息(无 digest 则全部);老对话已冻结成 digest。
-    digests = await repo.list_digests(qa_session.id)
-    last_end = digests[-1].end_msg_id if digests else 0
-    window_msgs = await repo.list_messages_after(qa_session.id, last_end)
-    digest_summaries = [d.summary for d in digests]
-    history = [
-        {
-            "role": m.role,
-            "content": (m.llm_content or m.content) if m.role == "user" else m.content,
-        }
-        for m in window_msgs
-    ]
-    history_chat = [{"role": m.role, "content": m.content} for m in window_msgs]
-
-    search_query = payload.question
-    if history:
-        try:
-            search_query = await asyncio.to_thread(
-                rewrite_question, payload.question, history_chat, client=llm
-            )
-        except LLMError:
-            search_query = payload.question
-
-    result = await retrieve(search_query, top_k=payload.top_k, owner_id=owner_id)
-    kb_hits = [
-        ContextHit(
-            note_id=h.note_id,
-            note_title=h.note_title,
-            heading_path=h.heading_path,
-            parent_text=h.parent_text,
-            child_text=h.child_text,
-        )
-        for h in result.hits
-    ]
-    ref_notes = await _load_ref_notes(session, owner_id, payload.note_ids)
-    attachments = [{"name": a.name, "text": a.text} for a in payload.attachments]
-    user_images = [{"mime": i.mime, "data_url": i.data_url} for i in payload.images]
-    messages, _build_meta = build_qa_messages(
-        payload.question,
-        kb_hits,
-        history=history,
-        ref_notes=ref_notes,
-        attachments=attachments,
-        digest_summaries=digest_summaries,
+    rnd = await _prepare_chat_round(
+        payload, retrieve=retrieve, llm=llm, session=session, owner_id=owner_id
     )
-    llm_user_text = messages[-1]["content"]
 
-    # 4.4) 问答 agent(ADR 0010;默认开,迁移 0017):loop 在 gen() 里跑——最终答案
-    #   边生成边放行(流式,主人验收反馈:不要「思考中」后整段跳出),工具轮发
-    #   status 事件;脑没给出答案(预算耗尽/LLM 失败)→ gen() 内现算决策树前置回落。
-    #   agent 关(显式/对照)时 4.5 前置联网预检照旧在流开始前完成(meta 语义不变)。
-    tavily_key = await resolve_tavily_key(session, owner_id)
-    agent_enabled = await resolve_agent_enabled(session, owner_id)
+    # 决策树前置(agent 关时):流开始**前**算好 used_web/hit_images/附图——meta 事件要报。
+    # agent 开时:命中图预加载(meta 计数 + 回落时 attach 复用),meta 时点 used_web
+    # 未知(真值随 done 的 citations;与 marker 翻转同款已存行为)。
     web_results: list[dict[str, str]] = []
-    if agent_enabled:
-        # agent 模式:命中图随首轮消息附给 agent(meta 计数 + 回落时 attach 复用)
-        hit_images = await _load_hit_images(session, owner_id, kb_hits)
-        # meta 时点 used_web 未知(真值随 done 的 citations;与 marker 翻转同款已存行为)
+    if rnd.agent_enabled:
+        hit_images = await _load_hit_images(session, owner_id, rnd.kb_hits)
         used_web = False
     else:
-        # 工具链兜底(决策树):库内没命中 OR 命中但不相关 → 联网搜索。
-        #   挂了图时不走联网(图本身是内容,搜「图片/内容」只会搜出 OCR 工具),让视觉模型看图答。
-        kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
-        if kb_irrelevant and tavily_key and not user_images:
-            try:
-                web_results = await asyncio.to_thread(
-                    search_web,
-                    search_query,
-                    api_key=tavily_key,
-                    fallback_base_url=llm.base_url,
-                    fallback_api_key=llm.api_key,
-                )
-            except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径,不让整轮失败
-                web_results = []
+        web_results = await _web_precheck(rnd)
         used_web = bool(web_results)
         # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图);须在 gen() 闭包捕获 messages 前完成
-        hit_images = [] if used_web else await _load_hit_images(session, owner_id, kb_hits)
-        attach_images(messages, user_images + hit_images)
+        hit_images = [] if used_web else await _load_hit_images(session, owner_id, rnd.kb_hits)
+        attach_images(rnd.messages, rnd.user_images + hit_images)
 
-    user_msg = await repo.add_message(
-        qa_session.id, role="user", content=payload.question, llm_content=llm_user_text
+    user_msg = await rnd.repo.add_message(
+        rnd.qa_session.id, role="user", content=payload.question, llm_content=rnd.llm_user_text
     )
     await session.commit()  # 轮次开始落库;回答完成后再 commit 助手消息
     user_out = _message_out(user_msg)
 
     async def gen():
-        nonlocal used_web, web_results  # agent 回落在流内现算决策树前置时改写
-        accumulated: list[str] = []
-        usage_event: dict | None = None
-        trace_steps: list[dict] | None = None
+        nonlocal web_results  # agent 回落在流内现算决策树前置时改写
         try:
             yield _sse(
                 "meta",
                 {
-                    "session_id": qa_session.id,
-                    "session_title": qa_session.title,
-                    "search_query": search_query,
+                    "session_id": rnd.qa_session.id,
+                    "session_title": rnd.qa_session.title,
+                    "search_query": rnd.search_query,
                     "used_web": used_web,
                     # 本轮意图是否 agent loop(ADR 0010;agent 模式下真值随 done 事件,
                     # meta 时点尚未发生——used_web/出处以 done 的 citations 为准)
-                    "agent": agent_enabled,
-                    "images_attached": len(hit_images) + len(user_images),  # 命中图+附件图
+                    "agent": rnd.agent_enabled,
+                    "images_attached": len(hit_images) + len(rnd.user_images),  # 命中图+附件图
                     "model": llm.model,  # 本次回答用的模型,前端状态行显示
                     # 检索/改写花了多久(秒):前端据此区分「在检索」还是「在等模型」
                     "prepare_ms": int(round((time.perf_counter() - started) * 1000)),
@@ -743,23 +921,23 @@ async def chat_stream_endpoint(
                 },
             )
             agent_qa: QaResult | None = None
-            if agent_enabled:
+            if rnd.agent_enabled:
                 # agent 路径:loop 在流内跑——最终答案边生成边放行(流式,主人验收反馈),
                 # 工具轮发 status;[NO_KB] 标记由首行门扣下、兜底文本整段补发
                 async for ev in run_agent_iter(
                     payload.question,
-                    kb_hits,
+                    rnd.kb_hits,
                     retrieve=retrieve,
                     client=llm,
                     owner_id=owner_id,
                     top_k=payload.top_k,
-                    history=history,
-                    ref_notes=ref_notes,
-                    attachments=attachments,
-                    digest_summaries=digest_summaries,
-                    images=user_images + hit_images,
-                    has_user_images=bool(user_images),
-                    tavily_key=tavily_key,
+                    history=rnd.history,
+                    ref_notes=rnd.ref_notes,
+                    attachments=rnd.attachments,
+                    digest_summaries=rnd.digest_summaries,
+                    images=rnd.user_images + hit_images,
+                    has_user_images=bool(rnd.user_images),
+                    tavily_key=rnd.tavily_key,
                     fallback_base_url=llm.base_url,
                     fallback_api_key=llm.api_key,
                     streaming=True,
@@ -767,204 +945,35 @@ async def chat_stream_endpoint(
                     if ev["type"] == "status":
                         yield _sse("status", {"text": ev["text"]})
                     elif ev["type"] == "delta":
-                        accumulated.append(ev["text"])
                         yield _sse("delta", {"text": ev["text"]})
                     elif ev["type"] == "result":
                         agent_qa = ev["qa"]
+            fields: dict = {}
             if agent_qa is not None:
-                used_web = bool((agent_qa.meta.get("agent") or {}).get("used_web"))
-                answer_text = agent_qa.answer
-                citations = agent_qa.citations
-                cost_tokens = agent_qa.cost_tokens or 0
-                model_name = agent_qa.model or llm.model
-                cache_hit = agent_qa.prompt_cache_hit_tokens or 0
-                cache_miss = agent_qa.prompt_cache_miss_tokens or 0
-                trace_steps = (agent_qa.meta.get("agent") or {}).get("steps")
-            if agent_qa is None:
-                # agent 关/agent 回落 → 决策树;回落时上面已现算 web_results/附图
-                if agent_enabled:
-                    # agent 回落(预算耗尽/LLM 失败):gen 内现算决策树前置(4.5 预检 + 附图),
-                    # 结果写进 web_results/used_web —— 下面统一的 web/库内两分支照常消费,
-                    # 最坏情况 = 现状(不复制分支,只预置数据)
-                    kb_irrelevant = not kb_hits or not _has_relevant_hit(kb_hits, search_query)
-                    if kb_irrelevant and tavily_key and not user_images:
-                        fb_meta: dict = {}  # 两级链降级留痕(见 websearch.search_web)
-                        try:
-                            web_results = await asyncio.to_thread(
-                                search_web,
-                                search_query,
-                                api_key=tavily_key,
-                                fallback_base_url=llm.base_url,
-                                fallback_api_key=llm.api_key,
-                                meta_out=fb_meta,
-                            )
-                        except Exception:  # noqa: BLE001 —— 搜索失败走「没找到」口径
-                            web_results = []
-                        if fb_meta.get("fallback"):
-                            yield _sse(
-                                "status", {"text": f"联网搜索降级:{fb_meta['fallback']}"}
-                            )
-                    attach_images(messages, user_images + hit_images)
-                    used_web = bool(web_results)
-                if web_results:
-                    # 联网兜底走非流式回答(web 上下文结构不同),整段作为一帧 delta 下发
-                    qa = await asyncio.to_thread(
-                        answer_web,
-                        payload.question,
-                        web_results,
-                        history=history,
-                        client=llm,
-                        ref_notes=ref_notes,
-                        attachments=attachments,
-                        digest_summaries=digest_summaries,
-                        images=user_images,
-                    )
-                    accumulated.append(qa.answer)
-                    yield _sse("delta", {"text": qa.answer})
-                    answer_text = qa.answer
-                    citations = build_web_citations(web_results, answer_text)
-                    cost_tokens = qa.cost_tokens or 0
-                    model_name = qa.model or llm.model
-                    cache_hit, cache_miss = (
-                        qa.prompt_cache_hit_tokens or 0,
-                        qa.prompt_cache_miss_tokens or 0,
-                    )
-                else:
-                    iterator = llm.chat_stream(messages, max_tokens=3000)
-                    marker = False  # [NO_KB] = 笔记答不了,LLM 会给自身知识回答(不外发)
-                    buffered = ""
-                    streaming = False
-                    try:
-                        while True:
-                            # 同步生成器逐段推进放线程里,不阻塞事件循环
-                            event = await asyncio.to_thread(next, iterator, None)
-                            if event is None:
-                                break
-                            if event["type"] == "usage":
-                                usage_event = event
-                                continue
-                            if event["type"] != "content":
-                                continue
-                            piece = event["text"]
-                            if marker:
-                                buffered += piece  # 静默收完自身知识回答
-                                continue
-                            if streaming:
-                                accumulated.append(piece)
-                                yield _sse("delta", {"text": piece})
-                                continue
-                            buffered += piece
-                            combined = buffered.lstrip()
-                            if combined.startswith("[NO_KB]"):
-                                marker = True
-                                continue
-                            # 缓冲到能判定首行再放行,防止标记漏给用户
-                            if "\n" in buffered or (
-                                len(combined) >= 8 and not combined.startswith("[")
-                            ):
-                                streaming = True
-                                accumulated.append(buffered)
-                                yield _sse("delta", {"text": buffered})
-                                buffered = ""
-                            # else: 继续缓冲直到可判定
-                    finally:
-                        close = getattr(iterator, "close", None)
-                        if close is not None:
-                            close()
+                fields = _agent_result_fields(rnd, agent_qa)
+            else:
+                if rnd.agent_enabled:
+                    # agent 回落(预算耗尽/LLM 失败):gen 内现算决策树前置(预检 + 附图),
+                    # 结果写进 web_results —— 共享决策树照常消费,最坏情况 = 现状
+                    fb_meta: dict = {}  # 两级链降级留痕(见 websearch.search_web)
+                    web_results = await _web_precheck(rnd, meta_out=fb_meta)
+                    if fb_meta.get("fallback"):
+                        yield _sse("status", {"text": f"联网搜索降级:{fb_meta['fallback']}"})
+                    attach_images(rnd.messages, rnd.user_images + hit_images)
+                # 共享决策树回答段:status(降级留痕)/delta(答案增量)映射成 SSE,取终事件 result
+                async for ev in _decision_tree_answer(
+                    rnd,
+                    web_results=web_results,
+                    kb_answer=_stream_kb_answer(rnd),
+                ):
+                    if ev["type"] == "status":
+                        yield _sse("status", {"text": ev["text"]})
+                    elif ev["type"] == "delta":
+                        yield _sse("delta", {"text": ev["text"]})
+                    elif ev["type"] == "result":
+                        fields = ev
 
-                    if marker:
-                        # 二段兜底:联网搜;没配 Tavily 就用 LLM 已给出的自身知识回答。
-                        #   挂了图时不走联网(图本身是内容),也直接用 body,不加「笔记库没有」前缀。
-                        body = buffered.removeprefix("[NO_KB]").strip()
-                        web_results2: list[dict[str, str]] = []
-                        if tavily_key and not user_images:
-                            fb_meta2: dict = {}  # 两级链降级留痕(见 websearch.search_web)
-                            try:
-                                web_results2 = await asyncio.to_thread(
-                                    search_web,
-                                    search_query,
-                                    api_key=tavily_key,
-                                    fallback_base_url=llm.base_url,
-                                    fallback_api_key=llm.api_key,
-                                    meta_out=fb_meta2,
-                                )
-                            except Exception:  # noqa: BLE001 —— 搜索失败走自身知识口径
-                                web_results2 = []
-                            if fb_meta2.get("fallback"):
-                                yield _sse(
-                                    "status", {"text": f"联网搜索降级:{fb_meta2['fallback']}"}
-                                )
-                        if web_results2:
-                            used_web = True
-                            qa = await asyncio.to_thread(
-                                answer_web,
-                                payload.question,
-                                web_results2,
-                                history=history,
-                                client=llm,
-                                ref_notes=ref_notes,
-                                attachments=attachments,
-                                digest_summaries=digest_summaries,
-                                images=user_images,
-                            )
-                            answer_text = qa.answer
-                            citations = build_web_citations(web_results2, answer_text)
-                            cost_tokens = qa.cost_tokens or 0
-                            model_name = qa.model or llm.model
-                            cache_hit, cache_miss = (
-                                qa.prompt_cache_hit_tokens or 0,
-                                qa.prompt_cache_miss_tokens or 0,
-                            )
-                            yield _sse("delta", {"text": answer_text})
-                        else:
-                            answer_text = (
-                                body
-                                if user_images
-                                else "（笔记库里没有相关内容，以下用 AI 自身的知识回答）\n\n" + body
-                            )
-                            citations = []
-                            cost_tokens = (usage_event or {}).get("total_tokens") or 0
-                            model_name = llm.model
-                            cache_hit = (usage_event or {}).get("prompt_cache_hit_tokens") or 0
-                            cache_miss = (usage_event or {}).get("prompt_cache_miss_tokens") or 0
-                            yield _sse("delta", {"text": answer_text})
-                    else:
-                        if buffered:  # 短回答没到放行阈值,流结束后整段放行
-                            accumulated.append(buffered)
-                            yield _sse("delta", {"text": buffered})
-                        answer_text = "".join(accumulated).strip() or _EMPTY_ANSWER
-                        citations = build_citations(kb_hits, answer_text)
-                        cost_tokens = (usage_event or {}).get("total_tokens") or 0
-                        model_name = llm.model
-                        cache_hit = (usage_event or {}).get("prompt_cache_hit_tokens") or 0
-                        cache_miss = (usage_event or {}).get("prompt_cache_miss_tokens") or 0
-
-            assistant_msg = await repo.add_message(
-                qa_session.id,
-                role="assistant",
-                content=answer_text,
-                citations=[c.model_dump() for c in citations],
-                model=model_name,
-                cost_tokens=cost_tokens,
-                cache_hit_tokens=cache_hit,
-                cache_miss_tokens=cache_miss,
-                trace=trace_steps,
-            )
-            await session.commit()
-            # 冻结分段摘要:近窗超阈值则异步冻结(fire-and-forget;失败静默)。
-            if sum(estimate_tokens(m["content"]) for m in history) > DIGEST_TRIGGER_TOKENS:
-                freeze = window_msgs[:DIGEST_FREEZE_BATCH]
-                try:
-                    from app.worker.worker import enqueue_digest
-
-                    await enqueue_digest(
-                        qa_session.id,
-                        owner_id=owner_id,
-                        start_msg_id=freeze[0].id,
-                        end_msg_id=freeze[-1].id,
-                    )
-                except Exception:  # noqa: BLE001
-                    pass
+            assistant_msg = await _persist_assistant_round(rnd, session, fields=fields)
             yield _sse(
                 "done",
                 {
