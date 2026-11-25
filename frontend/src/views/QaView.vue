@@ -78,6 +78,17 @@ const qaInputEl = ref<HTMLInputElement | null>(null)
 function focusQaInput(): void {
   qaInputEl.value?.focus()
 }
+
+/**
+ * 输入框里的「/」钮:等同于用户手打一个斜杠 —— 写入同一个 input,
+ * 再走 updateSlash 把菜单打开,后续键盘路由与手打完全一致。
+ * 草稿不用管:input 的 watch 已有「/ 开头一律不落盘」的值判据。
+ */
+function openSlashFromButton(): void {
+  input.value = '/'
+  updateSlash()
+  focusQaInput()
+}
 const loadingSession = ref(false)
 /** 交互式存笔记:主题计划(非 null 时输入框区域变成选项卡) */
 const notePlan = ref<NotePlanResponse | null>(null)
@@ -1072,15 +1083,11 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
       </aside>
 
       <div class="chat-main" @dragover.prevent @drop.prevent="onChatDrop">
-        <!-- 新对话空态:不再是一大片空白,三行把能做的事说清楚 -->
+        <!-- 新对话空态:只留一句「问什么」。操作入口不进这里 ——
+             命令菜单靠输入框里的「/」钮、附件靠 📎,都在下面看得见 -->
         <div v-if="messages.length === 0 && !loadingSession" class="qa-empty">
           <p class="qa-empty-title">问点什么吧</p>
           <p class="qa-empty-sub">关于笔记库的问题,或任何想整理的资料</p>
-          <ul class="qa-empty-tips">
-            <li><b>/检索</b>找一篇笔记引用到提问</li>
-            <li><b>📎</b>挂文件或截图给 AI 看,不入库</li>
-            <li><b>/</b>唤起全部命令(新对话 / 存为笔记 / 导出)</li>
-          </ul>
         </div>
         <div v-else ref="msgListEl" class="msg-weave">
           <!-- 单列对话流:问答同列按时间下行;问右对齐(朱砂缘),答通栏文章式 -->
@@ -1338,12 +1345,24 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
                 </button>
               </span>
             </div>
+            <!-- 命令菜单入口:空输入时露出的「/」钮。点了等于手打一个 /,
+                 菜单随即弹出 —— 命令是「看得见的东西」,不用一行提示教怎么打字 -->
+            <button
+              v-if="input === '' && !sending"
+              class="slash-trigger"
+              type="button"
+              title="命令"
+              aria-label="打开命令菜单"
+              @click.stop="openSlashFromButton"
+            >
+              /
+            </button>
             <input
               ref="qaInputEl"
               v-model="input"
               class="qa-input"
               type="text"
-              :placeholder="notePicker ? '输入标题筛选,点击上方笔记引用(Esc 退出)' : '问点什么…(输入 / 唤起命令)'"
+              :placeholder="notePicker ? '输入标题筛选,点击上方笔记引用(Esc 退出)' : '问点什么…'"
               aria-label="问题"
               :disabled="sending"
               @input="updateSlash(); onPickerInput()"
@@ -1638,22 +1657,6 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
   font-size: 13.5px;
 }
 
-.qa-empty-tips {
-  display: flex;
-  margin-top: 16px;
-  list-style: none;
-  flex-direction: column;
-  gap: 8px;
-  color: var(--ink-3);
-  font-size: 13px;
-}
-
-.qa-empty-tips b {
-  margin-right: 6px;
-  color: var(--accent-ink);
-  font-weight: 600;
-}
-
 /* 对话列限宽居中:长答案行宽 ~760px 是阅读舒适区,列在侧栏之外的剩余空间里居中,
    两侧对称留白(ChatGPT 式);空态/输入框/缓存行都随列同宽 */
 .chat-main {
@@ -1922,6 +1925,37 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
   font-family: inherit;
   font-size: 14px;
   outline: none;
+}
+
+/* 命令入口:空输入时露出的「/」钮,放在输入文字前。形如一枚小墨印,
+   悬停转黛青 —— 它替代了原先空态里那三行「教你怎么打字」的说明 */
+.slash-trigger {
+  display: flex;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--ink-2);
+  cursor: pointer;
+  font-family: 'JetBrains Mono', Consolas, monospace;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease,
+    background 0.15s ease;
+}
+
+.slash-trigger:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
 }
 
 .qa-input::placeholder {
