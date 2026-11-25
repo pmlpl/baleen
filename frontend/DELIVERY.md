@@ -900,3 +900,37 @@ Playwright 探针（真后端 8000 + 真库，`--no-proxy-server`），**24 项�
 - 右键会吃掉整行的浏览器原生菜单（行内没有需要「在新标签打开」的链接，可接受）
 - 行内编辑时侧栏只有 248px，长标题看不全（通常改的是前缀）
 - 触屏无右键：目前**没有**兜底入口（主人拍板只允许右键）。若将来要在触屏用，需要另加长按识别。
+
+## 2026-11-25 · 纸篓改后端（软删除）+ localStorage 方案退役 · 执行者:ZCode
+
+**为什么做**：承接后端 v37（`notes.status='archived'` 软删除 + 30 天清理）。旧前端纸篓把「哪些笔记在篓里」存在 `localStorage['baleen-trash-ids']`——换浏览器即空、不同账号共用一个 key 会互相清空，且检索仍能命中纸篓里的笔记（因为后端一行没动）。
+
+### 产物
+
+| 文件 | 改动 |
+|---|---|
+| `src/api/notes.ts` | `deleteNote` 注释改为「移入纸篓」；新增 `TrashItem`/`TrashPage`/`listTrash`/`restoreNote`/`purgeNote` |
+| `src/stores/trash.ts` | **重写**：只保留纯视觉的 `flying`（飞纸动画）+ `count`（角标数量缓存，`refreshCount()` 从后端同步）。不再存 id 清单、不碰 localStorage |
+| `src/components/BasketModal.vue` | 改查 `GET /notes/trash`；每条显示「剩 N 天」（3 天内转朱砂，0 天说「今天到期」）；放回/放回全部/彻底删除都走真 API；提示文案改为「纸篓对当前账号生效（换浏览器也在）；移入满 30 天后自动彻底删除」 |
+| `src/views/LibraryView.vue` | `visibleNotes` 不再本地过滤（服务端列表本来就只返回 active）；批量删除改为逐篇 `deleteNote` + `Promise.allSettled`，失败如实报数；`onActivated` 同步纸篓数量 |
+| `src/App.vue` | 拖书入篓改为调 `deleteNote`；角标用 `trash.count`；新增 `basketError` 提示（卡片飞走了但后端没记账时必须让人知道）；挂载/切页/关弹窗三处同步 count |
+| `src/views/QaView.vue` | 删掉「篓」引用标——v37 后检索过滤 `status='active'`，纸篓里的笔记不可能被命中，该标记已无意义 |
+
+### 关键决策
+
+1. **store 语义收窄**：从「纸篓数据源」变成「纯视觉状态 + 数量缓存」。清单归后端（`BasketModal` 自己拉），避免两处真源。
+2. **书架不再本地过滤**：后端 `/api/notes` 只返回 `active`，本地再滤一遍是重复真源（v37 前是必要的，现在不是）。
+3. **飞纸先飞完再发请求**：并行会让「动画飞完但服务端失败」不可见。失败时 `basketError` 明确告知（卡片已从书架消失但后端没记账，刷新会回来）。
+4. **「篓」标下线**：不是偷懒——它存在的理由是「篓里的笔记还能被检索命中」，而这个前提在 v37 被消除了。
+
+### 怎么验的
+
+- **UI 端到端 10 项全绿**（真后端+真库）：`GET /notes/trash` 可用、`retention_days=30`、书架与纸篓**无交集**、弹窗提示改为账号级口径、旧文案「只记在本浏览器」已消失、每条显示剩余天数、`localStorage` 纸篓键已不存在、零 JS 报错
+- **真实写路径 15 项全绿**（造临时笔记走完整生命周期：软删→书架隐藏→详情 404→纸篓含它+剩 30 天→放回→书架恢复+archived_at 清空→再软删→purge→物理消失；探针收尾已删净）
+- `pnpm exec vue-tsc --noEmit` → 0 错误；后端 708 passed
+
+### 已知限制
+
+- 纸篓弹窗一次最多拉 100 条（`listTrash(100)`），超出的分页未做——当前纸篓规模远小于这个数。
+- 「放回全部」是逐篇串行请求，几十篇时会慢几秒；没有批量端点（后端未提供）。
+- 拖书入篓失败时卡片已从书架消失（乐观视觉），`basketError` 告知后需手动刷新才能看到它回来。

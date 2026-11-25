@@ -47,6 +47,9 @@ class Note(Base):
     )
     quality: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="'active'", nullable=False)
+    # 纸篓时间戳(0019):status='archived' 时记录移入时刻,30 天自动彻底删的计时起点。
+    # 只对 archived 行有值 —— 所有查询本来就已经过滤 status='active',软删后自动不可见。
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

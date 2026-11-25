@@ -13,7 +13,7 @@ import type { Directive } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { listNotes } from '../api/notes'
+import { deleteNote, listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
 import { createSource, getSource, MAX_UPLOAD_BYTES } from '../api/sources'
 import type { SourceDetail } from '../api/sources'
@@ -34,20 +34,17 @@ const page = ref(1)
 const loading = ref(false)
 const errorText = ref('')
 
-/** 纸篓(stores/trash,只记本浏览器):入篓的笔记书架隐藏、可放回,纸篓弹窗里彻底删除 */
-const trash = useTrashStore()
-/** 书架真正可见 = 服务端列表滤掉已入篓的 */
-const visibleNotes = computed(() => notes.value.filter((n) => !trash.has(n.id)))
 /**
- * 展示总数:入篓的后端还在,只是书架不显示,从 total 里扣掉。
+ * 纸篓(store 只管视觉:飞纸动画期间卡片淡出 + 角标数量缓存)。
  *
- * 只在没有搜索词时扣 —— 那时服务端 total 是全库条数,减去篓里数量是精确的。
- * 有搜索词时 total 已经是「命中条数」,而 trash.ids 是全量篓内容,硬减会算出
- * 「命中 2 条、篓里 3 本 → 0」(实测显示 1–2 / 0),只能用服务端数字。
+ * v37 起「哪些笔记在纸篓里」由后端决定(notes.status='archived'),而服务端列表
+ * 本来就只返回 active —— 所以书架**不需要再做任何本地过滤**:
+ * 移入纸篓后再 load(),那篇自然不在了。
  */
-const visibleTotal = computed(() =>
-  appliedKeyword.value === '' ? Math.max(0, total.value - trash.ids.length) : total.value,
-)
+const trash = useTrashStore()
+/** 列表与计数直接用服务端结果(v37:archived 不会出现在 /api/notes 里) */
+const visibleNotes = computed(() => notes.value)
+const visibleTotal = computed(() => total.value)
 
 // ---------------- 双视图:书卡管氛围,列表管查找 ----------------
 
@@ -126,8 +123,10 @@ onMounted(() => window.addEventListener('focus', refreshOnFocus))
 onBeforeUnmount(() => window.removeEventListener('focus', refreshOnFocus))
 // keep-alive 缓存下,从详情页删完/改完跳回书架时 onMounted 不再触发 → 列表会 stale。
 // onActivated 兜底:切回书架时自动校准(首次激活跳过,避免与 watch immediate 重复加载)。
+// 同时刷纸篓数量 —— 在纸篓弹窗里放回/彻底删之后切回来,角标要跟上。
 let activatedOnce = false
 onActivated(() => {
+  void trash.refreshCount()
   if (activatedOnce) void load()
   activatedOnce = true
 })
@@ -241,9 +240,19 @@ async function trashSelected(): Promise<void> {
         )
       }, i * 70)
     })
-    // 等最后一张飞到位(错峰延迟 + 飞行时长)再统一入账
+    // 等最后一张飞到位(错峰延迟 + 飞行时长),再真正调后端
     await new Promise((resolve) => setTimeout(resolve, ids.length * 70 + 620))
-    trash.add(ids)
+
+    // 逐篇移入纸篓(软删除)。用 allSettled:一篇失败不该中断其余,
+    // 但要把失败如实报出来 —— 否则卡片飞走了、后端没记账,刷新又全回来。
+    const results = await Promise.allSettled(ids.map((id) => deleteNote(id)))
+    const failed = ids.filter((_id, i) => results[i]?.status === 'rejected')
+    if (failed.length > 0) {
+      errorText.value = `有 ${failed.length} 篇没能移入纸篓,请重试(其余 ${ids.length - failed.length} 篇已移入)`
+    }
+    // 入库成功后重新拉列表:服务端已排除 archived,不必手动过滤
+    await load().catch(() => undefined)
+    await trash.refreshCount()
   } finally {
     for (const id of ids) trash.endFly(id)
     selectedIds.value.clear()
@@ -426,9 +435,9 @@ function onShelfDrop(event: DragEvent): void {
         {{
           loading
             ? '查询中…'
-            : trash.ids.length === 0
-              ? `${rangeStart}–${rangeEnd} / ${total}`
-              : `${rangeStart}–${rangeEnd} / ${visibleTotal} · 纸篓 ${trash.ids.length}`
+            : trash.count === 0
+              ? `${rangeStart}–${rangeEnd} / ${visibleTotal}`
+              : `${rangeStart}–${rangeEnd} / ${visibleTotal} · 纸篓 ${trash.count}`
         }}
       </span>
       <!-- 视图切换:书卡管氛围,列表管查找 -->
@@ -635,8 +644,8 @@ function onShelfDrop(event: DragEvent): void {
       @drop.prevent="onShelfDrop"
     >
       {{ appliedKeyword === ''
-        ? trash.ids.length > 0
-          ? `书架空了——纸篓里还有 ${trash.ids.length} 本。`
+        ? trash.count > 0
+          ? `书架空了——纸篓里还有 ${trash.count} 本。`
           : '书架还是空的——把文件拖到这里即可导入。'
         : `没有标题匹配「${appliedKeyword}」的笔记。` }}
     </p>

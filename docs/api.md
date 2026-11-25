@@ -1,4 +1,4 @@
-# API 契约 v36
+# API 契约 v37
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -293,13 +293,75 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 - `404` = 没这条笔记；`422` = 两个都缺 / title 或 markdown 空白
 - 首次调用会加载嵌入模型（bge，冷启动数秒），之后热态毫秒级
 
-### `DELETE /api/notes/{note_id}`（删除笔记，2026-11-02 v14）
+### 笔记删除与纸篓（**v37 改版：软删除**）
 
-- **真删除，不是软删**：删 note 行，chunks/embeddings 由 DB 外键级联一并清空（检索立刻不再命中）；
-- **source 连带**：该笔记的 source 行在没有其他笔记引用时一并删除，原文件 blob 从磁盘清除
-  （best-effort，失败只记日志）；`sources:notes = 1:N`，还有别的笔记挂着就只删笔记；
-- `204` = 删成；`404` = 没这条笔记（owner 隔离别人的也是 404，与详情口径一致）；
+> **v37 语义变更**：`DELETE /api/notes/{id}` 从「真删除」改成「**移入纸篓**」（软删除）。
+> 依据是 ADR 0003 §3⑤ 原本的设计（「软删除 `archived` + 检索过滤 `status='active'` +
+> 定时清理」）—— 字段与过滤早已就位，只是当年没接上。真删除挪到 `/purge`。
+
+#### `DELETE /api/notes/{note_id}` — 移入纸篓（软删除）
+
+- 只改 `status='archived'` + `archived_at=now()`，**不动 chunks/embeddings/blob**；
+- 所有查询本来就过滤 `status='active'` → 移入后立刻从书架与**检索**里消失；
+- 因为数据完好，放回是零成本的；
+- `204` = 移入成功；`404` = 没这条笔记 / 别人的 / **已在纸篓**（统一 404，不泄漏状态）；
+- 保留期 **30 天**，从 **`archived_at`（移入那一刻）**起算，到期由 arq 每日 03:10 彻底删除。
+
+#### `GET /api/notes/trash` — 纸篓清单
+
+```json
+{
+  "total": 2,
+  "retention_days": 30,
+  "items": [
+    {
+      "id": 9354,
+      "title": "零代码看懂 CUDA",
+      "quality": "core",
+      "source_id": 8837,
+      "chunk_count": 31,
+      "archived_at": "2026-11-25T15:03:06.440334+00:00",
+      "expires_at": "2026-12-25T15:03:06.440334+00:00",
+      "days_left": 30
+    }
+  ]
+}
+```
+
+- 按 `archived_at DESC` 排序（最近丢的在上）；`limit` 1–100（默认 20）、`offset` ≥ 0；
+- `days_left` **由后端向上取整算好**（刚移入是 30 而不是 29），前端直接显示，不自己碰时区；
+- `retention_days` 随响应下发，前端不写死 30。
+
+#### `POST /api/notes/{note_id}/restore` — 放回书架
+
+- `status='active'` + `archived_at=NULL`，返回 `NoteListItem`（与列表项同形）；
+- `200` = 放回成功；`404` = 纸篓里没有这篇（含别人的）。
+
+#### `DELETE /api/notes/{note_id}/purge` — 彻底删除
+
+- **不可恢复**：删 note 行，chunks/embeddings 由 DB 外键级联清空；
+- **source 连带**：该笔记的 source 行在没有其他笔记引用时一并删除（`count_notes_for` **含 archived**——
+  纸篓里还有别的笔记引用就不能删 source），原文件 blob 提交后从磁盘清（best-effort，失败只记日志）；
+- **只认 `status='archived'` 的行**：防止用这个端点绕过软删直接毁一篇 active 笔记 → active 调它得 `404`；
+- `204` = 删成；`404` = 纸篓里没有这篇。
 - 问答消息里引用过这篇笔记的角标此后点开是 404，引用文字本身不受影响。
+
+#### 30 天自动清理（arq cron）
+
+`WorkerSettings.cron_jobs` 每天 `03:10` 跑 `purge_expired_trash`：跨 owner 扫
+`status='archived' AND archived_at < now() - 30 days`，删除行 + 清 orphan source/blob。
+⚠️ **cron 只在 worker 存活时触发**——worker 没起 = 自动清理不生效（不报错，只是不删）。
+
+#### 重导去重的连带调整（`_reset_stale_done_job`）
+
+软删后 source 行不再随之删除，于是「删了再重导同一文件」会命中去重（旧 done job），
+用户看到「之前导入过，直接复用」但书架空空。判据改为三分类：
+
+| 该 source 下 | 重导行为 |
+|---|---|
+| 有 `active` 笔记 | 真去重（复用） |
+| **无 active 但有 `archived`** | **旧 done 是 stale → 重置 queued 重新入队** |
+| 一条笔记都没有 | 复用旧结论（G0/G1 曾拒收 / 空产出） |
 
 ---
 
@@ -575,6 +637,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-25 | v37 | **笔记纸篓（软删除）**：§3 `DELETE /api/notes/{id}` 从真删除改为**移入纸篓**（`status='archived'` + `archived_at`），依据 ADR 0003 §3⑤ 原设计（软删+检索过滤+定时清理，字段与过滤早已就位但从未接上）。新增 `GET /api/notes/trash`（清单带 `archived_at`/`expires_at`/`days_left`，`retention_days=30` 随响应下发，`days_left` 后端向上取整）、`POST /api/notes/{id}/restore`（放回，零成本）、`DELETE /api/notes/{id}/purge`（彻底删除，只认 archived 防绕过）。保留期 **30 天**，从 `archived_at`（移入那一刻）起算，arq cron 每日 03:10 清理（`purge_expired_trash`；⚠️ 依赖 worker 存活）。迁移 **0019** `notes.archived_at` + 局部索引（`WHERE status='archived'`）。连带：`_reset_stale_done_job` 改三分类判据（无 active 但有 archived → 重导必须重跑，否则「删了再导入」被静默去重）。前端退役 localStorage 纸篓（旧方案换浏览器即空、不同账号共用同一 key），改查后端；「篓」引用标随之下线（检索已不命中 archived）。**背景（主人 2026-11-25 三条诉求）**：纸篓应 30 天自动删除、不同用户不互通、换浏览器纸篓还在 |
 | 2026-11-25 | v36 | **会话重命名**：§5 会话管理新增 `PATCH /api/qa/sessions/{id}`——body `{"title"}`（1–30 字，剥首尾空白；长度与首问标题同口径 `TITLE_CHARS=30`），返回 `{id,title,created_at}`；不存在/非本人会话 404，空白 422。**不刷 `updated_at`**——「最近活跃」只认落消息，重命名不算活跃，列表位次不动。**CORS `allow_methods` 补 `PATCH`**（B5 显式清单的首个 PATCH 路由，分域部署时预检会拒，开发态 vite 同源看不出；`test_cors.py` 同步——清单外拒绝例改 TRACE）。配套前端（UI 设计阶段）：侧栏会话行右键菜单（删除/导出/重命名）+ 行内编辑重命名 |
 | 2026-11-22 | v35 | **转写治本三件套**（spike 实测拍板，eval/runs/transcribe_spike_2026-11-22.md）：①whisper 模型 small→**large-v3-turbo**（专名原生准确率接近 large-v3、速度等同 small、显存 Δ2.3GB）+**language=None 自动检测**（zh 强制对英文视频是灾难放大器——8093 专名错字 ≥20 的根源）；模型文件预置在仓库根之外的 models/ 目录（.env `WHISPER_MODEL_DIR` 指路，生产禁运行时在线下载——spike 在线 load 63min 教训；未配置退回 hub 名）。②worker 管线转写后、organizer 前插 **LLM 自校正 pass**：盲修疑似错听的专名/术语（零词典宁缺毋滥，只出修改清单程序化应用），修正留痕写 `parse_meta.llm_transcript_fix`；LLM 失败降级用原转写（凡失败必留痕），输入 3 万字符封顶，max_tokens 16000（推理网关 8000 全烧 reasoning 教训）；client 可注入可 mock。③`video_log` 新 stage「转写校正中…」；pipeline video_keep 白名单放行新键。测试 +7（turbo/None 参数断言、校正应用/降级/skipped/封顶、留痕 merge）；真链路验证留给下一批喂料 |
 | 2026-11-20 | v34 | **agent 流式输出**（主人验收反馈：「我希望前端流式输出AI内容，而不是从『思考中』之后直接跳出整段内容」）：①`chat_stream` 加 `tools`/`tool_choice`/`timeout` 透传 + `tool_calls` 流式分片拼装（流末事件，与非流式 `ChatResult.tool_calls` 同形）。②`agent.py` 重构为 `run_agent_iter` 异步生成器：`streaming=True` 产 `status`/`delta` 事件、[NO_KB] 首行门扣下标记答案、流式不做假引用修复轮（已放行文本无法收回——幻觉编号只从 citations 剔除，死徽章与决策树流式同语义）；`run_agent` 为薄包装，非流式行为不变（含修复轮）。③流式端点 agent loop 移入 `gen()`：事件序 `meta → status* → delta* → done`，最终答案**逐段放行**（多帧 delta），工具轮发 status（带检索词）；agent 回落时决策树前置（4.5 预检+附图）gen 内现算，最坏=现状；`meta.agent` 语义改为「本轮是否按 agent 模式跑」。④前端 `qa.ts` 加 `onStatus`；问答页思考行显示工具轮进度。测试 +7（client 3 + iter 4）；真链路实测：直答题 386 帧 delta、换词/转网题 3 条 status + 594 帧 delta |

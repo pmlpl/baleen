@@ -311,18 +311,29 @@ def test_upload_same_file_after_note_delete_enqueues_again(env) -> None:
     note_id = _portal_call(env, finish_and_attach_note)
     assert env.client.delete(f"/api/notes/{note_id}").status_code == 204
 
-    async def source_gone() -> bool:
-        async with env.shared["factory"]() as session:
-            return await Repos(session, 1).sources.get(source_id) is None
+    async def no_active_note() -> bool:
+        """前置:v37 软删后 source 行**保留**,但该 source 下已无 active 笔记。"""
+        from sqlalchemy import func, select
 
-    assert _portal_call(env, source_gone), "前置:删笔记后 source 必须已级联删除"
+        from app.models import Note
+
+        async with env.shared["factory"]() as session:
+            count = await session.scalar(
+                select(func.count())
+                .select_from(Note)
+                .where(Note.source_id == source_id, Note.status == "active")
+            )
+            return int(count or 0) == 0
+
+    assert _portal_call(env, no_active_note), "前置:软删后该 source 下不应再有 active 笔记"
 
     second = _upload(env)
     assert second.status_code == 200, second.text
     body = second.json()
-    assert body["deduped"] is False, "source 已重建,旧 done job 是孤儿,不许报『之前导入过』"
+    # soft-delete 语义:source 还在(复用同一个),但旧 done job 必须被判定为 stale 而重新入队
+    assert body["deduped"] is False, "无可复用笔记时不许报『之前导入过』(哪怕 source 还在)"
     assert body["job_status"] == "queued"
-    assert body["source_id"] != source_id
+    assert body["source_id"] == source_id, "软删不删 source,重导复用同一行"
     assert len(env.calls) == 2, "重导必须真的入队"
     assert env.calls[1]["dedupe_key"] == "import:" + sha, "同内容 dedupe_key 不变"
 

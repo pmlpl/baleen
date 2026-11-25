@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections.abc import Awaitable
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Protocol
 
@@ -94,6 +95,28 @@ class NoteImageOut(BaseModel):
     alt: str
     media: str | None
     src: str | None
+
+
+class TrashItemOut(BaseModel):
+    """纸篓里的一条(软删除的笔记)。"""
+
+    id: int
+    title: str
+    quality: str | None
+    source_id: int | None
+    chunk_count: int
+    # 移入纸篓的时刻(30 天保留期的起点,主人 2026-11-25 拍板「从移入那一刻起算」)
+    archived_at: datetime
+    # 到期自动彻底删除的时刻 = archived_at + retention_days
+    expires_at: datetime
+    # 还剩几天(前端直接显示,不自己算时区);0 = 今天到期
+    days_left: int
+
+
+class TrashPage(BaseModel):
+    total: int
+    retention_days: int
+    items: list[TrashItemOut]
 
 
 class NoteDetailOut(BaseModel):
@@ -284,6 +307,48 @@ def _collect_images(doc: dict | None) -> list[NoteImageOut]:
     return found
 
 
+@router.get("/notes/trash", response_model=TrashPage)
+async def list_trash_notes(
+    session: SessionDep,
+    owner_id: CurrentOwnerDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_LIMIT)] = DEFAULT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> TrashPage:
+    """纸篓清单:按移入时间倒序。
+
+    每条带 ``expires_at`` / ``days_left``,前端直接显示「还剩 N 天」,不自己算时区。
+    """
+    from app.repo.repos import Repos
+
+    repos = Repos(session, owner_id)
+    total, rows = await repos.notes.list_archived(limit=limit, offset=offset)
+    chunk_counts = await LibraryRepo(session, owner_id).parent_chunk_counts(
+        [n.id for n in rows]
+    )
+    now = datetime.now(tz=UTC)
+    items: list[TrashItemOut] = []
+    for note in rows:
+        archived_at = note.archived_at or note.updated_at
+        expires_at = archived_at + timedelta(days=TRASH_RETENTION_DAYS)
+        # 向上取整:刚移入的那一刻要显示「还剩 30 天」而不是 29 ——
+        # timedelta.days 向下取整,30 天差 0.3 秒就成了 29,用户会以为已经过了一天
+        seconds_left = (expires_at - now).total_seconds()
+        days_left = max(0, math.ceil(seconds_left / 86400))
+        items.append(
+            TrashItemOut(
+                id=note.id,
+                title=note.title,
+                quality=note.quality,
+                source_id=note.source_id,
+                chunk_count=chunk_counts.get(note.id, 0),
+                archived_at=archived_at,
+                expires_at=expires_at,
+                days_left=days_left,
+            )
+        )
+    return TrashPage(total=total, retention_days=TRASH_RETENTION_DAYS, items=items)
+
+
 @router.get("/notes/{note_id}", response_model=NoteDetailOut)
 async def get_note_detail(
     note_id: int, session: SessionDep, owner_id: CurrentOwnerDep
@@ -395,28 +460,85 @@ async def get_media(key: str) -> FileResponse:
     return FileResponse(path, media_type=media_mime(key))
 
 
+# 纸篓保留期:移入纸篓起算 30 天,到期由 arq 每日清理彻底删除(主人 2026-11-25 拍板)
+TRASH_RETENTION_DAYS = 30
+
+
 @router.delete("/notes/{note_id}", status_code=204)
 async def delete_note(note_id: int, session: SessionDep, owner_id: CurrentOwnerDep) -> None:
-    """删除笔记(真删除,不是软删):
+    """把笔记移入纸篓(**软删除**,ADR 0003 §3⑤)。
 
-    - chunks/embeddings 由 DB 级联(FK ondelete=CASCADE)一并清空,检索立刻不再命中;
-    - source 行在没有其他笔记引用时一并删除,原文件 blob 从事务提交后从磁盘清除
-      (best-effort,失败只记日志);qa 消息里的引用角标会 404,引用文字不受影响。
+    只改 ``status='archived'`` + ``archived_at=now()``,不动 chunks/embeddings/blob:
+
+    - 所有查询本来就过滤 ``status='active'``,移入后立刻从书架与检索里消失;
+    - 放回是零成本的(``POST /notes/{id}/restore``);
+    - 满 30 天由 arq 每日清理真正删除;也可在纸篓里手动「彻底删除」。
+
+    > v37 之前这里是硬删。改为软删的依据:ADR 0003 ⑤ 原本就这么设计(「软删除 +
+    > 检索过滤 + 定时清理」),只是当时没接上。
     """
-    note = await LibraryRepo(session, owner_id).get_active_note(note_id)
-    if note is None:
-        raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
-
     from app.repo.repos import Repos  # 与 edit_note 同款延迟导入
 
     repos = Repos(session, owner_id)
-    deleted = await repos.notes.delete_active(note_id)
-    if not deleted:  # 极端并发:检查与删除之间被别的请求删了,按 404 口径
+    archived = await repos.notes.archive_active(note_id)
+    if not archived:
+        # 不存在 / 非本人 / 已在纸篓 —— 统一 404 口径(不泄漏「这篇存在过」)
         raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
+    await session.commit()
+
+
+@router.post("/notes/{note_id}/restore", response_model=NoteListItem)
+async def restore_note(
+    note_id: int, session: SessionDep, owner_id: CurrentOwnerDep
+) -> NoteListItem:
+    """把纸篓里的笔记放回书架(``status='active'``、``archived_at=NULL``)。"""
+    from app.repo.repos import Repos
+
+    repos = Repos(session, owner_id)
+    restored = await repos.notes.restore_archived(note_id)
+    if not restored:
+        raise HTTPException(status_code=404, detail=f"纸篓里没有这篇笔记:{note_id}")
+    await session.commit()
+
+    note = await repos.notes.get(note_id)
+    if note is None:  # 极端并发:刚放回就被删了
+        raise HTTPException(status_code=404, detail=f"笔记不存在:{note_id}")
+    counts = await LibraryRepo(session, owner_id).parent_chunk_counts([note.id])
+    return NoteListItem(
+        id=note.id,
+        title=note.title,
+        lang=note.lang,
+        tags=list(note.tags or []),
+        quality=note.quality,
+        status=note.status,
+        source_id=note.source_id,
+        chunk_count=counts.get(note.id, 0),
+        created_at=note.created_at,
+    )
+
+
+@router.delete("/notes/{note_id}/purge", status_code=204)
+async def purge_note(note_id: int, session: SessionDep, owner_id: CurrentOwnerDep) -> None:
+    """彻底删除纸篓里的笔记(**真删除,不可恢复**)。
+
+    - 只认 ``status='archived'`` 的行:防止这个端点被用来绕过软删直接毁一篇 active 笔记;
+    - chunks/embeddings 由 DB 级联一并清空;
+    - source 行在没有其他笔记引用时一并删,原文件 blob 事务提交后从磁盘清(best-effort)。
+    """
+    from app.repo.repos import Repos
+
+    repos = Repos(session, owner_id)
+    note = await repos.notes.get_archived(note_id)
+    if note is None:
+        raise HTTPException(status_code=404, detail=f"纸篓里没有这篇笔记:{note_id}")
+
+    purged = await repos.notes.purge_archived(note_id)
+    if not purged:  # 极端并发:检查与删除之间没了
+        raise HTTPException(status_code=404, detail=f"纸篓里没有这篇笔记:{note_id}")
 
     blob_path: str | None = None
     if note.source_id is not None:
-        # sources:notes = 1:N(ADR 0003);还有别的笔记挂着这个 source 就只删笔记
+        # sources:notes = 1:N(ADR 0003);还有别的笔记(含纸篓里的)挂着就只删笔记
         if await repos.sources.count_notes_for(note.source_id) == 0:
             blob_path = await repos.sources.delete(note.source_id)
     await session.commit()

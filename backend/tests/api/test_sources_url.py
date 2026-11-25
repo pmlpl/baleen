@@ -551,24 +551,31 @@ def test_whisper_reimport_after_note_delete_enqueues_again(env) -> None:
 
     note_id = env.client.portal.call(finish_and_attach_note)
 
-    # 删笔记 → 孤儿 source 连行带 blob 一起删（DELETE 语义）
+    # 删笔记 → v37 软删除:source 行**保留**(笔记进纸篓,可放回),不再级联删
     assert env.client.delete(f"/api/notes/{note_id}").status_code == 204
 
-    async def source_gone() -> bool:
-        from app.repo import Repos
+    async def no_active_note() -> bool:
+        from sqlalchemy import func, select
+
+        from app.models import Note
 
         async with env.shared["factory"]() as session:
-            return await Repos(session, 1).sources.get(source_id) is None
+            count = await session.scalar(
+                select(func.count())
+                .select_from(Note)
+                .where(Note.source_id == source_id, Note.status == "active")
+            )
+            return int(count or 0) == 0
 
-    assert env.client.portal.call(source_gone), "前置:删笔记后 source 必须已级联删除"
+    assert env.client.portal.call(no_active_note), "前置:软删后该 source 下不应再有 active 笔记"
 
-    # 重导同一 URL:必须重新入队，不许 dedupe 假阳性
+    # 重导同一 URL:仍须重新入队,不许 dedupe 假阳性(否则新笔记永远不生成)
     second = _post_url(env, mode="whisper")
     assert second.status_code == 200, second.text
     body = second.json()
-    assert body["deduped"] is False, "source 已重建,旧 done job 是孤儿,不许报『之前导入过』"
+    assert body["deduped"] is False, "无可复用笔记时不许报『之前导入过』(哪怕 source 还在)"
     assert body["job_status"] == "queued"
-    assert body["source_id"] != source_id, "重导必须建新 source(旧行已随笔记删除)"
+    assert body["source_id"] == source_id, "软删不删 source,重导复用同一行"
 
     assert len(env.video_calls) == 2, "重导必须真的入队,否则新 source 永远卡「排队中」"
     assert env.video_calls[1]["source_id"] == body["source_id"]

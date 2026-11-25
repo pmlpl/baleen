@@ -15,10 +15,12 @@ import logging
 import shutil
 import time
 from dataclasses import asdict
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from arq import create_pool, func
+from arq import create_pool, cron, func
 from arq.connections import RedisSettings
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import ROOT_DIR, get_settings
 from app.core.db import session_factory
@@ -605,6 +607,100 @@ async def on_startup(ctx: dict) -> None:
     await asyncio.to_thread(clean_stale_uploads)
 
 
+# ---------------- 纸篓 30 天自动清理(arq cron) ----------------
+
+TRASH_RETENTION_DAYS = 30
+
+
+def _unlink_storage_blob(path: str) -> None:
+    """删原文件 blob(best-effort,失败只记日志)。
+
+    ⚠️ ``path`` 为空时必须跳过:视频 whisper 的 stub source 存的是空串,
+    ``Path("").unlink()`` 会去删**当前工作目录**,Windows 上抛 WinError 5。
+    与 api/library.py 的同名逻辑一致,但这里自带一份 —— 不让 worker 依赖 API 模块。
+    """
+    if not path:
+        return
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError as exc:  # 文件被占用/权限问题:记日志,不影响数据清理
+        log.warning("删除 blob 失败(不影响纸篓清理): %s (%s)", path, exc)
+
+
+async def purge_expired_trash_in(
+    session: AsyncSession, *, now: datetime | None = None
+) -> list[str]:
+    """清理的**核心实现**:在给定 session 里删过期归档笔记,返回要删的 blob 路径。
+
+    抽出来是为了可测:arq 任务自己开 session(提交真落库),测试则用 fixture 的
+    事务内 session 调用它,这样能与 conftest 的「外层事务回滚」隔离共存。
+
+    三阶段顺序不能换:
+    ① **先查**过期行的 (id, owner_id, source_id) —— 删了 note 行就查不到 source_id 了,
+       而判断「source 是否还有笔记引用」正是要靠它;
+    ② 删 note 行(chunks/embeddings 由 FK 级联清);
+    ③ 回到各 owner 作用域清 orphan source,收集 blob 路径。
+
+    调用方负责 commit,并在提交后删 blob 文件。
+    """
+    from sqlalchemy import delete, select
+
+    from app.models import Note
+    from app.repo.repos import Repos
+
+    cutoff = (now or datetime.now(tz=UTC)) - timedelta(days=TRASH_RETENTION_DAYS)
+
+    # ① 先查
+    rows = await session.execute(
+        select(Note.id, Note.owner_id, Note.source_id).where(
+            Note.status == "archived",
+            Note.archived_at.is_not(None),
+            Note.archived_at < cutoff,
+        )
+    )
+    targets = [(int(i), int(o), src) for i, o, src in rows.all()]
+    if not targets:
+        return []
+
+    # ② 删行
+    await session.execute(delete(Note).where(Note.id.in_([t[0] for t in targets])))
+
+    # ③ 按 owner 清 orphan source
+    blobs: list[str] = []
+    by_owner: dict[int, list[int | None]] = {}
+    for _note_id, owner_id, source_id in targets:
+        by_owner.setdefault(owner_id, []).append(source_id)
+
+    for owner_id, source_ids in by_owner.items():
+        repos = Repos(session, owner_id)
+        for source_id in source_ids:
+            if source_id is None:
+                continue
+            # count 含 archived:纸篓里还有别的那篇,source 就不能删
+            if await repos.sources.count_notes_for(source_id) == 0:
+                path = await repos.sources.delete(source_id)
+                if path:
+                    blobs.append(path)
+
+    log.info("纸篓清理:彻底删除 %d 篇满 %d 天的归档笔记", len(targets), TRASH_RETENTION_DAYS)
+    return blobs
+
+
+async def purge_expired_trash(ctx: dict) -> dict[str, int]:
+    """arq cron 入口:每天 03:10 把移入纸篓满 30 天的笔记真正删除。
+
+    计时起点是 ``archived_at``(移入纸篓那一刻),不是笔记创建时间。
+    """
+    async with session_factory() as session:
+        blobs = await purge_expired_trash_in(session)
+        await session.commit()
+
+    for path in blobs:
+        await asyncio.to_thread(_unlink_storage_blob, path)
+
+    return {"purged": len(blobs)} if blobs else {"purged": 0}
+
+
 class WorkerSettings:
     """``cd backend && uv run arq app.worker.worker.WorkerSettings``。
 
@@ -612,12 +708,19 @@ class WorkerSettings:
     no_llm 模式若仍超时说明有死循环,不许靠调大 timeout 糊过去。
     视频提取任务(extract_and_import_video)用 func(timeout=7200) 单独给 2 小时
     (arq 的 enqueue_job 没有 _timeout 参数——传了会被当 kwargs 转发给任务函数直接 TypeError)。
+
+    cron:纸篓过期清理每天 03:10 跑一次(避开导入高峰;只扫 status='archived' 的局部索引)。
+    ⚠️ cron 只在 **worker 存活**时触发 —— worker 没起 = 自动清理不生效(不报错,只是不删)。
     """
 
     functions = [
         import_file,
         func(extract_and_import_video, timeout=7200),
         digest_conversation,
+        purge_expired_trash,
+    ]
+    cron_jobs = [
+        cron(purge_expired_trash, hour=3, minute=10, run_at_startup=False, unique=True),
     ]
     on_startup = on_startup
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

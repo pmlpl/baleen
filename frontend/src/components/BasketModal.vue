@@ -1,54 +1,60 @@
 <script setup lang="ts">
 /**
  * 纸篓弹窗:点右下角纸篓从页面中央弹出(不切页面)。
- * - 背景朦胧遮罩(压暗 + backdrop blur),点遮罩空白处 / Esc / × 收回
- * - 内容:放回 / 放回全部 / 彻底删除(二次确认,走真删除 API)
- * - 纸篓数据在 stores/trash,放回后书架(keep-alive 的 LibraryView)经响应式过滤自动恢复
+ *
+ * v37 起纸篓是**账号级**的后端数据(notes.status='archived'),不再是本浏览器
+ * localStorage 的一份 id 清单 —— 换浏览器/换设备纸篓还在,不同账号互不可见。
+ * 保留期 30 天(从移入那一刻起算),到期由后端 arq 每日清理真正删除。
+ *
+ * 弹窗职责:列清单(带剩余天数)/ 放回 / 放回全部 / 彻底删除(二次确认,真删)。
  */
-import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { deleteNote, getNote } from '../api/notes'
-import { useTrashStore } from '../stores/trash'
+import { listTrash, purgeNote, restoreNote } from '../api/notes'
+import type { TrashItem } from '../api/notes'
 import { confirmDialog } from '../utils/confirm'
 import { spineColor } from '../utils/spine'
 
-interface TrashItem {
-  id: number
-  title: string
-  /** 父块(章节数),给个轻量体量感 */
-  chunks: number
-}
-
 const emit = defineEmits<{ close: [] }>()
 
-const trash = useTrashStore()
 const items = ref<TrashItem[]>([])
 const loading = ref(true)
 const errorText = ref('')
 const workingId = ref<number | null>(null)
+/** 后端给的保留期(天);没拿到时按 30 兜底,避免界面出现 undefined */
+const retentionDays = ref(30)
 
-/** 逐条拉详情:纸篓通常就几条,不值得为它加批量接口。
- *  拉不到的(已在别处被彻底删除)悄悄出篓,不留幽灵条目 */
+/** 剩余天数文案:0 天单独说「今天到期」,比「还剩 0 天」明确 */
+function daysLabel(days: number): string {
+  return days <= 0 ? '今天到期' : `剩 ${days} 天`
+}
+
+/** 快到期(3 天内)用朱砂提醒,其余走灰墨 */
+function isUrgent(days: number): boolean {
+  return days <= 3
+}
+
+const emptyHint = computed(
+  () =>
+    `纸篓是空的。书架把书拖到左下角的纸篓、或批量选中后「删除所选」,都只是移到这里;` +
+    `移入后 ${retentionDays.value} 天内可随时放回。`,
+)
+
 async function reload(): Promise<void> {
   loading.value = true
   errorText.value = ''
-  const list: TrashItem[] = []
-  for (const id of [...trash.ids]) {
-    try {
-      const detail = await getNote(id)
-      list.push({
-        id: detail.id,
-        title: detail.title,
-        chunks: detail.parents.length,
-      })
-    } catch {
-      trash.remove(id)
-    }
+  try {
+    const page = await listTrash()
+    items.value = page.items
+    retentionDays.value = page.retention_days
+  } catch (error) {
+    errorText.value = describeApiError(error)
+    items.value = []
+  } finally {
+    loading.value = false
   }
-  items.value = list
-  loading.value = false
 }
 
 // 弹窗每次打开都是新挂载(v-if),直接拉一遍最新清单
@@ -64,17 +70,37 @@ function onKeydown(event: KeyboardEvent): void {
 onMounted(() => window.addEventListener('keydown', onKeydown))
 onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 
-function restore(item: TrashItem): void {
+/** 放回一篇:后端置回 active,本地从清单移除 —— 书架(LibraryView)靠 onActivated 重新拉列表 */
+async function restore(item: TrashItem): Promise<void> {
   if (workingId.value !== null) return
-  trash.remove(item.id)
-  items.value = items.value.filter((v) => v.id !== item.id)
+  workingId.value = item.id
+  errorText.value = ''
+  try {
+    await restoreNote(item.id)
+    items.value = items.value.filter((v) => v.id !== item.id)
+  } catch (error) {
+    errorText.value = describeApiError(error)
+  } finally {
+    workingId.value = null
+  }
 }
 
 /** 手滑批量丢进来时的一键后悔药 */
-function restoreAll(): void {
-  if (workingId.value !== null) return
-  for (const id of [...trash.ids]) trash.remove(id)
-  items.value = []
+async function restoreAll(): Promise<void> {
+  if (workingId.value !== null || items.value.length === 0) return
+  workingId.value = -1 // 占位:表示「批量放回中」,禁用全部按钮
+  errorText.value = ''
+  const failed: string[] = []
+  for (const item of [...items.value]) {
+    try {
+      await restoreNote(item.id)
+      items.value = items.value.filter((v) => v.id !== item.id)
+    } catch (error) {
+      failed.push(`${item.title}:${describeApiError(error)}`)
+    }
+  }
+  workingId.value = null
+  if (failed.length > 0) errorText.value = `有 ${failed.length} 篇没能放回 —— ${failed[0]}`
 }
 
 /** 彻底删除:真删除、不可恢复,所以必须二次确认 */
@@ -91,8 +117,7 @@ async function purge(item: TrashItem): Promise<void> {
   workingId.value = item.id
   errorText.value = ''
   try {
-    await deleteNote(item.id)
-    trash.remove(item.id)
+    await purgeNote(item.id)
     items.value = items.value.filter((v) => v.id !== item.id)
   } catch (error) {
     errorText.value = describeApiError(error)
@@ -125,7 +150,7 @@ async function purge(item: TrashItem): Promise<void> {
       </header>
 
       <p class="basket-hint">
-        移入纸篓的笔记只记在本浏览器,放回即恢复;彻底删除前它们仍存在于库中(问答检索仍可能命中)。
+        纸篓对当前账号生效(换浏览器也在);移入满 {{ retentionDays }} 天后自动彻底删除,期间可随时放回。
       </p>
 
       <p v-if="errorText !== ''" class="note note--error basket-error">{{ errorText }}</p>
@@ -141,7 +166,15 @@ async function purge(item: TrashItem): Promise<void> {
             >
               <span class="basket-bar" />
               <span class="basket-title" :title="item.title">{{ item.title }}</span>
-              <span class="muted basket-num">{{ item.chunks }} 段</span>
+              <span class="muted basket-num">{{ item.chunk_count }} 段</span>
+              <!-- 剩余天数:0 天 = 今天到期。快到期转朱砂,不用另写一句提示 -->
+              <span
+                class="basket-days"
+                :class="{ 'basket-days--urgent': isUrgent(item.days_left) }"
+                :title="`${item.expires_at.slice(0, 10)} 自动彻底删除`"
+              >
+                {{ daysLabel(item.days_left) }}
+              </span>
             </RouterLink>
             <span class="basket-acts">
               <button
@@ -165,9 +198,7 @@ async function purge(item: TrashItem): Promise<void> {
             </span>
           </li>
         </ul>
-        <p v-else-if="!loading" class="empty basket-empty">
-          纸篓是空的。书架上把书拖到左下角书立里的纸篓,或批量选中后「删除所选」,都只是移到这里,可随时放回。
-        </p>
+        <p v-else-if="!loading" class="empty basket-empty">{{ emptyHint }}</p>
       </div>
     </section>
   </div>
@@ -338,6 +369,20 @@ async function purge(item: TrashItem): Promise<void> {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+
+/* 剩余天数:常态灰墨,3 天内转朱砂(紧迫感靠颜色,不靠一句提示) */
+.basket-days {
+  flex-shrink: 0;
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.basket-days--urgent {
+  color: var(--seal);
+  font-weight: 600;
 }
 
 .basket-acts {

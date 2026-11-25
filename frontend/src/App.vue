@@ -10,6 +10,8 @@
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 
+import { describeApiError } from './api/http'
+import { deleteNote } from './api/notes'
 import BasketModal from './components/BasketModal.vue'
 import ConfirmDialog from './components/ConfirmDialog.vue'
 import { ensureGateChecked, gateState, onboardingDone, resetGate } from './onboardingGate'
@@ -54,6 +56,8 @@ const basketOpen = ref(false)
 const basketOver = ref(false)
 /** 落纸后弹一下(catch 动画) */
 const basketPulse = ref(false)
+/** 拖放移入失败时的提示(卡片已飞走但后端没记账,必须让人知道) */
+const basketError = ref('')
 
 function pulseBasket(): void {
   basketPulse.value = false
@@ -66,7 +70,13 @@ function pulseBasket(): void {
   }, 620)
 }
 
-/** 书卡拖到篓口松手:只移入纸篓,不真删——纸片从松手点继续飞进篓口,落篓才入账 */
+/**
+ * 书卡拖到篓口松手:**移入纸篓**(软删除 API),不是真删。
+ *
+ * 顺序是有讲究的:先飞纸(pure 视觉)→ 再调 API → 成功了才刷角标。
+ * 飞纸与请求并行会让「动画飞完了但服务端失败」变得不可见,所以等动画结束再发请求,
+ * 失败时用错误提示告知 —— 卡片已经在书架被拖走了,但后端没记账,刷新会回来。
+ */
 async function onBasketDrop(event: DragEvent): Promise<void> {
   event.preventDefault()
   basketOver.value = false
@@ -79,7 +89,7 @@ async function onBasketDrop(event: DragEvent): Promise<void> {
     return // 坏数据忽略
   }
   const id = Number(payload.id)
-  if (!Number.isFinite(id) || id <= 0 || trash.has(id)) return
+  if (!Number.isFinite(id) || id <= 0) return
   trash.startFly(id) // 书架上的卡原地淡出
   pulseBasket()
   // 源=松手点(书跟着光标一路拖过来,从光标处继续落篓最顺)
@@ -87,8 +97,14 @@ async function onBasketDrop(event: DragEvent): Promise<void> {
     { left: event.clientX - 14, top: event.clientY - 18, width: 28, height: 36 },
     typeof payload.spine === 'string' ? payload.spine : undefined,
   )
-  trash.add(id)
-  trash.endFly(id)
+  try {
+    await deleteNote(id)
+    await trash.refreshCount()
+  } catch (error) {
+    basketError.value = `移入纸篓失败:${describeApiError(error)}`
+  } finally {
+    trash.endFly(id)
+  }
 }
 
 onMounted(() => {
@@ -96,7 +112,22 @@ onMounted(() => {
   void ensureGateChecked().then(() => {
     ready.value = onboardingDone()
     gateHasKey.value = gateState().hasKey
+    // 纸篓角标:后端账号级数据,打开应用先同步一次(v37)
+    if (auth.isAuthenticated) void trash.refreshCount()
   })
+})
+
+// 切页时同步纸篓数量:在纸篓弹窗里放回/彻底删之后,角标要跟着变
+watch(
+  () => route.name,
+  () => {
+    if (auth.isAuthenticated && ready.value) void trash.refreshCount()
+  },
+)
+
+// 关掉弹窗时也刷一次(弹窗内可能放回/彻底删过)
+watch(basketOpen, (open) => {
+  if (!open && auth.isAuthenticated) void trash.refreshCount()
 })
 </script>
 <template>
@@ -281,7 +312,7 @@ onMounted(() => {
                 stroke-width="1.2"
               />
               <!-- 篓口冒出的纸头:篓里有书才冒出来 -->
-              <g v-if="trash.ids.length > 0">
+              <g v-if="trash.count > 0">
                 <polygon
                   points="25,12 32,7 39,11 37.5,22.5 26.5,23.5"
                   fill="#fffdf8"
@@ -311,10 +342,15 @@ onMounted(() => {
                 stroke-linecap="round"
               />
             </svg>
-            <span v-if="trash.ids.length > 0" class="trash-basket__badge">{{
-              trash.ids.length
+            <span v-if="trash.count > 0" class="trash-basket__badge">{{
+              trash.count
             }}</span>
           </button>
+          <!-- 拖放移入失败的提示:卡片已经飞走了但后端没记账,必须让人看见 -->
+          <p v-if="basketError !== ''" class="basket-error" role="alert">
+            <span>{{ basketError }}</span>
+            <button type="button" aria-label="关闭提示" @click="basketError = ''">×</button>
+          </p>
           <RouterLink
             class="rail-item"
             :to="{ name: 'profile' }"
@@ -607,6 +643,36 @@ onMounted(() => {
 }
 
 /* 篓里有多少本的角标:朱砂小圆,像盖了个章 */
+/* 拖放失败提示:浮在纸篓上方,不挤布局 */
+.basket-error {
+  position: absolute;
+  bottom: 96px;
+  left: 8px;
+  z-index: 5;
+  display: flex;
+  width: 200px;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid #dcb4ac;
+  border-radius: 8px;
+  background: var(--err-soft);
+  color: var(--err);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.basket-error button {
+  flex-shrink: 0;
+  padding: 0 2px;
+  border: none;
+  background: none;
+  color: var(--err);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+
 .trash-basket__badge {
   position: absolute;
   top: -5px;

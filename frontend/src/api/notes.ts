@@ -187,7 +187,84 @@ export async function updateNote(
   }
 }
 
-/** DELETE /api/notes/{id} —— 真删除:正文、切块、向量和原文件一起清,不可恢复。404 = 没这条笔记。 */
+/**
+ * DELETE /api/notes/{id} —— **移入纸篓**(软删除,api.md v37)。
+ *
+ * 只改 status/archived_at:书架与检索立刻看不到,但数据完好、可放回。
+ * 满 30 天由后端定时清理真正删除;也可用 purgeNote 立即彻底删。
+ */
 export async function deleteNote(noteId: number): Promise<void> {
   await http.del(`/notes/${noteId}`)
 }
+
+// ---------------- 纸篓(软删除,v37) ----------------
+
+/** 纸篓里的一条。`days_left` 由后端算好(向上取整),前端不自己碰时区。 */
+export interface TrashItem {
+  id: number
+  title: string
+  quality: string | null
+  source_id: number | null
+  chunk_count: number
+  /** 移入纸篓的时刻(30 天保留期起点) */
+  archived_at: string
+  /** 到期自动彻底删除的时刻 */
+  expires_at: string
+  /** 还剩几天;0 = 今天到期 */
+  days_left: number
+}
+
+export interface TrashPage {
+  total: number
+  /** 后端保留期(天),当前 30;前端显示时以此为准,不写死 */
+  retention_days: number
+  items: TrashItem[]
+}
+
+/** GET /api/notes/trash —— 纸篓清单(按移入时间倒序) */
+export async function listTrash(limit = 100, offset = 0): Promise<TrashPage> {
+  const data = asRecord(await http.get<unknown>(`/notes/trash?limit=${limit}&offset=${offset}`))
+  const items = Array.isArray(data.items) ? data.items : []
+  return {
+    total: asNumber(data.total),
+    retention_days: asNumber(data.retention_days, 30),
+    items: items.map((raw) => {
+      const it = asRecord(raw)
+      const maybeNum = (v: unknown): number | null =>
+        v === null || v === undefined ? null : asNumber(v)
+      return {
+        id: asNumber(it.id),
+        title: asText(it.title, '(无标题)'),
+        quality: it.quality === null || it.quality === undefined ? null : asText(it.quality),
+        source_id: maybeNum(it.source_id),
+        chunk_count: asNumber(it.chunk_count),
+        archived_at: asText(it.archived_at),
+        expires_at: asText(it.expires_at),
+        days_left: asNumber(it.days_left),
+      }
+    }),
+  }
+}
+
+/** POST /api/notes/{id}/restore —— 从纸篓放回书架 */
+export async function restoreNote(noteId: number): Promise<NoteListItem> {
+  const data = asRecord(await http.post<unknown>(`/notes/${noteId}/restore`, {}))
+  return {
+    id: asNumber(data.id),
+    title: asText(data.title, '(无标题)'),
+    lang: asText(data.lang),
+    tags: Array.isArray(data.tags) ? (data.tags as string[]) : [],
+    quality: data.quality === null || data.quality === undefined ? null : asText(data.quality),
+    status: asText(data.status, 'active'),
+    source_id:
+      data.source_id === null || data.source_id === undefined ? null : asNumber(data.source_id),
+    chunk_count: asNumber(data.chunk_count),
+    created_at: asText(data.created_at),
+  }
+}
+
+/** DELETE /api/notes/{id}/purge —— 彻底删除(**不可恢复**:正文/切块/向量/原文件一起清) */
+export async function purgeNote(noteId: number): Promise<void> {
+  await http.del(`/notes/${noteId}/purge`)
+}
+

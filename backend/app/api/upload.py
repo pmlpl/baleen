@@ -36,9 +36,11 @@ from fastapi import (
     UploadFile,
 )
 from pydantic import BaseModel
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import CurrentOwnerDep, get_session
+from app.models import Note
 from app.repo import Repos
 from app.service.parse.router import IMAGE_EXTS, PARSERS, UNSUPPORTED_MESSAGES
 from app.worker import STAGING_ROOT, enqueue_import, enqueue_video_extract
@@ -97,25 +99,60 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 log = logging.getLogger(__name__)
 
 
-async def _reset_stale_done_job(repos: Repos, job, *, source_created: bool) -> bool:
-    """dedupe 假阳性守卫(2026-11-19 复跑批次实锤的 A 档缺陷)。
+async def _reset_stale_done_job(
+    repos: Repos, job, *, source_created: bool, source_id: int
+) -> bool:
+    """dedupe 假阳性守卫(2026-11-19 复跑批次实锤的 A 档缺陷;v37 软删后扩充)。
 
-    「删笔记 → 重导同一内容」原先被静默跳过:DELETE notes 级联清了 sources 行
+    「删笔记 → 重导同一内容」原先被静默跳过:DELETE 级联清了 sources 行
     (孤儿时连行带 blob 删),但 jobs 行残留 status=done;重导时
     ``create_or_get_by_sha256`` 新建了 source(``source_created=True``),而
-    ``create_or_get`` 按 dedupe_key 命中旧 done 行 → API 返回 deduped=True、
+    ``create_or_get`` 按 dedupe_key 命中旧 done 行 → 返回 deduped=True、
     arq 队列空,新 source 永远卡「排队中」。
 
-    判定依据只用 ``source_created``:它由 sources 表的唯一约束与本次插入决定,
-    **本次确实新建了 source** 就说明旧产物已不存在、旧 done 行是孤儿——标 stale。
-    不拿「source 还在但笔记没了」当条件:那是另一回事(G0/G1 拒收的源本就
-    可能没有笔记,重导时应当复用旧 job 结论而不是重跑)。
+    **v37 起多一种 stale 形态**:笔记删除改成软删(``status='archived'``),
+    source 行**不再被删**,所以 ``source_created`` 恒为 False。若该 source 下
+    已经没有 active 笔记(全在纸篓里),重导就是一次真的「重新入库」请求,
+    必须重置 done 行 —— 否则用户看到「之前导入过,直接复用」但书架空空。
+
+    两种 stale 判据(满足任一即可):
+    ① ``source_created``:本次确实新建了 source → 旧产物已不存在,旧 done 是孤儿;
+    ② ``source_id`` 下 **没有任何 active 笔记** → 旧笔记在纸篓里,重导应当重跑。
+
+    仍不把「source 还在但被 G0/G1 拒收」当 stale:那种情况本来就没有笔记,
+    重导时复用旧 job 结论(拒绝)才是对的。
 
     返回 True 表示已把 job 重置为 queued(调用方按「非 dedupe」继续入队)。
     """
-    if job is None or job.status != "done" or not source_created:
+    if job is None or job.status != "done":
         return False
-    log.info("dedupe 假阳性:source 已重建(job=%s 仍 done)→ 重置 queued 重新入队", job.id)
+    if not source_created:
+        # ② 软删场景:source 还在,但它的笔记全在纸篓里 → 本次是「重新入库」。
+        #    必须区分三种情况,不能只看 active 数:
+        #      · 有 active 笔记        → 真去重(复用)
+        #      · 无 active 但有 archived → 笔记在纸篓,重导应当重跑
+        #      · 一条笔记都没有        → G0/G1 曾拒收 / job 被标记完成但没产出,
+        #                                复用旧结论才是对的(否则每次重导都白烧 LLM)
+        counts = (
+            await repos.session.execute(
+                select(Note.status, func.count())
+                .where(
+                    Note.owner_id == repos.owner_id,
+                    Note.source_id == source_id,
+                )
+                .group_by(Note.status)
+            )
+        ).all()
+        by_status = {status: int(n) for status, n in counts}
+        if by_status.get("active", 0) > 0:
+            return False  # 有可复用笔记,正常去重
+        if by_status.get("archived", 0) == 0:
+            return False  # 从来没有笔记:沿用旧结论(拒绝/空产出)
+    log.info(
+        "dedupe 假阳性:重导目标无可复用笔记(source_created=%s, job=%s 仍 done)→ 重置 queued",
+        source_created,
+        job.id,
+    )
     await repos.jobs.update_status(job.id, "queued", last_error=None)
     # update_status 是 Core UPDATE,不保证刷新 identity map;显式同步,后续判定和响应体都读这个值
     job.status = "queued"
@@ -321,7 +358,9 @@ async def upload_source(
         payload={"filename": raw_name, "via": "api"},
     )
     # 删笔记重导同一文件:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
-    await _reset_stale_done_job(repos, job, source_created=source_created)
+    await _reset_stale_done_job(
+        repos, job, source_created=source_created, source_id=source.id
+    )
     await session.commit()
 
     # 只有真完成过(done)才算去重;failed/queued 的重试要返回 deduped=False 让前端继续轮询
@@ -437,7 +476,9 @@ async def import_from_url(
             kind="import",
         )
         # 删笔记重导同一视频:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
-        await _reset_stale_done_job(repos, job, source_created=source_created)
+        await _reset_stale_done_job(
+            repos, job, source_created=source_created, source_id=source.id
+        )
         await session.commit()
 
         # 只有真完成过(done)才算去重;failed/queued 的重试返回 deduped=False 让前端继续轮询
@@ -518,7 +559,9 @@ async def import_from_url(
         payload={"filename": filename, "via": "url"},
     )
     # 删笔记重导同一字幕:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
-    await _reset_stale_done_job(repos, job, source_created=source_created)
+    await _reset_stale_done_job(
+        repos, job, source_created=source_created, source_id=source.id
+    )
     await session.commit()
 
     # 只有真完成过(done)才算去重;failed/queued 的重试要返回 deduped=False 让前端继续轮询

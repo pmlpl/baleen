@@ -20,7 +20,6 @@ import { ApiError, describeApiError } from '../api/http'
 import { listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
 import { parseAttachment } from '../api/parse'
-import { useTrashStore } from '../stores/trash'
 import { confirmDialog } from '../utils/confirm'
 import {
   SESSION_TITLE_MAX,
@@ -57,11 +56,8 @@ const route = useRoute()
 const sessions = ref<QaSessionItem[]>([])
 const currentSessionId = ref<number | null>(null)
 
-/**
- * 纸篓里的笔记:书架把它们藏起来了,但后端一行没动,所以问答检索照样能命中。
- * 出处处给这类来源挂一个「篓」标,免得用户以为引用到了已删掉的笔记。
- */
-const trash = useTrashStore()
+// v37 起纸篓是后端软删除(status='archived'),而**所有检索查询本来就过滤
+// status='active'** —— 纸篓里的笔记不可能被命中,所以原先那个「篓」标已无意义,删除。
 
 /** 本地展示:这条消息发出时带走的引用/附件/图片(仅当轮显示,不落库 → 重开会话不回放) */
 interface SentExtras {
@@ -1343,14 +1339,6 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
                   >
                     <span class="cite-n mono">{{ c.url !== null ? `[W${c.n}]` : `[${c.n}]` }}</span>
                     <span class="cite-title" :title="c.note_title">{{ c.note_title }}</span>
-                    <!-- 来源已在纸篓(书架藏了、后端还在,检索仍会命中):挂个篓标,别让人误以为删干净了 -->
-                    <span
-                      v-if="c.note_id !== null && trash.has(c.note_id)"
-                      class="cite-trash"
-                      title="这篇在纸篓里(书架已隐藏,库中仍在,放回即恢复)"
-                    >
-                      篓
-                    </span>
                     <span v-if="c.heading_path !== null" class="cite-path" :title="c.heading_path">
                       {{ c.heading_path }}
                     </span>
@@ -2130,18 +2118,6 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
 .cite-n {
   color: var(--accent-ink);
   font-weight: 700;
-}
-
-/* 「篓」标:来源在纸篓里。做旧纸签的样式(虚线 + 淡灰),比一行解释字便宜 */
-.cite-trash {
-  flex-shrink: 0;
-  padding: 0 5px;
-  border: 1px dashed var(--ink-3);
-  border-radius: 4px;
-  color: var(--ink-3);
-  font-size: 11px;
-  line-height: 1.6;
-  white-space: nowrap;
 }
 
 .cite-title {

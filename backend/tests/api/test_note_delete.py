@@ -1,8 +1,13 @@
-"""DELETE /api/notes/{id} 删除端点测试。
+"""笔记删除端点测试(api.md v37:软删除 + 纸篓)。
 
-- 真删除口径:chunks/embeddings 由 DB FK 级联清,source 孤儿时连行带 blob 文件一起删;
-- 种子走 repo(chunks CHECK 要求 children 挂 parent_id,不能裸 SQL);
-- 隔离与 tests/api 同款:conftest env 外层事务回滚,blob 文件放 tmp_path。
+v37 起语义分两层:
+- ``DELETE /api/notes/{id}`` = **移入纸篓**(软删):只改 status/archived_at,
+  chunks/embeddings/blob 一律不动,可放回;
+- ``DELETE /api/notes/{id}/purge`` = **彻底删除**:级联清 chunks/embeddings,
+  source 孤儿时连行带 blob 一起删,不可恢复。
+
+种子走 repo(chunks CHECK 要求 children 挂 parent_id,不能裸 SQL);
+隔离与 tests/api 同款:conftest env 外层事务回滚,blob 文件放 tmp_path。
 """
 
 from __future__ import annotations
@@ -122,7 +127,8 @@ def test_delete_note_204_and_gone(env: SimpleNamespace) -> None:
     assert note_id not in ids
 
 
-def test_delete_cascades_chunks_and_embeddings(env: SimpleNamespace) -> None:
+def test_soft_delete_keeps_chunks_then_purge_cascades(env: SimpleNamespace) -> None:
+    """软删**不动**子块(放回才零成本);彻底删除才级联清。"""
     note_id = env.client.portal.call(
         lambda: _seed_note(env.shared["factory"], title=MARKER + " 级联")
     )
@@ -130,7 +136,15 @@ def test_delete_cascades_chunks_and_embeddings(env: SimpleNamespace) -> None:
     assert (2, 1) == env.client.portal.call(lambda: _counts(env.shared["factory"], note_id)), (
         "种子本身要有 1 父 1 子共 2 块 + 1 向量(父块不 embed),否则这条测试什么都没证明"
     )
+
+    # ① 软删:子块与向量必须原样保留(否则「放回」就不可能是零成本的)
     assert env.client.delete(f"/api/notes/{note_id}").status_code == 204
+    assert (2, 1) == env.client.portal.call(lambda: _counts(env.shared["factory"], note_id)), (
+        "软删除不许碰 chunks/embeddings —— 放回要能完好如初"
+    )
+
+    # ② 彻底删除:级联清空
+    assert env.client.delete(f"/api/notes/{note_id}/purge").status_code == 204
     assert (0, 0) == env.client.portal.call(lambda: _counts(env.shared["factory"], note_id)), (
         "chunks/embeddings 必须被 DB 级联清空,否则检索还会命中幽灵块"
     )
@@ -154,21 +168,30 @@ def test_delete_other_owner_404(env: SimpleNamespace) -> None:
     assert env.client.delete(f"/api/notes/{note_id}").status_code == 404
 
 
-def test_delete_last_note_removes_source_and_blob(env: SimpleNamespace) -> None:
+def test_purge_last_note_removes_source_and_blob(env: SimpleNamespace) -> None:
+    """彻底删除:source 没人引用时连行带 blob 一起清。"""
     blob = env.tmp_path / "blob-delete.txt"
     source_id = env.client.portal.call(lambda: _seed_source_with_blob(env.shared["factory"], blob))
     note_id = env.client.portal.call(
         lambda: _seed_note(env.shared["factory"], title=MARKER + " 连源删", source_id=source_id)
     )
     assert blob.exists()
+    # 先软删(纸篓),此时 source/blob 必须还在 —— 否则放回就没原文件了
     assert env.client.delete(f"/api/notes/{note_id}").status_code == 204
+    assert blob.exists(), "软删不许动原文件"
+    assert source_id in [s["id"] for s in env.client.get("/api/sources").json()["items"]]
+
+    assert env.client.delete(f"/api/notes/{note_id}/purge").status_code == 204
     assert not blob.exists(), "孤儿 source 的原文件 blob 要从磁盘清掉"
-    sources = env.client.get("/api/sources").json()["items"]
-    assert source_id not in [s["id"] for s in sources]
+    assert source_id not in [s["id"] for s in env.client.get("/api/sources").json()["items"]]
 
 
-def test_delete_shared_source_keeps_source(env: SimpleNamespace) -> None:
-    """sources:notes = 1:N(ADR 0003):还有别的笔记挂着 source 就只删笔记,blob 不动。"""
+def test_purge_shared_source_keeps_source(env: SimpleNamespace) -> None:
+    """sources:notes = 1:N(ADR 0003):还有别的笔记挂着 source 就只删笔记,blob 不动。
+
+    ⚠️ 纸篓里的笔记也算「还挂着」(count_notes_for 含 archived)—— 否则把一篇
+    放进纸篓再彻底删另一篇,会连 source/blob 一起清掉,纸篓那篇就放不回来了。
+    """
     blob = env.tmp_path / "blob-shared.txt"
     source_id = env.client.portal.call(lambda: _seed_source_with_blob(env.shared["factory"], blob))
     first = env.client.portal.call(
@@ -177,11 +200,14 @@ def test_delete_shared_source_keeps_source(env: SimpleNamespace) -> None:
     second = env.client.portal.call(
         lambda: _seed_note(env.shared["factory"], title=MARKER + " 共享2", source_id=source_id)
     )
+    # 两篇都进纸篓,然后彻底删第一篇:第二篇还在纸篓里,source/blob 必须保留
     assert env.client.delete(f"/api/notes/{first}").status_code == 204
-    assert blob.exists(), "另一篇笔记还引用着,source 和 blob 都不能动"
-    sources = env.client.get("/api/sources").json()["items"]
-    assert source_id in [s["id"] for s in sources]
     assert env.client.delete(f"/api/notes/{second}").status_code == 204
+    assert env.client.delete(f"/api/notes/{first}/purge").status_code == 204
+    assert blob.exists(), "纸篓里还有一篇引用着,source 和 blob 都不能动"
+    assert source_id in [s["id"] for s in env.client.get("/api/sources").json()["items"]]
+    # 彻底删第二篇:这下没人引用了
+    assert env.client.delete(f"/api/notes/{second}/purge").status_code == 204
     assert not blob.exists()
 
 
