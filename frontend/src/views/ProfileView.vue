@@ -66,13 +66,11 @@ const registeredAt = computed(() => {
         </div>
       </div>
 
-      <!-- 章程与配置的**唯一入口**分别在 /charter 与 /settings,这里只给跳转,不放副本 -->
+      <!-- 章程的唯一入口在设置页(那边还有「查看 / 修改章程」按钮);
+           模型配置的唯一入口就是侧栏「设置」。两处都不该在这里再开一个二次入口 -->
       <div class="card links-card">
         <button class="btn" type="button" @click="router.push({ name: 'charter' })">
           {{ profile.charter.has_charter ? '知识库章程' : '填写章程问卷' }}
-        </button>
-        <button class="btn" type="button" @click="router.push({ name: 'settings' })">
-          模型配置
         </button>
       </div>
     </template>
