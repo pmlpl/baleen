@@ -67,35 +67,61 @@ function closeLightbox(): void {
 /** 目录条目:章节名 + 缩进层级 + 原块 */
 interface TocEntry {
   parent: NoteParent
+  /** 列表 key:父块 id + 深度(同一父块会展开出多条,裸 chunk_id 会撞 key) */
+  key: string
   label: string
   depth: number
+  /** 是该父块路径的最后一段(高亮只点叶子,免得「二」和「2.1」同时亮) */
+  isLeaf: boolean
 }
 
 /**
- * heading_path → 目录条目。
- * 「笔记标题 > 一、闭包 > 官方定义」→ label=「官方定义」、depth=1。
- * 只有笔记标题一层(整篇没分节)时 depth=0。
+ * heading_path → 目录条目(逐段展开)。
+ * 「二、镜像 > 2.1 docker images」现在产出**两条**:二(0 级)+ 2.1(1 级)——
+ * 旧版每个父块只出最后一段,而「纯容器型 H1」(标题下无正文直接接 H2)没有
+ * 自己的父块,只作为 2.x 父块的路径前缀存在,目录里就永远看不到「二、三、五」
+ * (2026-11-25 note 9353 实锤:目录只有一和四)。展开后按路径前缀去重,
+ * 已有独立父块的层级(如一/四)不会重复出现。
  */
 const toc = computed<TocEntry[]>(() => {
   if (note.value === null) return []
   const title = note.value.title
-  return note.value.parents.map((parent) => {
+  const entries: TocEntry[] = []
+  const seen = new Set<string>()
+  for (const parent of note.value.parents) {
     const raw = (parent.heading_path ?? '').trim()
-    if (raw === '') return { parent, label: '正文', depth: 0 }
-    const parts = raw
-      .split('>')
-      .map((p) => p.trim())
-      .filter((p) => p !== '')
-    // 去掉开头与笔记标题相同的那一段(它只是根);标题可能被截断,容忍前缀关系
-    if (parts.length > 1) {
-      const head = parts[0] as string
-      if (head === title || title.startsWith(head) || head.startsWith(title)) {
-        parts.shift()
+    let parts: string[] = []
+    if (raw !== '') {
+      parts = raw
+        .split('>')
+        .map((p) => p.trim())
+        .filter((p) => p !== '')
+      // 去掉开头与笔记标题相同的那一段(它只是根);标题可能被截断,容忍前缀关系
+      if (parts.length > 1) {
+        const head = parts[0] as string
+        if (head === title || title.startsWith(head) || head.startsWith(title)) {
+          parts.shift()
+        }
       }
     }
-    if (parts.length === 0) return { parent, label: '正文', depth: 0 }
-    return { parent, label: parts[parts.length - 1] as string, depth: parts.length - 1 }
-  })
+    if (parts.length === 0) {
+      const key = `p${parent.chunk_id}`
+      if (!seen.has(key)) {
+        seen.add(key)
+        entries.push({ parent, key, label: '正文', depth: 0, isLeaf: true })
+      }
+      continue
+    }
+    parts.forEach((seg, i) => {
+      const key = `p${parent.chunk_id}-${i}`
+      const pathKey = parts.slice(0, i + 1).join(' > ')
+      if (!seen.has(pathKey)) {
+        seen.add(pathKey)
+        entries.push({ parent, key, label: seg, depth: i, isLeaf: i === parts.length - 1 })
+      }
+    })
+  }
+  return entries
 })
 
 /** 每个父块 id → 它的排版后 HTML(按父块顺序消费图片清单,v16) */
@@ -412,10 +438,10 @@ async function removeNote(): Promise<void> {
           <div class="toc-inner">
             <p class="toc-title">目录</p>
             <ul v-if="toc.length > 0" ref="tocListEl" class="toc-list">
-              <li v-for="entry in toc" :key="entry.parent.chunk_id">
+              <li v-for="entry in toc" :key="entry.key">
                 <button
                   class="toc-item"
-                  :class="{ 'toc-item--active': entry.parent.chunk_id === activeId }"
+                  :class="{ 'toc-item--active': entry.isLeaf && entry.parent.chunk_id === activeId }"
                   :style="{ paddingLeft: `${10 + entry.depth * 14}px` }"
                   type="button"
                   :data-sec="entry.parent.chunk_id"

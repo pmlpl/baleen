@@ -387,3 +387,17 @@ uvicorn.exe：(空)
 - 途中顺手修：主人 wedged 的 `fastapi dev` 后端（healthz 超时/登录 500）杀干净重启，日志落仓库外 %TEMP%——WatchFiles 连 backend/tmp 都 watch（日志实锤「detected changes in 'tmp\...'」），探针写一个 reload 一次
 
 **已知限制 / 挂账**：前端仍零单测——markdown.ts 这类回归只有探针护栏兜着；「同款改动多处落地必须每处同测」教训（section.ts 有探针罩、markdown.ts 裸奔三天）。
+
+## 2026-11-25 · 笔记页目录缺「纯容器型 H1」条目修复（9353 实锤：只有一和四）· 执行者：ZCode
+
+**为什么做**：主人报 note 9353 左侧目录一级标题只有「一」「四」，二/三/五缺失，但其下二级 2.x/3.x 都在。DB 核对：doc 里五个 H1（一~五）+ 全部 H2/H3 完好；父块 heading_path 也全带 H1 前缀——真凶在 TOC 构建器。
+
+**根因**：`NoteView` 目录是「每个父块一条」，label 取 heading_path **最后一段**。H1 下有正文的一/四有独立父块（条目=H1）；而二/三/五是**纯容器型 H1**（标题下无正文直接接 H2），chunker 把它们折叠成 2.x/3.x 父块的路径前缀——TOC 便永远看不到它们。老结构语料（H1 通常自带引言）没暴露过这个形态，9353（重导产的新结构）撞上了。
+
+**产物**：`src/views/NoteView.vue` 目录改为**逐段展开**——每个父块的 heading_path 各段都生成条目（按路径前缀去重，已有独立父块的层级不重复出现）；key 改 `p{chunk_id}-{depth}`（同父块多条，裸 chunk_id 会撞 key）；高亮只点叶子（`isLeaf`，免得「二」和「2.1」同时亮）。
+
+**怎么验的**：
+- note 9353：目录 22 条，一~五全在，1.1/2.x/2.3.1（H3 更深一级）/3.x/4.x/5.x 层级完整，零 pageerror
+- 老 note 161 回归：57 条零重复，「第一阶段：Agent 基础认知」这类同样缺失的一级也回来了
+- note 4986 目录 0 条=笔记本就不存在（DB 0 行），非回归
+- `pnpm exec vue-tsc --noEmit` 0 错误
