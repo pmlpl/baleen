@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 import { ensureGateChecked } from '../onboardingGate'
+import { prevRoute } from './prevRoute'
 import { useAuthStore } from '../stores/auth'
 
 // 页面有意精简(问答为主界面,导入/检索已并入会话)后仍用静态 import,不做路由懒加载:
@@ -30,9 +31,16 @@ const router = createRouter({
     { path: '/settings', name: 'settings', component: SettingsView },
     // 个人中心:聚合只读展示(用户信息/统计/章程预览/配置掩码),编辑跳章程/设置页
     { path: '/profile', name: 'profile', component: ProfileView },
+    // 纸篓走右下角悬浮钮弹窗(App.vue BasketModal),不再占路由页面
     // 兜底:路径写错也回导入页,别让人看到空白
     { path: '/:pathMatch(.*)*', redirect: { name: 'qa' } },
   ],
+})
+
+// 记录「上一条路由」:NoteView 的返回按钮靠它感知来源(问答→「返回对话」,书架→「返回书架」)。
+// 首次加载 from 是 START_LOCATION(name 为 undefined),没有「上一页」,保持 null 走兜底。
+router.afterEach((_to, from) => {
+  if (from.name !== undefined) prevRoute.value = from
 })
 
 /**

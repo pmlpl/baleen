@@ -1,9 +1,14 @@
 <script setup lang="ts">
 /**
- * 问答页(阶段2:聊天式多轮)。
- * 左侧会话列表(历史可重开/删除),中部消息流(用户右/助手左),底部输入。
- * assistant 消息渲染 markdown,出处折叠在消息下方;「缓存 xx%」是 DeepSeek
- * 前缀缓存的会话平均命中率(Σhit/Σ(hit+miss)),首问没有缓存数据时不显示。
+ * 问答页(聊天式多轮)·单列对话流:出血形态——整页就是一张摊满视口的宣纸(App.vue
+ * stage--bleed 撤掉桌面留白并钳住视口高度),左书签绳(会话)、中间通栏对话列
+ * (两侧只留 24px 呼吸边距;AI 回答文章式排版无气泡;用户提问右对齐轻量块,
+ * 衬线+右缘朱砂细线)、底浅纸墨槽(输入,不再是大面积黑)。
+ * 纸面高度钳在视口内,消息区 flex 撑满并内部滚动,输入栏永久钉在视口底部;
+ * 思考状态复用输入区上方的状态行,不再插临时占位行进正文流。
+ * assistant 消息渲染 markdown,出处只折叠在文末;点正文 [n]/[W n] 徽章 = 直接跳该出处
+ * (库内笔记本页打开靠 keep-alive 保住对话,联网出处开新窗)。
+ * 「缓存 xx%」是前缀缓存的会话平均命中率(Σhit/Σ(hit+miss)),首问没有缓存数据时不显示。
  * 数据全部来自 API(会话/消息已落库),本地 ref 不用 store,不引第三方库。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -14,6 +19,8 @@ import { ApiError, describeApiError } from '../api/http'
 import { listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
 import { parseAttachment } from '../api/parse'
+import { useTrashStore } from '../stores/trash'
+import { confirmDialog } from '../utils/confirm'
 import {
   deleteSession,
   getSession,
@@ -33,6 +40,7 @@ import type {
 } from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
 import { renderMermaidIn } from '../utils/mermaid'
+import { renderMindmapsIn } from '../utils/mindmap'
 import { renderSvgsIn } from '../utils/svg'
 
 import NotePicker from '../components/NotePicker.vue'
@@ -45,6 +53,13 @@ const route = useRoute()
 
 const sessions = ref<QaSessionItem[]>([])
 const currentSessionId = ref<number | null>(null)
+
+/**
+ * 纸篓里的笔记:书架把它们藏起来了,但后端一行没动,所以问答检索照样能命中。
+ * 出处处给这类来源挂一个「篓」标,免得用户以为引用到了已删掉的笔记。
+ */
+const trash = useTrashStore()
+
 /** 本地展示:这条消息发出时带走的引用/附件/图片(仅当轮显示,不落库 → 重开会话不回放) */
 interface SentExtras {
   notes: { id: number; title: string }[]
@@ -606,6 +621,25 @@ async function refreshSessions(): Promise<void> {
   }
 }
 
+/** 会话搜索:按标题过滤侧栏列表(会话多了能定位,不引入额外复杂度) */
+const sessionQuery = ref('')
+const filteredSessions = computed<QaSessionItem[]>(() => {
+  const q = sessionQuery.value.trim().toLowerCase()
+  if (q === '') return sessions.value
+  return sessions.value.filter((s) => s.title.toLowerCase().includes(q))
+})
+
+/**
+ * 会话行右侧的日期:M-D。会话的「最近活跃时间」后端没在列表里透出
+ * (契约只有 created_at,改它属于 api.md 变更),所以先用创建日做区分。
+ * 解析不出来就不显示 —— 宁可少一项,不显示 Invalid Date。
+ */
+function shortDate(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  return `${d.getMonth() + 1}/${d.getDate()}`
+}
+
 onBeforeUnmount(() => {
   stopThinkingTimer()
 })
@@ -659,6 +693,7 @@ async function openSession(id: number): Promise<void> {
     await nextTick()
     if (msgListEl.value !== null) {
       void renderMermaidIn(msgListEl.value)
+      void renderMindmapsIn(msgListEl.value)
       void renderSvgsIn(msgListEl.value)
     }
   } catch (error) {
@@ -702,7 +737,13 @@ async function exportSession(sessionId: number): Promise<void> {
 }
 
 async function removeSession(id: number): Promise<void> {
-  if (!window.confirm('删除这个会话?消息一并删除,不可恢复。')) return
+  const ok = await confirmDialog({
+    title: '删除这个会话',
+    body: '会话里的全部消息会一并删除,不可恢复。',
+    confirmText: '删除',
+    danger: true,
+  })
+  if (!ok) return
   try {
     await deleteSession(id)
     if (currentSessionId.value === id) startNew()
@@ -825,6 +866,7 @@ async function send(): Promise<void> {
           void nextTick(() => {
             if (msgListEl.value !== null) {
               void renderMermaidIn(msgListEl.value)
+              void renderMindmapsIn(msgListEl.value)
               void renderSvgsIn(msgListEl.value)
             }
           })
@@ -951,28 +993,44 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   }
   if (c.note_id !== null) openNote(c.note_id)
 }
+
+/** 答案正文点击委托:点 [n]/[W n] 徽章 → 直接跳到该出处(库内笔记本页打开,联网出处开新窗) */
+function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
+  const refEl = (event.target as HTMLElement | null)?.closest('.cite-ref')
+  if (!(refEl instanceof HTMLElement)) return
+  const raw = refEl.dataset.cite ?? ''
+  if (raw === '') return
+  const n = Number(raw.startsWith('W') ? raw.slice(1) : raw)
+  if (!Number.isFinite(n)) return
+  const citation = m.citations.find((c) => c.n === n)
+  if (citation !== undefined) openCitation(citation)
+}
 </script>
 
 <template>
   <section class="page qa-page">
-    <header class="page-head">
-      <h1 class="page-title">问答</h1>
-    </header>
-
-    <div class="qa-layout">
+    <div class="qa-layout manuscript">
       <aside class="session-side">
         <div class="session-side-inner">
           <button class="btn btn--primary new-btn" type="button" @click="startNew">+ 新对话</button>
-          <p v-if="sessions.length === 0" class="muted side-empty">还没有历史会话</p>
-          <ul class="session-list">
+          <input
+            v-model="sessionQuery"
+            class="input session-search"
+            type="text"
+            placeholder="搜索会话…"
+            aria-label="搜索会话"
+          />
+          <ul v-if="filteredSessions.length > 0" class="session-list">
             <li
-              v-for="s in sessions"
+              v-for="s in filteredSessions"
               :key="s.id"
               class="session-item"
               :class="{ 'session-item--active': s.id === currentSessionId }"
             >
               <button class="session-open" type="button" :title="s.title" @click="openSession(s.id)">
-                {{ s.title }}
+                <span class="session-title">{{ s.title }}</span>
+                <!-- 日期:同名会话(实测 44 条里 11 条同名)靠它区分;只到日,不占宽度 -->
+                <span class="session-date">{{ shortDate(s.created_at) }}</span>
               </button>
               <button
                 class="session-export"
@@ -1007,65 +1065,78 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
               </button>
             </li>
           </ul>
+          <p v-else class="muted side-empty">
+            {{ sessions.length === 0 ? '还没有历史会话' : '没有匹配的会话' }}
+          </p>
         </div>
       </aside>
 
       <div class="chat-main" @dragover.prevent @drop.prevent="onChatDrop">
-        <div ref="msgListEl" class="msg-list">
+        <!-- 新对话空态:不再是一大片空白,三行把能做的事说清楚 -->
+        <div v-if="messages.length === 0 && !loadingSession" class="qa-empty">
+          <p class="qa-empty-title">问点什么吧</p>
+          <p class="qa-empty-sub">关于笔记库的问题,或任何想整理的资料</p>
+          <ul class="qa-empty-tips">
+            <li><b>/检索</b>找一篇笔记引用到提问</li>
+            <li><b>📎</b>挂文件或截图给 AI 看,不入库</li>
+            <li><b>/</b>唤起全部命令(新对话 / 存为笔记 / 导出)</li>
+          </ul>
+        </div>
+        <div v-else ref="msgListEl" class="msg-weave">
+          <!-- 单列对话流:问答同列按时间下行;问右对齐(朱砂缘),答通栏文章式 -->
           <div
             v-for="(m, i) in messages"
             :key="m.id"
-            class="msg-row"
-            :class="m.role === 'user' ? 'msg-row--user' : 'msg-row--assistant'"
+            class="leaf"
+            :class="m.role === 'user' ? 'leaf--note' : 'leaf--answer'"
           >
-            <div class="bubble" :class="m.role === 'user' ? 'bubble--user' : 'bubble--assistant'">
-              <template v-if="m.role === 'user'">
-                <p class="user-text">{{ m.content }}</p>
-                <!-- 发出时带走的引用/附件/图片:跟消息一起「飞出去」(仅当轮显示,重开会话不回放) -->
-                <div
-                  v-if="m.sent_extras !== undefined && (m.sent_extras.notes.length > 0 || m.sent_extras.files.length > 0 || m.sent_extras.images.length > 0)"
-                  class="bubble-extras"
+            <!-- 眉批:你的提问(衬线 + 朱砂问章),发出时带走的引用/附件跟在批注后 -->
+            <template v-if="m.role === 'user'">
+              <p class="note-text"><span class="note-seal" aria-hidden="true">问</span>{{ m.content }}</p>
+              <div
+                v-if="m.sent_extras !== undefined && (m.sent_extras.notes.length > 0 || m.sent_extras.files.length > 0 || m.sent_extras.images.length > 0)"
+                class="note-extras"
+              >
+                <span
+                  v-for="n in m.sent_extras.notes"
+                  :key="`n${n.id}`"
+                  class="note-chip"
+                  :title="`引用了《${n.title}》`"
                 >
-                  <span
-                    v-for="n in m.sent_extras.notes"
-                    :key="`n${n.id}`"
-                    class="bubble-chip"
-                    :title="`引用了《${n.title}》`"
-                  >
-                    《{{ n.title }}》
-                  </span>
-                  <span
-                    v-for="f in m.sent_extras.files"
-                    :key="`f${f}`"
-                    class="bubble-chip"
-                    :title="`附带了文件 ${f}`"
-                  >
-                    {{ f }}
-                  </span>
-                  <span
-                    v-for="im in m.sent_extras.images"
-                    :key="`i${im.name}`"
-                    class="bubble-chip bubble-chip--image"
-                    :title="`附带了图片 ${im.name}`"
-                  >
-                    <img class="bubble-chip-thumb" :src="im.data_url" alt="" />
-                    {{ im.name }}
-                  </span>
-                </div>
+                  《{{ n.title }}》
+                </span>
+                <span
+                  v-for="f in m.sent_extras.files"
+                  :key="`f${f}`"
+                  class="note-chip"
+                  :title="`附带了文件 ${f}`"
+                >
+                  {{ f }}
+                </span>
+                <span
+                  v-for="im in m.sent_extras.images"
+                  :key="`i${im.name}`"
+                  class="note-chip note-chip--image"
+                  :title="`附带了图片 ${im.name}`"
+                >
+                  <img class="note-chip-thumb" :src="im.data_url" alt="" />
+                  {{ im.name }}
+                </span>
+              </div>
+            </template>
+            <!-- 正文:AI 回答文章式排版(无气泡),文末检索词 + 出处折叠 -->
+            <template v-else>
+              <p v-if="m.content === ''" class="muted leaf-waiting">正在落墨…</p>
+              <template v-else>
+                <p class="leaf-head"><span class="answer-seal" aria-hidden="true">答</span></p>
+                <!-- 渲染器内部已先 HTML 转义,输出只含自己拼的标签,不是原文直接插进 DOM;
+                     点击委托:点 [n]/[W n] 徽章 → 直接跳该出处 -->
+                <article class="md answer-md" v-html="rendered[i]" @click="onAnswerClick(m, $event)" />
               </template>
-              <p v-else-if="m.content === ''" class="muted">…</p>
-              <!-- 渲染器内部已先 HTML 转义,输出只含自己拼的标签,不是原文直接插进 DOM -->
-              <article v-else class="md answer-md" v-html="rendered[i]" />
-
               <p v-if="m.search_query" class="search-hint muted">
                 检索词:{{ m.search_query }}
               </p>
-
-              <details
-                v-if="m.role === 'assistant' && m.citations.length > 0"
-                class="cite-fold"
-                :open="i === messages.length - 1"
-              >
+              <details v-if="m.citations.length > 0" class="cite-fold" :open="i === messages.length - 1">
                 <summary class="cite-summary">出处 {{ m.citations.length }} 条</summary>
                 <ul class="cite-list">
                   <li
@@ -1079,11 +1150,15 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
                   >
                     <span class="cite-n mono">{{ c.url !== null ? `[W${c.n}]` : `[${c.n}]` }}</span>
                     <span class="cite-title" :title="c.note_title">{{ c.note_title }}</span>
+                    <!-- 来源已在纸篓(书架藏了、后端还在,检索仍会命中):挂个篓标,别让人误以为删干净了 -->
                     <span
-                      v-if="c.heading_path !== null"
-                      class="cite-path"
-                      :title="c.heading_path"
+                      v-if="c.note_id !== null && trash.has(c.note_id)"
+                      class="cite-trash"
+                      title="这篇在纸篓里(书架已隐藏,库中仍在,放回即恢复)"
                     >
+                      篓
+                    </span>
+                    <span v-if="c.heading_path !== null" class="cite-path" :title="c.heading_path">
                       {{ c.heading_path }}
                     </span>
                     <span v-if="c.url !== null" class="cite-path" :title="prettyUrl(c.url)">
@@ -1092,22 +1167,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
                   </li>
                 </ul>
               </details>
-            </div>
-          </div>
-
-          <div v-if="sending && !streamingStarted" class="msg-row msg-row--assistant">
-            <div class="bubble bubble--assistant bubble--pending">
-              <span class="thinking">思考中</span>
-              <span class="thinking-dots" aria-hidden="true">…</span>
-              <span v-if="thinkingSec > 0" class="thinking-sec">{{ thinkingSec }}s</span>
-              <span v-if="pendingModel !== null" class="thinking-model">
-                · {{ pendingModel }}
-              </span>
-              <span v-if="agentStatus !== ''" class="thinking-status">{{ agentStatus }}</span>
-              <span v-if="thinkingSec >= 15" class="thinking-hint">
-                （模型较慢，最长可能需要 2 分钟）
-              </span>
-            </div>
+            </template>
           </div>
         </div>
 
@@ -1123,6 +1183,16 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
           aria-label="选择要附加的参考文件或图片"
           @change="onAttachPicked"
         />
+
+        <!-- 思考中:复用输入区上方的状态行,不再往正文流插临时占位 -->
+        <p v-if="sending && !streamingStarted" class="thinking-strip muted" aria-live="polite">
+          <span class="thinking">思考中</span>
+          <span class="thinking-dots" aria-hidden="true">…</span>
+          <span v-if="thinkingSec > 0" class="thinking-sec">{{ thinkingSec }}s</span>
+          <span v-if="pendingModel !== null" class="thinking-model">· {{ pendingModel }}</span>
+          <span v-if="agentStatus !== ''" class="thinking-status">{{ agentStatus }}</span>
+          <span v-if="thinkingSec >= 15" class="thinking-hint">（模型较慢，最长可能需要 2 分钟）</span>
+        </p>
 
         <!-- 交互式存笔记:选项卡取代输入框(最后一个选项是自己输入) -->
         <div v-if="notePlan !== null" class="note-plan card">
@@ -1313,23 +1383,46 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
           </span>
         </p>
       </div>
+
     </div>
   </section>
 </template>
 
 <style scoped>
-.qa-layout {
+/* 出血形态根:撑满 stage--bleed 给的高度链 */
+.qa-page {
   display: flex;
-  align-items: stretch;
-  gap: 16px;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
 }
 
-/* 侧栏外壳:内容不参与行高(绝对铺满),行高只由右侧对话区定——
-   两栏像素级同高;会话再多也只在侧栏内部滚,不再把整页拉长 */
+.qa-layout {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-items: stretch;
+  gap: 20px;
+}
+
+/* ---- 眉批手帐:整页一张摊满视口的宣纸,不再有边框/阴影的「盒」感 ---- */
+.manuscript {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 20px 26px 16px;
+  background: var(--panel);
+}
+
+/* 书签绳外壳:内容不参与行高(绝对铺满),行高只由右侧纸面定——
+   两栏像素级同高;会话再多也只在侧栏内部滚,不再把整页拉长。
+   宽度 176→248:实测 176 下 44 条会话有 38 条被截断(86%)。
+   配合导出/删除改绝对定位(不再占宽),标题可用宽度 99→189px,
+   常见长度的标题能完整显示;问答页已是 1440 宽档,这一栏不挤对话列。 */
 .session-side {
   position: relative;
   flex-shrink: 0;
-  width: 210px;
+  width: 248px;
 }
 
 .session-side-inner {
@@ -1339,77 +1432,141 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   flex-direction: column;
 }
 
+/* 新对话:浅黛青(不用全局墨底主钮——纸面上大面积黑太刺眼) */
 .new-btn {
   width: 100%;
   margin-bottom: 10px;
+  border-color: rgba(61, 90, 115, 0.4);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.new-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: rgba(61, 90, 115, 0.14);
 }
 
 .side-empty {
   font-size: 13px;
 }
 
-/* 会话列表:侧栏里独立滚动(「+ 新对话」固定顶部不被卷走) */
+/* 会话列表 = 书签绳:左侧一道竖虚线作绳,每条会话是挂在其上的签,
+   签结小圆点,当前会话系朱砂结;不再是卡片列表 */
 .session-list {
   display: flex;
   list-style: none;
   flex-direction: column;
-  gap: 6px;
+  gap: 2px;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 2px 2px 6px 0;
+  padding: 2px 0 6px 14px;
+  border-left: 1px dashed var(--line-strong);
+  /* 细墨滚动条:换掉 Windows 原生粗轨道(带 ▲▼ 箭头,像把内容遮了一截) */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+.session-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.session-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.session-list::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--line-strong);
 }
 
 .session-item {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 4px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--panel);
+  gap: 2px;
 }
 
-/* 当前会话:左侧一锭墨标记(inset 不挤布局) */
-.session-item--active {
-  border-color: var(--line-strong);
-  box-shadow: inset 3px 0 0 var(--ink);
+/* 签结 */
+.session-item::before {
+  content: '';
+  position: absolute;
+  left: -17.5px;
+  top: 50%;
+  width: 7px;
+  height: 7px;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 50%;
+  background: var(--panel);
+  transform: translateY(-50%);
+}
+
+/* 当前会话:朱砂结 + 提字 */
+.session-item--active::before {
+  border-color: var(--seal);
+  background: var(--seal);
 }
 
 .session-item--active .session-open {
+  color: var(--ink);
   font-weight: 600;
 }
 
 .session-open {
+  display: flex;
   flex: 1;
+  min-width: 0;
+  align-items: baseline;
+  gap: 6px;
   overflow: hidden;
-  padding: 8px 4px 8px 10px;
+  padding: 6px 4px 6px 6px;
   border: none;
   background: none;
-  color: var(--ink);
+  color: var(--ink-2);
   cursor: pointer;
-  font-size: 13.5px;
+  font-size: 13px;
   text-align: left;
+}
+
+/* 标题单行省略;日期固定在右端不参与压缩 */
+.session-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.session-date {
+  flex-shrink: 0;
+  color: var(--ink-3);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 
 .session-open:hover {
   color: var(--accent-ink);
 }
 
+/* 导出/删除按钮默认藏进纸面,悬停或键盘聚焦该会话时才浮现(列表瘦身) */
 .session-del {
+  /* 绝对定位到行右端:opacity:0 仍会占位(原本挤掉标题 74px),
+     而它只在悬停时才有用,没有理由长占宽度 —— 标题可用宽度从 99px 回到 173px */
+  position: absolute;
+  top: 50%;
+  right: 2px;
   display: flex;
-  flex-shrink: 0;
   align-items: center;
   justify-content: center;
   padding: 4px 8px;
   border: none;
-  background: none;
+  background: var(--panel);
   color: var(--ink-3);
   cursor: pointer;
   font-size: 15px;
   line-height: 1;
-  opacity: 0.75;
+  transform: translateY(-50%);
+  opacity: 0;
   transition: color 0.15s ease, opacity 0.15s ease;
 }
 
@@ -1419,16 +1576,20 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 }
 
 .session-export {
+  position: absolute;
+  top: 50%;
+  /* 在删除键左侧 */
+  right: 26px;
   display: flex;
-  flex-shrink: 0;
   align-items: center;
   justify-content: center;
-  padding: 4px 8px;
+  padding: 4px 6px;
   border: none;
-  background: none;
+  background: var(--panel);
   color: var(--ink-3);
   cursor: pointer;
-  opacity: 0.75;
+  transform: translateY(-50%);
+  opacity: 0;
   transition: color 0.15s ease, opacity 0.15s ease;
 }
 
@@ -1437,101 +1598,196 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   opacity: 1;
 }
 
+.session-item:hover .session-del,
+.session-item:hover .session-export,
+.session-item:focus-within .session-del,
+.session-item:focus-within .session-export {
+  opacity: 0.75;
+}
+
+/* 触屏设备没有悬停:按钮常显 */
+@media (hover: none) {
+  .session-del,
+  .session-export {
+    opacity: 0.75;
+  }
+}
+
+/* ---- 新对话空态(高度随纸面自适应) ---- */
+.qa-empty {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  text-align: center;
+}
+
+.qa-empty-title {
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.qa-empty-sub {
+  color: var(--ink-2);
+  font-size: 13.5px;
+}
+
+.qa-empty-tips {
+  display: flex;
+  margin-top: 16px;
+  list-style: none;
+  flex-direction: column;
+  gap: 8px;
+  color: var(--ink-3);
+  font-size: 13px;
+}
+
+.qa-empty-tips b {
+  margin-right: 6px;
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+
+/* 对话列限宽居中:长答案行宽 ~760px 是阅读舒适区,列在侧栏之外的剩余空间里居中,
+   两侧对称留白(ChatGPT 式);空态/输入框/缓存行都随列同宽 */
 .chat-main {
   display: flex;
   flex: 1;
   min-width: 0;
+  min-height: 0;
   flex-direction: column;
 }
 
-.chat-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
+/* 会话搜索框:压在「+ 新对话」和书签绳之间,占位小、不抢戏 */
+.session-search {
+  margin-bottom: 10px;
+  padding: 6px 10px;
+  font-size: 13px;
 }
 
-.msg-list {
+/* 单列对话流:问答同列按时间垂直下行,通栏放宽、两侧只留 24px 呼吸边距;
+   高度吃满纸面剩余并内部滚动,输入栏钉在视口底部 */
+.msg-weave {
   display: flex;
+  flex: 1;
+  min-height: 0;
   flex-direction: column;
-  gap: 14px;
-  height: 56vh;
-  padding: 6px 2px;
+  gap: 26px;
+  padding: 4px 24px;
   overflow-y: auto;
+  /* 与书签绳同款细墨滚动条 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
 }
 
-.msg-row {
-  display: flex;
+.msg-weave::-webkit-scrollbar {
+  width: 6px;
 }
 
-.msg-row--user {
-  justify-content: flex-end;
+.msg-weave::-webkit-scrollbar-track {
+  background: transparent;
 }
 
-.msg-row--assistant {
-  justify-content: flex-start;
+.msg-weave::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: var(--line-strong);
 }
 
-.bubble {
-  max-width: 86%;
+.leaf {
+  min-width: 0;
 }
 
-/* 用户气泡 = 一锭墨:墨底纸白字,和主按钮同语言 */
-.bubble--user {
-  padding: 9px 14px;
-  border-radius: 14px 14px 4px 14px;
-  background: var(--ink);
-  color: var(--panel);
+/* ---- 用户提问:右对齐轻量块,衬线小字 + 右缘一道朱砂细线(眉批语言收进单列) ---- */
+.leaf--note {
+  align-self: flex-end;
+  max-width: 82%;
+  padding: 2px 12px 2px 0;
+  border-right: 2px solid rgba(176, 58, 46, 0.45);
 }
 
-.user-text {
+.note-seal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--seal);
+  color: #fff;
+  font-size: 11px;
+  line-height: 1;
+  vertical-align: 1px;
+}
+
+.note-text {
   margin: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 14.5px;
+  line-height: 1.8;
   white-space: pre-wrap;
   word-break: break-word;
 }
 
-/* 用户气泡里随行 chips:墨底上的半透明纸牌,像消息里嵌的小卡片 */
-.bubble-extras {
+/* 提问里随行的引用/附件 chips:浅黛青小牌,随块右对齐 */
+.note-extras {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
+  justify-content: flex-end;
+  gap: 5px;
   margin-top: 8px;
 }
 
-.bubble-chip {
+.note-chip {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  max-width: 260px;
+  max-width: 100%;
   padding: 2px 8px;
   overflow: hidden;
-  border: 1px solid rgba(255, 253, 248, 0.3);
-  border-radius: 8px;
-  background: rgba(255, 253, 248, 0.14);
-  color: var(--panel);
-  font-size: 12.5px;
+  border: 1px solid rgba(61, 90, 115, 0.3);
+  border-radius: 7px;
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.bubble-chip-thumb {
-  width: 22px;
-  height: 22px;
+.note-chip-thumb {
+  width: 20px;
+  height: 20px;
   flex-shrink: 0;
   object-fit: cover;
   border-radius: 4px;
 }
 
-.bubble--assistant {
-  padding: 14px 18px;
-  border: 1px solid var(--line);
-  border-radius: 14px 14px 14px 4px;
-  background: var(--panel);
-  box-shadow: var(--shadow);
+/* ---- 正文:AI 回答,无框文章直接落纸,首行盖墨色「答」章与朱砂「问」章对仗 ---- */
+.leaf-head {
+  margin: 0 0 6px;
 }
 
-.bubble--pending {
-  color: var(--ink-3);
+.answer-seal {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--ink);
+  color: var(--panel);
+  font-size: 11px;
+}
+
+.leaf-waiting {
+  font-size: 13.5px;
 }
 
 .search-hint {
@@ -1583,6 +1839,18 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   font-weight: 700;
 }
 
+/* 「篓」标:来源在纸篓里。做旧纸签的样式(虚线 + 淡灰),比一行解释字便宜 */
+.cite-trash {
+  flex-shrink: 0;
+  padding: 0 5px;
+  border: 1px dashed var(--ink-3);
+  border-radius: 4px;
+  color: var(--ink-3);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
 .cite-title {
   overflow: hidden;
   font-weight: 650;
@@ -1603,10 +1871,17 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   word-break: break-all;
 }
 
+/* 正文引用徽章可点:点击经 article 委托切出处坞(徽章外观沿用全局 .cite-ref) */
+.answer-md :deep(.cite-ref) {
+  cursor: pointer;
+}
+
+/* 浅纸墨槽:底部通栏输入,浅纸色凹槽(不再是大面积黑),聚焦时黛青描边;
+   与对话列同宽(两侧同留 24px);chips 用 display:contents 直接成为壳的 flex 项,和输入文字一起换行 */
 .chat-input {
   display: flex;
   gap: 10px;
-  margin-top: 12px;
+  margin: 14px 24px 0;
 }
 
 .chat-input .btn {
@@ -1614,8 +1889,6 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   white-space: nowrap;
 }
 
-/* 输入壳:长得像 .input 的假壳,引用/附件 chips 与文字同框。
-   chips 用 display:contents 直接成为壳的 flex 项,和输入文字一起换行 */
 .input-shell {
   display: flex;
   flex: 1;
@@ -1623,10 +1896,10 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 4px 10px;
+  padding: 8px 14px;
   border: 1px solid var(--line-strong);
-  border-radius: 12px;
-  background: var(--panel);
+  border-radius: 14px;
+  background: var(--bg-soft);
   cursor: text;
   transition:
     border-color 0.15s ease,
@@ -1635,10 +1908,10 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
 .input-shell:focus-within {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(61, 90, 115, 0.12);
+  box-shadow: 0 0 0 3px rgba(61, 90, 115, 0.1);
 }
 
-/* 壳里的真输入框:无边框透明,flex 占满剩余宽度 */
+/* 墨槽里的真输入框:无边框透明 */
 .qa-input {
   flex: 1 1 140px;
   min-width: 140px;
@@ -1662,7 +1935,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
 /* 📎 附件按钮:低调图标键,与发送键区分 */
 .attach-btn {
-  padding: 0 12px;
+  padding: 0 13px;
   font-size: 17px;
   line-height: 1;
   color: var(--ink-3);
@@ -1681,13 +1954,19 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 }
 
 .cache-status {
-  margin: 8px 2px 0;
+  margin: 8px 24px 0;
   font-size: 12.5px;
 }
 
 .cache-value {
   color: var(--accent-ink);
   font-weight: 650;
+}
+
+/* 思考状态行:钉在输入区上方(与缓存状态行同区),复用固定区空间,不占正文 */
+.thinking-strip {
+  margin: 10px 24px 0;
+  font-size: 13px;
 }
 
 /* 思考中:秒数 + 久等提示 */
@@ -1699,8 +1978,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 }
 
 .thinking-hint {
-  display: block;
-  margin-top: 6px;
+  margin-left: 6px;
   color: var(--ink-3);
   font-size: 12px;
 }
@@ -1736,6 +2014,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 
 /* ---- 交互式存笔记选项卡 ---- */
 .note-plan {
+  margin: 14px 24px 0;
   padding: 14px 18px;
 }
 
@@ -1830,7 +2109,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
   position: relative;
 }
 
-/* ---- 引用笔记 / 附件 chips(嵌在输入壳里) ---- */
+/* ---- 引用笔记 / 附件 chips(嵌在墨槽里:浅色小牌) ---- */
 .ref-chips {
   display: contents;
 }
@@ -1854,7 +2133,7 @@ function openCitation(c: { note_id: number | null; url: string | null }): void {
 /* 附件 chip:用中性色调与「引用笔记」区分(它是临时参考,不是库内笔记) */
 .ref-chip--attach {
   border-color: var(--line-strong);
-  background: var(--bg-soft);
+  background: var(--panel);
   color: var(--ink-2);
 }
 

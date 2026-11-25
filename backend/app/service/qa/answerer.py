@@ -80,12 +80,16 @@ class QaResult(BaseModel):
     meta: dict = Field(default_factory=dict)
 
 
-# 输出格式指引(渲染端支持:GFM 表格 / mermaid 图 / SVG 插图;两个 system prompt 共用)
+# 输出格式指引(渲染端支持:GFM 表格 / mermaid 图 / ```mindmap 导图 / SVG 插图;
+# 两个 system prompt 共用)
 FORMAT_GUIDE = (
-    "输出格式(前端支持 Markdown 表格、mermaid 图和 SVG 插图,合理使用能让答案更清楚):\n"
+    "输出格式(前端支持 Markdown 表格、mermaid 图、mindmap 导图和 SVG 插图,"
+    "合理使用能让答案更清楚):\n"
     "- 多维度对比/枚举属性 → 用 Markdown 表格(表头行 + |---|分隔行);\n"
-    "- 流程/结构/关系/思维导图 → 用 ```mermaid 代码块"
-    "(flowchart TD 或 mindmap,节点文字别加引号);\n"
+    "- 流程/结构/关系 → 用 ```mermaid 代码块(flowchart TD,节点文字别加引号);\n"
+    "- **思维导图/知识拆解/分类树 → 用 ```mindmap 代码块,里面写普通的 Markdown 嵌套列表**"
+    "(第一行是中心主题,用 `- ` 起头;下一层缩进 2 空格再写 `- `;"
+    "别用 mermaid 的缩进语法,也别在 ```mindmap 里写 graph/mindmap 关键字);\n"
     "- 少量数值对比 → ```mermaid 里用 xychart-beta 柱状图;\n"
     "- mermaid 画不了的示意图/插图 → 用 ```svg 代码块画矢量图:输出**完整自包含**的"
     "<svg>…</svg>(viewBox 定比例、样式全内联;不要外部图片/字体/脚本);\n"

@@ -17,14 +17,47 @@ import { RouterLink, useRouter } from 'vue-router'
 import { describeApiError } from '../api/http'
 import { deleteNote, getNote, updateNote } from '../api/notes'
 import type { NoteDetail, NoteParent } from '../api/notes'
+import { prevRoute } from '../router/prevRoute'
 import { applyFigureLayout } from '../utils/figure-layout'
 import { renderMermaidIn } from '../utils/mermaid'
+import { renderMindmapsIn } from '../utils/mindmap'
+import { confirmDialog } from '../utils/confirm'
 import { renderSectionText, collectCitationTargets } from '../utils/section'
 import { renderSvgsIn } from '../utils/svg'
 
 const props = defineProps<{ id: string }>()
 
 const router = useRouter()
+
+/**
+ * 返回按钮的来源感知:从问答进来显示「返回对话」,从书架进来显示「返回书架」。
+ * 有上一条应用内路由就 router.back()(回到离开时的现场,问答会话原样还在);
+ * 直接刷新/外链打开(prevRoute 为 null)则兜底回书架。
+ */
+const backLabel = computed<string>(() => {
+  switch (prevRoute.value?.name) {
+    case 'qa':
+      return '返回对话'
+    case 'notes':
+      return '返回书架'
+    case 'note':
+      return '返回笔记'
+    case 'video':
+      return '返回视频'
+    case 'settings':
+      return '返回设置'
+    case 'profile':
+      return '返回个人中心'
+    case 'charter':
+      return '返回章程'
+    default:
+      return ''
+  }
+})
+
+function goBack(): void {
+  router.back()
+}
 
 const note = ref<NoteDetail | null>(null)
 const loading = ref(false)
@@ -274,6 +307,7 @@ async function load(): Promise<void> {
   // SVG 插图同理:沙箱 iframe 展示,失败退化代码块
   if (contentEl.value !== null) {
     void renderMermaidIn(contentEl.value)
+    void renderMindmapsIn(contentEl.value)
     void renderSvgsIn(contentEl.value)
     // 插图按宽高比分类(窄图左浮动文字环绕,宽图保持居中限宽;见 figure-layout.ts)
     applyFigureLayout(contentEl.value)
@@ -355,9 +389,12 @@ const deleting = ref(false)
 
 async function removeNote(): Promise<void> {
   if (note.value === null || deleting.value) return
-  const ok = window.confirm(
-    `确定删除《${note.value.title}》吗?正文、检索索引和原文件会一起删除,不可恢复。`,
-  )
+  const ok = await confirmDialog({
+    title: `删除《${note.value.title}》`,
+    body: '正文、检索索引和原文件会一起删除,不可恢复。',
+    confirmText: '删除',
+    danger: true,
+  })
   if (!ok) return
   deleting.value = true
   try {
@@ -372,7 +409,10 @@ async function removeNote(): Promise<void> {
 
 <template>
   <section class="page note-page">
-    <RouterLink class="back" :to="{ name: 'notes' }">← 回笔记库</RouterLink>
+    <a v-if="backLabel !== ''" class="back" role="link" tabindex="0" @click="goBack" @keydown.enter="goBack">
+      ← {{ backLabel }}
+    </a>
+    <RouterLink v-else class="back" :to="{ name: 'notes' }">← 回书架</RouterLink>
 
     <p v-if="loading" class="muted">加载中…</p>
     <p v-else-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
@@ -395,11 +435,11 @@ async function removeNote(): Promise<void> {
         </div>
         <p v-if="savedHint !== ''" class="note note--ok saved-hint">{{ savedHint }}</p>
         <div class="detail-meta">
-          <span class="badge badge--neutral">质量:{{ qualityLabel(note.quality) }}</span>
-          <span v-if="note.lang !== ''" class="muted">语言:{{ note.lang }}</span>
-          <span v-if="note.tags.length > 0" class="muted">标签:{{ note.tags.join(' · ') }}</span>
-          <span v-if="note.source_id !== null" class="muted">来源 #{{ note.source_id }}</span>
-          <span class="muted">{{ toc.length }} 节</span>
+          <span>{{ qualityLabel(note.quality) }}</span>
+          <span v-if="note.lang !== ''">{{ note.lang }}</span>
+          <span v-if="note.tags.length > 0">{{ note.tags.join(' / ') }}</span>
+          <span v-if="note.source_id !== null">来源 #{{ note.source_id }}</span>
+          <span>{{ toc.length }} 节</span>
         </div>
       </header>
 
@@ -486,8 +526,10 @@ async function removeNote(): Promise<void> {
 <style scoped>
 .note-page {
   display: flex;
-  /* 撑满可视区域,页面本身不滚(滚动交给下面两栏) */
-  height: calc(100vh - 96px);
+  /* 撑满舞台剩余高度,页面本身不滚(滚动交给下面两栏)。
+     高度由 App.vue 的 .stage--clamp 提供(视口 − 顶栏),这里只管占满 ——
+     以前在本页写 calc(100vh - 96px),顶栏 53 + 舞台内边距 82 一加就多滚 39px */
+  flex: 1;
   min-height: 420px;
   flex-direction: column;
 }
@@ -498,8 +540,11 @@ async function removeNote(): Promise<void> {
   font-size: 13.5px;
 }
 
+/* 扉页:标题区下一条细墨线,阅读区从线下展开,像翻开一本书 */
 .note-head {
-  margin-bottom: 18px;
+  margin-bottom: 20px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--line);
 }
 
 .note-head-row {
@@ -509,9 +554,23 @@ async function removeNote(): Promise<void> {
   gap: 12px;
 }
 
+/* 扉页操作:阅读时隐身,悬停标题区/键盘聚焦才浮现;触屏无悬停常显 */
 .note-actions {
   display: flex;
   gap: 8px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+
+.note-head:hover .note-actions,
+.note-head:focus-within .note-actions {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .note-actions {
+    opacity: 0.9;
+  }
 }
 
 .saved-hint {
@@ -569,12 +628,20 @@ async function removeNote(): Promise<void> {
   gap: 10px;
 }
 
+/* 扉页元信息:一行点隔(分隔点自动加),去掉「质量: 标签:」的表单腔 */
 .detail-meta {
   display: flex;
   margin-top: 8px;
   flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.7;
+}
+
+.detail-meta > span + span::before {
+  content: '·';
+  margin: 0 8px;
 }
 
 /* ---------- 两栏 ---------- */
@@ -870,10 +937,10 @@ async function removeNote(): Promise<void> {
   font-size: 13px;
 }
 
-/* 窄屏:目录折到上方 */
+/* 窄屏:目录折到上方,整页改为自然高度滚动(父级 .stage--clamp 高度放开见 App.vue) */
 @media (max-width: 900px) {
   .note-page {
-    height: auto;
+    flex: none;
   }
 
   .reader {

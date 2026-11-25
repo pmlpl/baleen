@@ -45,10 +45,29 @@ let lightboxEl: HTMLElement | null = null
 let lightboxKeyHandler: ((e: KeyboardEvent) => void) | null = null
 let lightboxWheelHandler: ((e: WheelEvent) => void) | null = null
 let lightboxScale = 1
+/** 平移量(px):相对 canvas 原位。灯箱里缩放与平移都用 transform 一套坐标系 */
+let lightboxX = 0
+let lightboxY = 0
 
-function applyLightboxScale(): void {
+function applyLightboxTransform(): void {
   const canvas = lightboxEl?.querySelector<HTMLElement>('.mermaid-lightbox-canvas')
-  if (canvas !== undefined && canvas !== null) canvas.style.zoom = String(lightboxScale)
+  if (canvas !== null && canvas !== undefined) {
+    // transform-origin 保持 center:缩放以画布中心为基准,平移量独立叠加
+    canvas.style.transform = `translate(${lightboxX}px, ${lightboxY}px) scale(${lightboxScale})`
+  }
+  // 放大后光标提示可拖;回到 1 倍且未平移时恢复
+  const body = lightboxEl?.querySelector<HTMLElement>('.mermaid-lightbox-body')
+  if (body !== null && body !== undefined) {
+    const panned = lightboxX !== 0 || lightboxY !== 0
+    body.classList.toggle('is-pannable', lightboxScale > 1 || panned)
+  }
+}
+
+function resetLightboxTransform(): void {
+  lightboxScale = 1
+  lightboxX = 0
+  lightboxY = 0
+  applyLightboxTransform()
 }
 
 function closeLightbox(): void {
@@ -58,17 +77,77 @@ function closeLightbox(): void {
     lightboxKeyHandler = null
   }
   const body = lightboxEl.querySelector<HTMLElement>('.mermaid-lightbox-body')
-  if (body !== null && lightboxWheelHandler !== null) {
-    body.removeEventListener('wheel', lightboxWheelHandler)
-    lightboxWheelHandler = null
+  if (body !== null) {
+    if (lightboxWheelHandler !== null) {
+      body.removeEventListener('wheel', lightboxWheelHandler)
+      lightboxWheelHandler = null
+    }
+    body.removeEventListener('pointerdown', onLightboxPointerDown)
+    body.removeEventListener('pointermove', onLightboxPointerMove)
+    body.removeEventListener('pointerup', onLightboxPointerUp)
+    body.removeEventListener('pointercancel', onLightboxPointerUp)
   }
   lightboxEl.remove()
   lightboxEl = null
 }
 
+/** ---- 拖拽平移(指针事件,鼠标/触摸/笔通用) ---- */
+let dragState: {
+  pointerId: number
+  startX: number
+  startY: number
+  originX: number
+  originY: number
+  /** 累计位移:用来区分「拖动」与「点击背景关闭」 */
+  moved: number
+} | null = null
+
+function onLightboxPointerDown(event: PointerEvent): void {
+  // 只处理主键(右键/中键不拖)
+  if (event.button !== 0) return
+  const body = lightboxEl?.querySelector<HTMLElement>('.mermaid-lightbox-body')
+  if (body === null || body === undefined) return
+  dragState = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    originX: lightboxX,
+    originY: lightboxY,
+    moved: 0,
+  }
+  body.setPointerCapture(event.pointerId)
+  body.classList.add('is-dragging')
+}
+
+function onLightboxPointerMove(event: PointerEvent): void {
+  if (dragState === null || event.pointerId !== dragState.pointerId) return
+  const dx = event.clientX - dragState.startX
+  const dy = event.clientY - dragState.startY
+  lightboxX = dragState.originX + dx
+  lightboxY = dragState.originY + dy
+  dragState.moved = Math.max(dragState.moved, Math.hypot(dx, dy))
+  applyLightboxTransform()
+}
+
+/** 上一次拖拽的位移量:> 4px 视为拖动,随后的 click 不算「点空白关闭」 */
+let lastDragMoved = 0
+
+function onLightboxPointerUp(event: PointerEvent): void {
+  if (dragState === null || event.pointerId !== dragState.pointerId) return
+  const body = lightboxEl?.querySelector<HTMLElement>('.mermaid-lightbox-body')
+  if (body !== null && body !== undefined) {
+    body.releasePointerCapture?.(event.pointerId)
+    body.classList.remove('is-dragging')
+  }
+  lastDragMoved = dragState.moved
+  dragState = null
+}
+
 function openLightbox(svg: SVGSVGElement): void {
   closeLightbox()
   lightboxScale = 1
+  lightboxX = 0
+  lightboxY = 0
 
   lightboxEl = document.createElement('div')
   lightboxEl.className = 'mermaid-lightbox'
@@ -86,31 +165,52 @@ function openLightbox(svg: SVGSVGElement): void {
   const canvas = lightboxEl.querySelector('.mermaid-lightbox-canvas')
   canvas?.appendChild(svg.cloneNode(true))
 
-  // 滚轮缩放(向上滚放大,向下缩小);preventDefault 防止页面跟着滚
+  // 滚轮缩放:以鼠标位置为锚点(放大时光标下的那一点不动)
   const bodyEl = lightboxEl.querySelector<HTMLElement>('.mermaid-lightbox-body')
   if (bodyEl !== null) {
     lightboxWheelHandler = (event: WheelEvent) => {
       event.preventDefault()
-      lightboxScale = Math.min(3, Math.max(0.5, lightboxScale - event.deltaY * 0.0015))
-      applyLightboxScale()
+      const prev = lightboxScale
+      const next = Math.min(3, Math.max(0.5, prev - event.deltaY * 0.0015))
+      if (next === prev) return
+
+      // 锚点换算:光标相对容器中心的偏移,按缩放比例差补偿平移
+      const rect = bodyEl.getBoundingClientRect()
+      const cx = event.clientX - rect.left - rect.width / 2
+      const cy = event.clientY - rect.top - rect.height / 2
+      const ratio = next / prev
+      lightboxX = cx - (cx - lightboxX) * ratio
+      lightboxY = cy - (cy - lightboxY) * ratio
+      lightboxScale = next
+      applyLightboxTransform()
     }
     bodyEl.addEventListener('wheel', lightboxWheelHandler, { passive: false })
+
+    bodyEl.addEventListener('pointerdown', onLightboxPointerDown)
+    bodyEl.addEventListener('pointermove', onLightboxPointerMove)
+    bodyEl.addEventListener('pointerup', onLightboxPointerUp)
+    bodyEl.addEventListener('pointercancel', onLightboxPointerUp)
   }
 
   lightboxEl.addEventListener('click', (event) => {
     const target = event.target as HTMLElement
     const act = target.closest<HTMLElement>('[data-act]')?.dataset.act
+    // 拖动结束的松手也会派发 click:位移超过阈值就吞掉,别把灯箱关掉
+    const wasDrag = lastDragMoved > 4
+    lastDragMoved = 0
+
     if (act === 'plus') {
       lightboxScale = Math.min(3, lightboxScale + 0.25)
-      applyLightboxScale()
+      applyLightboxTransform()
     } else if (act === 'minus') {
       lightboxScale = Math.max(0.5, lightboxScale - 0.25)
-      applyLightboxScale()
+      applyLightboxTransform()
     } else if (act === 'reset') {
-      lightboxScale = 1
-      applyLightboxScale()
-    } else if (act === 'close' || target === lightboxEl) {
-      closeLightbox() // 点背景空白处也关
+      resetLightboxTransform()
+    } else if (act === 'close') {
+      closeLightbox()
+    } else if (target === lightboxEl && !wasDrag) {
+      closeLightbox() // 点背景空白处也关;拖完松手不算
     }
   })
 
@@ -120,7 +220,7 @@ function openLightbox(svg: SVGSVGElement): void {
   document.addEventListener('keydown', lightboxKeyHandler)
 
   document.body.appendChild(lightboxEl)
-  applyLightboxScale()
+  applyLightboxTransform()
 }
 
 /** 全局只挂一次的点击委托:点任何 .mermaid-figure 开灯箱 */

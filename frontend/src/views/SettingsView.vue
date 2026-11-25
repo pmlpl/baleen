@@ -2,16 +2,14 @@
 /**
  * 设置页:GET/PUT /api/settings —— 模型与网关配置,保存后热生效(问答/改写即用,无需重启)。
  * api_key 只写不读:后端永不回显全文,只回末 4 位;留空 = 保持不变。
+ * 布局:通栏两栏(模型服务 | 联网与生成)+ 底部保存行,填满 1060px 书页宽。
  */
 import { onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 
 import { describeApiError } from '../api/http'
 import { getSettings, updateSettings } from '../api/settings'
 import PasswordInput from '../components/PasswordInput.vue'
 import { markKeyConfigured } from '../onboardingGate'
-
-const router = useRouter()
 
 const baseUrl = ref('')
 const model = ref('')
@@ -100,79 +98,79 @@ onMounted(() => {
     <p v-if="loading" class="muted">加载中…</p>
     <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
 
-    <div class="card form">
-      <label class="field">
-        <span class="field-label" title="对应后端配置 LLM_BASE_URL">网关地址</span>
-        <input
-          v-model="baseUrl"
-          class="input"
-          type="text"
-          placeholder="https://api.deepseek.com/v1"
-        />
-      </label>
-      <label class="field">
-        <span class="field-label" title="对应后端配置 LLM_MODEL">模型</span>
-        <input v-model="model" class="input" type="text" placeholder="deepseek-flash / glm-5.2 …" />
-      </label>
-      <label class="field">
-        <span class="field-label">API Key</span>
-        <PasswordInput
-          v-model="apiKey"
-          placeholder="留空保持不变"
-          autocomplete="off"
-        />
-        <span v-if="keySet" class="muted key-hint">已设置(末四位 {{ keyTail }})</span>
-      </label>
-      <label class="field">
-        <span class="field-label">Tavily API Key(联网搜索,可选)</span>
-        <PasswordInput
-          v-model="tavilyKey"
-          placeholder="留空保持不变"
-          autocomplete="off"
-        />
-        <span v-if="tavilySet" class="muted key-hint">已设置(末四位 {{ tavilyTail }})</span>
-      </label>
-      <label class="field">
-        <span class="field-label">上下文上限(可选,token)</span>
-        <input
-          v-model="contextTokens"
-          class="input"
-          type="number"
-          min="0"
-          placeholder="填模型上下文长度，留空=整篇喂"
-        />
-      </label>
-      <label class="field">
-        <span class="field-label">输出上限(可选,token)</span>
-        <input
-          v-model="outputTokens"
-          class="input"
-          type="number"
-          min="0"
-          placeholder="填模型最大输出，留空=131072"
-        />
-      </label>
+    <div class="grid-2">
+      <div class="card">
+        <h2 class="section-title">模型服务</h2>
+        <label class="field">
+          <span class="field-label" title="对应后端配置 LLM_BASE_URL">网关地址</span>
+          <input
+            v-model="baseUrl"
+            class="input"
+            type="text"
+            placeholder="https://api.deepseek.com/v1"
+          />
+        </label>
+        <label class="field">
+          <span class="field-label" title="对应后端配置 LLM_MODEL">模型</span>
+          <input v-model="model" class="input" type="text" placeholder="deepseek-flash / glm-5.2 …" />
+        </label>
+        <label class="field field--last">
+          <span class="field-label">API Key</span>
+          <PasswordInput
+            v-model="apiKey"
+            placeholder="留空保持不变"
+            autocomplete="off"
+          />
+          <span v-if="keySet" class="muted key-hint">已设置(末四位 {{ keyTail }})</span>
+        </label>
+      </div>
 
-      <label
-        class="field field--switch"
-        title="仅当内容是并列清单或流程阶段时才画(系统按标题结构判定)；节点对不上原文的图会被自动丢弃。关掉则一律不生成"
-      >
-        <input v-model="allowDiagrams" type="checkbox" class="switch" />
-        <span class="field-label">导入时生成结构图</span>
-      </label>
+      <div class="card">
+        <h2 class="section-title">联网与生成</h2>
+        <label class="field">
+          <span class="field-label">Tavily API Key(联网搜索,可选)</span>
+          <PasswordInput
+            v-model="tavilyKey"
+            placeholder="留空保持不变"
+            autocomplete="off"
+          />
+          <span v-if="tavilySet" class="muted key-hint">已设置(末四位 {{ tavilyTail }})</span>
+        </label>
+        <label class="field">
+          <span class="field-label">上下文上限(可选,token)</span>
+          <input
+            v-model="contextTokens"
+            class="input"
+            type="number"
+            min="0"
+            placeholder="填模型上下文长度，留空=整篇喂"
+          />
+        </label>
+        <label class="field">
+          <span class="field-label">输出上限(可选,token)</span>
+          <input
+            v-model="outputTokens"
+            class="input"
+            type="number"
+            min="0"
+            placeholder="填模型最大输出，留空=131072"
+          />
+        </label>
+        <label
+          class="field field--switch field--last"
+          title="仅当内容是并列清单或流程阶段时才画(系统按标题结构判定)；节点对不上原文的图会被自动丢弃。关掉则一律不生成"
+        >
+          <input v-model="allowDiagrams" type="checkbox" class="switch" />
+          <span class="field-label">导入时生成结构图</span>
+        </label>
+      </div>
+    </div>
 
+    <div class="actions">
       <button class="btn btn--primary" type="button" :disabled="saving" @click="save">
         {{ saving ? '保存中…' : '保存' }}
       </button>
       <p v-if="saved" class="muted save-ok">已保存,立即生效。</p>
-    </div>
-
-    <div class="card charter-section">
-      <h2 class="section-title">知识库章程</h2>
-      <p class="muted">章程决定导入时哪些笔记收、哪些不收。</p>
-      <button class="btn" type="button" @click="router.push({ name: 'charter' })">
-        查看 / 修改章程
-      </button>
     </div>
   </section>
 </template>
@@ -194,14 +192,39 @@ onMounted(() => {
   cursor: pointer;
 }
 
-.form {
-  max-width: 560px;
+/* ---------- 通栏两栏:模型服务 | 联网与生成 ---------- */
+
+.grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+.section-title {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+
+.card {
   padding: 20px 24px;
+}
+
+/* 底部通栏操作行:保存 + 保存提示 */
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
 }
 
 .field {
   display: block;
   margin-bottom: 16px;
+}
+
+/* 卡内最后一个字段不吃底边距,免得把卡撑高一截空 */
+.field--last {
+  margin-bottom: 0;
 }
 
 .field-label {
@@ -217,17 +240,12 @@ onMounted(() => {
 }
 
 .save-ok {
-  margin: 10px 0 0;
+  margin: 0;
 }
 
-.charter-section {
-  max-width: 560px;
-  padding: 20px 24px;
-  margin-top: 16px;
-}
-
-.section-title {
-  margin: 0 0 8px;
-  font-size: 16px;
+@media (max-width: 900px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

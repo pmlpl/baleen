@@ -88,8 +88,8 @@ function renderInline(raw: string): string {
       /(?<![\w.[])\[(W?\d+)\]/g,
       (_m, ref: string) =>
         ref.startsWith('W')
-          ? `<span class="cite-ref cite-ref--web">${ref}</span>`
-          : `<span class="cite-ref">${ref}</span>`,
+          ? `<span class="cite-ref cite-ref--web" data-cite="${ref}">${ref}</span>`
+          : `<span class="cite-ref" data-cite="${ref}">${ref}</span>`,
     )
 
   // 还原行内代码与公式
@@ -149,6 +149,8 @@ export function renderMarkdown(markdown: string): string {
   const listStack: ListFrame[] = []
   let inCode = false
   let codeLines: string[] = []
+  /** 当前围栏的语言标记(```mermaid / ```mindmap / ```svg …);空串 = 未标注 */
+  let codeLang = ''
   let paragraph: string[] = []
 
   const flushParagraph = (): void => {
@@ -180,13 +182,18 @@ export function renderMarkdown(markdown: string): string {
 
     if (line.trimStart().startsWith('```')) {
       if (inCode) {
-        out.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
+        // 带语言标记时要落到 data-lang:渲染器靠它区分 mermaid / mindmap / svg,
+        // 光看内容会把「markdown 列表」误判成普通列表(2026-11-25 导图改道时补)
+        const attrs = codeLang === '' ? '' : ` data-lang="${escapeHtml(codeLang)}"`
+        out.push(`<pre${attrs}><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
         codeLines = []
+        codeLang = ''
         inCode = false
       } else {
         flushParagraph()
         closeAllLists()
         inCode = true
+        codeLang = line.trimStart().slice(3).trim()
       }
       continue
     }
@@ -302,7 +309,11 @@ export function renderMarkdown(markdown: string): string {
     paragraph.push(line.trim())
   }
 
-  if (inCode) out.push(`<pre><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
+  // 围栏没闭合就到底:按已收内容输出(仍带上语言标记,别丢)
+  if (inCode) {
+    const attrs = codeLang === '' ? '' : ` data-lang="${escapeHtml(codeLang)}"`
+    out.push(`<pre${attrs}><code>${escapeHtml(codeLines.join('\n'))}</code></pre>`)
+  }
   flushParagraph()
   closeAllLists()
   return out.join('\n')

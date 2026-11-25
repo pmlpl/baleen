@@ -320,164 +320,361 @@ onMounted(async () => {
 </script>
 
 <template>
-  <section class="page">
-    <header class="page-head">
-      <h1 class="page-title">视频笔记</h1>
-    </header>
-
-    <div class="video-layout">
-      <!-- 左：视频播放器 -->
-      <div class="player-section">
-        <div class="url-bar">
-          <input
-            v-model="urlInput"
-            class="input"
-            type="url"
-            placeholder="粘贴 B 站或抖音视频链接..."
-            aria-label="视频链接"
-          />
-        </div>
-
-        <div v-if="canPreview && urlInput.trim() !== ''" class="player-box">
-          <iframe
-            v-if="bvid"
-            :src="embedUrl"
-            class="player-iframe"
-            scrolling="no"
-            border="0"
-            frameborder="no"
-            framespacing="0"
-            allowfullscreen="true"
-            sandbox="allow-scripts allow-same-origin allow-popups"
-          />
-          <div v-else-if="isDouyin" class="douyin-preview">
-            <p>🎵 抖音视频</p>
-            <a :href="cleanUrl" target="_blank" rel="noopener noreferrer" class="douyin-link">
-              在抖音中打开 →
-            </a>
-          </div>
-        </div>
-        <div v-else-if="urlInput.trim() !== ''" class="player-hint muted">
-          <p>⚠️ 无法识别视频链接。</p>
-          <p>支持 B 站（BV号/b23.tv）和抖音（v.douyin.com）链接。</p>
-        </div>
+  <!-- 投喂台:单列居中。空态=大输入框+模式小卡;粘了链接原位展开播放器+进度 -->
+  <section class="page feed">
+    <div class="tray" :class="{ 'tray--empty': urlInput.trim() === '' && imports.length === 0 }">
+      <div class="tray-bar">
+        <input
+          v-model="urlInput"
+          class="input tray-input"
+          type="url"
+          placeholder="粘贴 B 站或抖音链接,喂给书房…"
+          aria-label="视频链接"
+        />
+        <button
+          class="btn btn--primary tray-import"
+          type="button"
+          :disabled="urlInput.trim() === '' || importing"
+          @click="importVideo"
+        >
+          {{ importing ? '导入中…' : '导入笔记' }}
+        </button>
       </div>
 
-      <!-- 右：导入设置 + 进度 -->
-      <div class="settings-section">
-        <div class="card import-card">
-          <p class="card-title">导入设置</p>
-
-          <div class="mode-selector">
-            <label class="mode-option" :class="{ 'mode-option--active': mode === 'whisper' }">
-              <input v-model="mode" type="radio" value="whisper" />
-              <span class="mode-label">whisper 深度</span>
-              <span class="mode-desc muted">下载音频 + whisper 转写（约 2-3 分钟，内容可靠）</span>
-            </label>
-            <label class="mode-option" :class="{ 'mode-option--active': mode === 'subtitle', 'mode-option--disabled': isDouyin }">
-              <input v-model="mode" type="radio" value="subtitle" :disabled="isDouyin" />
-              <span class="mode-label">字幕快速{{ isDouyin ? '（仅 B 站）' : '' }}</span>
-              <span class="mode-desc muted">拉 B 站 CC 字幕（秒级，但 B 站字幕不稳定）</span>
-            </label>
-          </div>
-
-          <button
-            class="btn btn--primary import-btn"
-            type="button"
-            :disabled="urlInput.trim() === '' || importing"
-            @click="importVideo"
+      <div class="tray-row2">
+        <div class="mode-switch" role="radiogroup" aria-label="导入模式">
+          <span
+            class="mode-thumb"
+            :class="{ 'mode-thumb--right': mode === 'subtitle' }"
+            aria-hidden="true"
+          />
+          <label class="mode-seg" :class="{ 'mode-seg--on': mode === 'whisper' }">
+            <input v-model="mode" type="radio" value="whisper" name="video-mode" />
+            whisper 深度
+          </label>
+          <label
+            class="mode-seg"
+            :class="{ 'mode-seg--on': mode === 'subtitle', 'mode-seg--off': isDouyin }"
+            :title="isDouyin ? '抖音没有 CC 字幕,只能 whisper 深度' : undefined"
           >
-            {{ importing ? '导入中…' : '导入笔记' }}
-          </button>
-
-          <!-- B 站登录：SESSDATA 是被风控时浏览器兜底的门票；不登录平时也能用 -->
-          <div class="bili-login">
-            <span class="bili-login-state muted">
-              <template v-if="biliStatus?.logged_in">
-                B 站已登录{{ biliStatus.uid ? `（${biliStatus.uid}）` : ''
-                }}<template v-if="biliStatus.logged_at">· 上次扫码 {{ formatBiliAt(biliStatus.logged_at) }}</template>
-              </template>
-              <template v-else>B 站未登录（平时不用登录）</template>
-            </span>
-            <button
-              class="btn bili-login-btn"
-              type="button"
-              :disabled="biliLogging"
-              title="被风控时导入会自动弹出扫码窗，也可提前扫码备用"
-              @click="doBiliLogin"
-            >
-              {{ biliLogging ? '等待扫码中…' : biliStatus?.logged_in ? '重新扫码' : 'B 站登录（扫码）' }}
-            </button>
-          </div>
-          <p v-if="biliError" class="bili-login-error">❌ {{ biliError }}</p>
+            <input v-model="mode" type="radio" value="subtitle" :disabled="isDouyin" name="video-mode" />
+            字幕快速
+          </label>
         </div>
 
-        <!-- 导入进度 -->
-        <div v-if="imports.length > 0" class="card progress-card">
-          <p class="card-title">导入进度</p>
-          <ul class="progress-list">
-            <li v-for="(it, i) in imports" :key="i" class="progress-row">
-              <div class="progress-track">
-                <div
-                  class="progress-fill"
-                  :class="{ 'progress-fill--failed': it.status === 'failed', 'progress-fill--done': it.status === 'done' }"
-                  :style="{ width: it.progress + '%' }"
-                />
-              </div>
-              <div class="progress-meta">
-                <span class="progress-stage" :class="`progress-stage--${it.status}`">{{ it.stage }}</span>
-                <span v-if="it.status === 'pending'" class="muted progress-pct">{{ it.progress }}%</span>
-                <RouterLink
-                  v-if="it.noteId !== null"
-                  class="progress-link"
-                  :to="`/notes/${it.noteId}`"
-                >
-                  查看笔记 →
-                </RouterLink>
-              </div>
-              <ul v-if="it.log.length > 0" class="progress-log">
-                <li
-                  v-for="(entry, j) in it.log"
-                  :key="j"
-                  class="progress-log-item"
-                >
-                  <span class="progress-log-ts muted">{{ formatLogTime(entry.ts) }}</span>
-                  <span class="progress-log-stage">{{ entry.stage }}</span>
-                  <span v-if="entry.pct !== null" class="progress-log-pct muted">{{ entry.pct }}%</span>
-                </li>
-              </ul>
+        <!-- B 站登录:SESSDATA 是被风控时浏览器兜底的门票;平时不用登录,收成一行小字 -->
+        <p class="tray-bili muted">
+        <template v-if="biliStatus?.logged_in">
+          B 站已登录{{ biliStatus.uid ? `(${biliStatus.uid})` : ''
+          }}<template v-if="biliStatus.logged_at"> · 上次扫码 {{ formatBiliAt(biliStatus.logged_at) }}</template>
+        </template>
+        <template v-else>B 站未登录(平时不用登录,被风控时才需要)</template>
+        <button
+          class="bili-link"
+          type="button"
+          :disabled="biliLogging"
+          title="被风控时导入会自动弹出扫码窗,也可提前扫码备用"
+          @click="doBiliLogin"
+        >
+          {{ biliLogging ? '等待扫码中…' : biliStatus?.logged_in ? '重新扫码' : '扫码登录' }}
+          </button>
+        </p>
+      </div>
+      <p v-if="biliError" class="bili-error">❌ {{ biliError }}</p>
+
+      <!-- 空态三步:用图形+编号说明会发生什么,不是标语。
+           有链接/有任务时整块消失,不占地方 -->
+      <ol v-if="urlInput.trim() === '' && imports.length === 0" class="tray-steps">
+        <li class="step">
+          <span class="step-num" aria-hidden="true">一</span>
+          <span class="step-body">
+            <span class="step-title">粘链接</span>
+            <span class="step-desc">B 站 BV 号、b23.tv 短链,或抖音分享链接</span>
+          </span>
+        </li>
+        <li class="step">
+          <span class="step-num" aria-hidden="true">二</span>
+          <span class="step-body">
+            <span class="step-title">自动转写</span>
+            <span class="step-desc">下载音频 + whisper 转写;有 CC 字幕可秒级拉取</span>
+          </span>
+        </li>
+        <li class="step">
+          <span class="step-num" aria-hidden="true">三</span>
+          <span class="step-body">
+            <span class="step-title">成一本书</span>
+            <span class="step-desc">抽帧配图、AI 整理成带章节的笔记,进书架可检索</span>
+          </span>
+        </li>
+      </ol>
+    </div>
+
+    <!-- 粘了链接:原位展开播放器/预览 -->
+    <div v-if="canPreview && urlInput.trim() !== ''" class="player-box">
+      <iframe
+        v-if="bvid"
+        :src="embedUrl"
+        class="player-iframe"
+        scrolling="no"
+        border="0"
+        frameborder="no"
+        framespacing="0"
+        allowfullscreen="true"
+        sandbox="allow-scripts allow-same-origin allow-popups"
+      />
+      <div v-else-if="isDouyin" class="douyin-preview">
+        <p>🎵 抖音视频</p>
+        <a :href="cleanUrl" target="_blank" rel="noopener noreferrer" class="douyin-link">
+          在抖音中打开 →
+        </a>
+      </div>
+    </div>
+    <div v-else-if="urlInput.trim() !== ''" class="player-hint muted">
+      <p>⚠️ 无法识别视频链接。</p>
+      <p>支持 B 站(BV号/b23.tv)和抖音(v.douyin.com)链接。</p>
+    </div>
+
+    <!-- 导入进度 -->
+    <div v-if="imports.length > 0" class="card progress-card">
+      <p class="card-title">导入进度</p>
+      <ul class="progress-list">
+        <li v-for="(it, i) in imports" :key="i" class="progress-row">
+          <div class="progress-track">
+            <div
+              class="progress-fill"
+              :class="{ 'progress-fill--failed': it.status === 'failed', 'progress-fill--done': it.status === 'done' }"
+              :style="{ width: it.progress + '%' }"
+            />
+          </div>
+          <div class="progress-meta">
+            <span class="progress-stage" :class="`progress-stage--${it.status}`">{{ it.stage }}</span>
+            <span v-if="it.status === 'pending'" class="muted progress-pct">{{ it.progress }}%</span>
+            <RouterLink
+              v-if="it.noteId !== null"
+              class="progress-link"
+              :to="`/notes/${it.noteId}`"
+            >
+              查看笔记 →
+            </RouterLink>
+          </div>
+          <ul v-if="it.log.length > 0" class="progress-log">
+            <li
+              v-for="(entry, j) in it.log"
+              :key="j"
+              class="progress-log-item"
+            >
+              <span class="progress-log-ts muted">{{ formatLogTime(entry.ts) }}</span>
+              <span class="progress-log-stage">{{ entry.stage }}</span>
+              <span v-if="entry.pct !== null" class="progress-log-pct muted">{{ entry.pct }}%</span>
             </li>
           </ul>
-        </div>
-      </div>
+        </li>
+      </ul>
     </div>
   </section>
 </template>
 
 <style scoped>
-.video-layout {
+/* 投喂台:单列居中,内容列压到 860 书页宽(舞台虽是 1440 宽档,页面自己收) */
+.feed {
   display: flex;
-  gap: 20px;
-  align-items: flex-start;
+  max-width: 860px;
+  min-height: 100%;
+  margin: 0 auto;
+  flex-direction: column;
+  justify-content: center;
 }
 
-.player-section {
+.tray {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 6px 0 4px;
+}
+
+/* 空态 = 整页主角:投喂台抬高居中,输入框放大居中文字 */
+.tray--empty {
+  padding: 56px 0 12px;
+}
+
+.tray--empty .tray-input {
+  height: 44px;
+  font-size: 15px;
+}
+
+/* 空态三步:编号用衬线汉字(一/二/三),像书里的分节,不用 1/2/3 的列表感 */
+.tray-steps {
+  display: flex;
+  margin: 26px 0 0;
+  padding: 0;
+  flex-direction: column;
+  gap: 2px;
+  list-style: none;
+}
+
+.step {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 4px;
+  border-bottom: 1px solid var(--line);
+}
+
+.step:last-child {
+  border-bottom: none;
+}
+
+.step-num {
+  display: flex;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  color: var(--ink-2);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 2px;
+}
+
+.step-title {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.step-desc {
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* 第一行:链接输入 + 导入钮同行,整行与播放器同宽 */
+.tray-bar {
+  display: flex;
+  gap: 10px;
+}
+
+.tray-input {
   flex: 1;
   min-width: 0;
 }
 
-.settings-section {
-  width: 340px;
+.tray-import {
   flex-shrink: 0;
 }
 
-.url-bar {
-  margin-bottom: 14px;
+.tray-row2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+/* 模式切换:胶囊分段控件,墨色滑块点击滑动(radio 隐身只管语义)。
+   两段 grid 等宽,滑块 width=50%-3px 恰好对齐任意一段 */
+.mode-switch {
+  position: relative;
+  display: grid;
+  flex-shrink: 0;
+  grid-template-columns: 1fr 1fr;
+  padding: 3px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  background: var(--bg-soft);
+}
+
+.mode-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc(50% - 3px);
+  border-radius: 999px;
+  background: var(--ink);
+  box-shadow: 0 1px 3px rgba(45, 40, 32, 0.25);
+  transition: transform 0.18s ease;
+}
+
+.mode-thumb--right {
+  transform: translateX(100%);
+}
+
+.mode-seg {
+  position: relative;
+  z-index: 1;
+  padding: 6px 18px;
+  border-radius: 999px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 550;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s ease;
+}
+
+.mode-seg input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.mode-seg--on {
+  color: var(--panel);
+}
+
+.mode-seg--off {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* B 站登录:一行小字 + 文字链按钮,平时不打扰 */
+.tray-bili {
+  display: flex;
+  margin: 0;
+  align-items: baseline;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.bili-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--accent);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.bili-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.bili-error {
+  margin: 0;
+  color: var(--err);
+  font-size: 12.5px;
+  text-align: center;
 }
 
 .player-box {
   position: relative;
   width: 100%;
+  margin-top: 18px;
   padding-bottom: 56.25%; /* 16:9 */
   border-radius: 8px;
   overflow: hidden;
@@ -565,99 +762,14 @@ onMounted(async () => {
   color: #fff;
 }
 
-.import-card {
-  padding: 16px 18px;
-}
-
 .card-title {
   margin: 0 0 12px;
   font-size: 14px;
   font-weight: 650;
 }
 
-.mode-selector {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin-bottom: 16px;
-}
-
-.mode-option {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 10px 12px;
-  border: 1.5px solid var(--line);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: border-color 0.15s;
-}
-
-.mode-option--disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-.mode-option--active {
-  border-color: var(--accent);
-}
-
-.mode-option input {
-  margin-top: 3px;
-  flex-shrink: 0;
-}
-
-.mode-label {
-  font-size: 14px;
-  font-weight: 550;
-  /* 标签列不被 desc 挤压折行(「字幕快/速」断词难读);说明文字在右列自己换行 */
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-
-.mode-desc {
-  display: block;
-  font-size: 12px;
-  line-height: 1.5;
-  margin-top: 2px;
-}
-
-.import-btn {
-  width: 100%;
-}
-
-.bili-login {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-}
-
-.bili-login-state {
-  font-size: 12px;
-  line-height: 1.6;
-  min-width: 0;
-}
-
-.bili-login-btn {
-  flex-shrink: 0;
-  font-size: 12.5px;
-  padding: 5px 12px;
-  white-space: nowrap;
-}
-
-.bili-login-error {
-  margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--err);
-  line-height: 1.6;
-}
-
 .progress-card {
-  margin-top: 16px;
+  margin-top: 18px;
   padding: 14px 18px;
 }
 

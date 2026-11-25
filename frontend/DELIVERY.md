@@ -401,3 +401,407 @@ uvicorn.exe：(空)
 - 老 note 161 回归：57 条零重复，「第一阶段：Agent 基础认知」这类同样缺失的一级也回来了
 - note 4986 目录 0 条=笔记本就不存在（DB 0 行），非回归
 - `pnpm exec vue-tsc --noEmit` 0 错误
+
+## 2026-11-25 · 统一工作台改版（来源感知返回 + 删出处坞 + 会话列表瘦身）· 执行者：Trae 新会话
+
+**为什么做**：主人对 UI 提了两条原则性意见——①信息不许重复：每条回答下方已有内联「出处 N 条」，右栏 `SourceDock` 出处坞是同一信息的第二次出现，删；②返回逻辑不许写死：笔记页返回按钮硬编码 `router.push({name:'notes'})`，从问答点引用跳过来也被带回书架。讨论后主人拍板「统一工作台」结构：书架/问答/视频共用一个框架，内容舞台 keep-alive 保活对话，返回零成本。
+
+**产物**：
+- `src/App.vue`：重构为三形态外壳（未登录裸渲染 / 引导期单入口顶栏 / 工作台）。工作台 = 极简顶栏（品牌+用户区，平铺导航全部移除）+ 左侧「书立」导航栏（书架/问答/视频/设置+底部我的，手写线条图标，激活=一锭墨）+ 内容舞台（qa/notes/video 放宽 1440px，其余 1060px 书页宽）；keep-alive 语义不变
+- `src/router/prevRoute.ts`（新）：`shallowRef` 存上一条应用内路由；单独成模块是因为 router/index.ts 静态 import 全部视图，放那儿成循环依赖
+- `src/router/index.ts`：`router.afterEach` 写入 prevRoute（首次加载 from 是 START_LOCATION，保持 null）；路由表零改动
+- `src/views/NoteView.vue`：返回按钮来源感知——qa→「← 返回对话」并 `router.back()`（问答现场原样恢复），notes→「← 返回书架」，note 链→「← 返回笔记」…；prevRoute 为 null（刷新/外链）兜底「← 回书架」RouterLink
+- `src/views/QaView.vue`：删 `SourceDock` 导入/挂载/dock 全套状态（dockMessageId/dockActiveN/dockCitations/resetSourceDock 及 3 处调用）；正文 [n]/[W n] 徽章点击改为直接 `openCitation`（库内笔记本页打开=keep-alive 保住对话，联网出处开新窗）；删「问答」大标题（书立已标明位置）；会话列表加搜索框（标题过滤）+ 导出/删除按钮改悬停/焦点浮现（触屏常显兜底）；新对话空态（三行引导：/检索、📎、/ 命令）
+- `src/components/SourceDock.vue`：删除（回收站）
+
+**怎么验的**：`pnpm build`（vue-tsc --noEmit + vite build）通过，2213 modules，19.2s；chunk>500kB 警告为 mermaid/elk 依赖既有现象，与本次无关。前端无单测（历史挂账，见上批），交互验证靠主人浏览器实测。
+
+**已知限制 / 挂账**：①书立 sticky 顶距 53px 与顶栏高度（52px+1px 边框）硬编码联动，改顶栏高度要同步；②「返回对话」依赖 keep-alive 恢复问答现场，行为=回到离开时的滚动位置与消息，不做逐条动画回放；③触屏无悬停场景仅做了常显兜底，未做移动端布局。
+
+## 2026-11-25 · 书架页精修（删常驻红字 + 轻翻页 + 抽书动效）· 执行者：Trae 新会话
+
+**为什么做**：主人逐页精修第一批选定书架。满架 36 张书卡每张下面常驻一个「删除」文字按钮，是全站最大的视觉噪音（与上一批删会话列表常驻按钮同性质）；大标题「笔记库」在书立导航下是重复信息；数字页码一排按钮的重量感与纸面书架不配。
+
+**产物**（全在 `src/views/LibraryView.vue`）：
+- 模板：去 `page-head` 大标题（搜索行升为页头）；删除按钮从卡下 meta 行移除，改为盖在封面左上角的 22px 圆形小 ×（悬停整本书/键盘聚焦浮现，触屏常显兜底，确认弹窗与乐观移除逻辑不变）；翻页改「上一页 · 第 x / y 页 · 下一页」文字链
+- 脚本：`pageItems`（页码窗口 computed）随数字页码一起删除
+- 样式：`.book` 加 `position:relative` 锚点；`.book-del` 重写为圆形浮层钮；`.book-link:hover .book-cover` 加 `rotate(-0.5deg)` 抽书轻旋；`.book-meta-right` 删除；`.pager` 系列改文字链风，`.pager-num*`/`.pager-gap` 删除
+
+**怎么验的**：`pnpm build`（vue-tsc --noEmit + vite build）通过；grep 确认无 pageItems/pager-num/book-meta-right 残留引用。交互（× 浮现时机、删除确认）待主人浏览器实测。
+
+**已知限制 / 挂账**：①封面左上 × 与书脊色条相邻（spine 6px、× 在 8px 起），极浅色书脊下对比一般，主人实测不满意再调；②「删除中…」文字态改为 title 提示+按钮半透明，删除进行中无文字进度。
+
+## 2026-11-25 · 书架双视图（5:7 比例 + 横排题签 + 列表视图）· 执行者：Trae 新会话
+
+**为什么做**：主人实测书架后反馈两点——①书的比例不对（旧卡高写死 186px、宽随列自适应，1440 舞台下约 250×186，**宽比高长**像明信片）；②标题几乎全部省略（竖排题签一条只能装 8~10 字，标题普遍 12~20 字，载体装不下）。主人拍板：题签改横排（现代书封面本以横排为主），并接受双视图方案——书卡管氛围、列表管查找，切换钮不算多余设计，因为它解决的是「形态 vs 全名」的真实矛盾而非信息重复。
+
+**产物**（全在 `src/views/LibraryView.vue`）：
+- 比例：`.book-cover` 高度 186px → `aspect-ratio: 5/7`；`.shelf` 固定 5 列 → `auto-fill minmax(190px, 1fr)` 自适应（1440 宽约 6 列），三段窄屏媒体查询随之删除
+- 题签横排：`.book-title` 去掉 `writing-mode: vertical-rl`，改顶部横排白签（left 18 避书脊 / right 12 / top 12），衬线 13px 居中，两行 `-webkit-line-clamp` 截断 + `:title` 悬停全名
+- 列表视图：`.shelf-rows` 行条目——书脊色条（沿用 `spineColor`，延续隐喻）+ 全名（两行 clamp）+ 质量/段数/日期 + 行尾悬停删除 ×（与书卡 × 同语言）；同一分页/搜索/拖放导入全复用
+- 切换钮：搜索行内「书架/列表」两个 28px 图标钮（active 一锭墨）；`view` 状态 localStorage `baleen-shelf-view` 记住，默认书架；`GRID_COLS/GRID_ROWS` 常量删除，`PAGE_SIZE` 直书 30
+
+**怎么验的**：`pnpm build`（vue-tsc --noEmit + vite build）通过；grep 确认 GRID_COLS/writing-mode/pager-num/book-meta-right 零残留。书卡比例与横排效果待主人浏览器实测。
+
+**已知限制 / 挂账**：①横排题签 2 行约 30 字，超长标题（>30 字）仍省略，靠悬停或列表视图；②列表行标题也是 2 行 clamp，3 行以上的超长名同样靠 title；③书卡高度随列宽变化（190px 列宽时约 266px 高），主人若嫌一屏行数少，把 minmax 调小即可加密。
+
+
+
+
+## 2026-11-25 · 书架批量删除 + 题签单行滚动 · 执行者：Trae 新会话（主人拍板）
+
+**为什么做**：主人两条实测反馈——①「鼠标触碰显示删除按钮的设计不好」，要改成点「批量删除」后进入点选模式统一删，而不是悬停浮现 ×；②题签两行截断出现「文字只露出上半截」的怪相（line-clamp 与 max-height 在窄卡上裁切异常），要求改单行、悬停时滚动展示全名。
+
+**产物**（全在 `src/views/LibraryView.vue`）：
+- 批量删除：搜索行加「批量删除」钮（激活态浅青）→ 进入选择模式显示操作条（已选 N 本 · 朱砂「删除所选」· 取消）；书卡/列表行整体点击即选中切换（`onCardClick` 在批量模式下 preventDefault 拦掉跳转），左上角空心圈/实心勾角标标示；`removeSelected` 逐本删、部分失败保留现场可重试，全部成功才退出；确认弹窗文案带数量
+- 删除 hover ×：`.book-del`/`.row-del` 按钮及全部 CSS（含 hover:none 媒体查询）删除；脚本 `deletingId`/`removeNote` 删除
+- 题签单行：`.book-title` 去 `-webkit-line-clamp`/`max-height`，改 `white-space: nowrap` 单行 + 右缘 12px mask 渐隐（硬截半个字的怪相消失）；新增本地指令 `v-title-scroll` 实测每条题签是否溢出，溢出才挂 `book-title--overflow` 类并把滚动位移/时长（约 60px/s，最少 3s）写入 CSS 变量；hover 时 `title-scroll` 动画首尾各停 12% 拍再折返；`:title` 原生提示保留
+- 样式新增：`.book-check`/`.row-check` 角标、`.book--selected .book-cover` 黛青描边圈、`.book-row--selected`、`.batch-bar`/`.batch-btn`/`.batch-del-btn`/`.batch-cancel`
+
+**怎么验的**：`pnpm build`（vue-tsc --noEmit + vite build）通过（exit 0，19.2s）；grep 确认 deletingId/removeNote/book-del/row-del 零残留。滚动观感与批量流程待主人浏览器实测。
+
+**已知限制 / 挂账**：①题签滚动时长按整签宽统一估算（scrollWidth/60），首尾停拍比例固定 12%，不按字数精确分段；②列表行标题仍两行 clamp（行高充裕无裁切怪相，不动）；③批量选择跨页保留已选 id，翻页/搜索后计数不变，删除时逐本生效。
+
+## 2026-11-25 · 书架批量选中交互修复（capture 拦截 + 选中态加重）· 执行者：Trae 新会话（主人实测反馈）
+
+**为什么做**：主人实测批量删除两处不便——①批量模式下点书还是跳转进了笔记（根因：RouterLink 在 a 元素自己的 click 监听里就同步 `router.push`，冒泡到 li 再 `preventDefault` 为时已晚）；②选中卡与普通卡差异太弱，看不出选没选上。
+
+**产物**（全在 `src/views/LibraryView.vue`）：
+- `onCardClick` 拦截从 `@click` 改 `@click.capture`（书卡 li 与列表行 li 两处）：捕获阶段先 `preventDefault`，vue-router 的 `guardEvent` 见 `defaultPrevented` 放弃跳转 → 批量模式下点书任意位置（封面/题签/meta）都变成勾选，不用专门点圆圈
+- 选中态加重：勾角标 20→24px、描边改 ink-3 更醒目；选中封面蒙一层黛青纱（`::after` rgba(61,90,115,.22)）+ 白边黛青实心勾带投影；选中列表行加 1.5px 黛青外圈 + 行内勾变实心
+
+**怎么验的**：`pnpm build`（vue-tsc --noEmit + vite build）通过。批量点选/取消、跳转拦截待主人浏览器实测。
+
+**已知限制 / 挂账**：批量模式下 Ctrl/Shift 加点也会被拦（一律按单选切换处理），需要多选范围操作再说。
+
+## 2026-11-25 · 纸篓(桌面回收站隐喻)· 执行者：Trae 新会话(主人拍板)
+
+**为什么做**：主人要一个「有趣的复杂交互」——右下角悬浮纸篓,书可以按住拖进去,但不是直接删(像桌面回收站);点纸篓进去看列表,里面才有二次确认的真删除;批量「删除所选」时选中的书要飞入纸篓;批量删除按钮大小与「导入笔记」一致。
+
+**产物**：
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `src/stores/trash.ts` | 纸篓 store(ids/flying + localStorage `baleen-trash-ids` 持久化)。前端级回收站:入篓=书架隐藏,后端记录原封不动;彻底删除才走真删除 API |
+| 新增 | `src/utils/spine.ts` | SPINES 八色 + spineColor 从 LibraryView 抽出(书架/纸篓/飞纸共用同一本书同一条色) |
+| 新增 | `src/utils/flyPaper.ts` | flyToBasket():从源元素/矩形位置放飞纸片(临时 DOM,.fly-paper),transform 过渡落进 `#trash-basket`,Promise resolve=落篓 |
+| 改 | `src/styles.css` | `.fly-paper` 全局样式(挂 body 下的元素进不了 scoped):28×36 小纸+左缘书脊色,飞完缩小旋转淡出 |
+| 改 | `src/App.vue` | 工作台壳加 `#trash-basket` 悬浮钮(fixed 右下 22px,z-index 1100 全站顶层):线条纸篓图标+朱砂数量角标;dragover 张嘴(scale1.14+浅青)、drop 读 dataTransfer 的 id/spine/源矩形→书架卡淡出→纸片飞入→pulse 弹一下→入账;点击 push `/trash` |
+| 改 | `src/router/index.ts` | 加 `/trash`(name trash,静态 import) |
+| 改 | `src/views/LibraryView.vue` | 书卡/列表行 `draggable` + `@dragstart` 序列化(id/spine/源矩形);「删除所选」改为 trashSelected:纸片逐张错峰 70ms 起飞、卡片原地淡出(`.book--flying`,trash.flying 驱动),全部落篓才 trash.add,不再弹确认(移入可逆);v-for 换 `visibleNotes`(滤已入篓),计数显示「…/N · 纸篓 M」,空书架文案区分「纸篓里还有 M 本」;`.batch-btn` 加 min-width 118px 对齐导入钮;本地 SPINES 删除改用 utils |
+| 新增 | `src/views/TrashView.vue` | 纸篓页:标题+回书架;逐条 getNote 拉详情(404 悄悄出篓防幽灵条目);每行=书脊条+标题+段数+「放回」「彻底删除」(btn--danger,confirm 二次确认);「放回全部」一键后悔;空态文案 |
+
+**怎么验的**：`pnpm build`(vue-tsc --noEmit + vite build)通过(2219 modules,20.7s)。拖拽入篓/飞纸动画/纸篓页放回与彻底删除待主人浏览器实测。
+
+**已知限制 / 挂账**：①纸篓只记在当前浏览器(localStorage),换浏览器/清缓存即空,也不跨设备同步;②入篓笔记后端仍在:问答检索在彻底删除前仍可能命中(纸篓页有文案明示);③批量模式与拖拽并存时,批量选中的书也可以拖(拖走的不清选中态,下次删除所选会带着它的 id,但落篓 add 有去重,无副作用);④trashSelected 用固定等待(错峰×N+620ms)对齐动画,不逐张等 Promise——张数极多(>50)时尾部纸片可能还在飞就入账,视觉误差可忽略。
+
+## 2026-11-25 · 纸篓二次打磨(立体篓体/自定义拖影/弹窗化)· 执行者:Trae 新会话(主人实测反馈)
+
+**为什么做**:主人三条反馈——①纸篓长得像按钮,要一只立体的纸篓;②拖拽时是浏览器默认半透明快照(像拖着个链接),要「书被从架上拉下来」的效果;③点纸篓不该切页面,应从页面中央弹悬浮窗+朦胧遮罩,点遮罩收回。
+
+**产物**:
+| 动作 | 路径 | 说明 |
+|---|---|---|
+| 新增 | `src/components/BasketModal.vue` | 纸篓弹窗:中央悬浮窗(衬线标题/放回全部/×),遮罩 rgba(28,26,22,.42)+backdrop blur 3px,`@click.self` 点遮罩收回、Esc 收回;列表=放回/彻底删除(二次确认),逻辑自 TrashView 移植 |
+| 改 | `src/App.vue` | ①篓体重绘为立体 SVG(64×68:布面渐变梯形篓身+三根竹篾+两道箍+深色篓口内洞+浅色前沿高光弧+地面影;篓里有书时篓口冒出一张皱纸头);②容器去按钮感(border/background 全去,drop-shadow 落地);③点击改弹窗(basketOpen),不再 router.push;④drop 纸片改从松手点(clientX/Y)继续飞进篓口,不再从书架原位飞 |
+| 改 | `src/views/LibraryView.vue` | dragstart 自定义拖影:临时建 `.drag-book-ghost`(48×66 小书,左缘书脊色+衬线题签,rotate -3°)setDragImage 跟手,dragstart 同步捕获后即摘;draggingId 原位浅影(半透明+微缩+轻旋,像书被拎起来),dragend 清理 |
+| 改 | `src/styles.css` | `.drag-book-ghost` 全局样式(挂 body 下的快照元素) |
+| 改 | `src/router/index.ts` | 删 `/trash` 路由与 TrashView import(纸篓弹窗化后不再占页面) |
+| 删 | `src/views/TrashView.vue` | 逻辑整体迁入 BasketModal,页面形式退役(回收站) |
+
+**怎么验的**:`pnpm build`(vue-tsc --noEmit + vite build)通过(2219 modules);grep 确认 TrashView/`/trash` 零残留。立体观感、拖影手感、弹窗遮罩交互待主人浏览器实测。
+
+**已知限制 / 挂账**:①SVG 渐变 id(`basket-body`/`basket-hole`)是全局文档级 id,当前页面只有一份篓体,无冲突,但若同页渲染多只篓需改 id;②自定义拖影在部分浏览器(如旧 Safari)对 setDragImage 离屏元素支持不一致,本机 Chrome/Edge 实测路径为准;③拖影快照无法继承 CSS 动画,书「被拉下来」的动感靠 ghost 造型+原位浅影+落纸动画三段接力表达。
+
+## 2026-11-25 · 纸篓迁入书立 + 苹果风毛玻璃 · 执行者:Trae 新会话(主人拍板)
+
+**为什么做**:主人两条——①纸篓位置应在「我的」按钮上面(不再悬浮在右下角内容区);②外观改成苹果风格。
+
+**产物**(全在 `src/App.vue` 模板/样式 + 两处文案):
+- 位置:篓体从 fixed 右下角移入 `.rail-foot`,`<button id="trash-basket">` 排在「我的」RouterLink 上方(flyPaper 靠 `getElementById('trash-basket')` 定位,挪位置零成本)
+- 外观:56×56 苹果风毛玻璃瓷片——半透明白底 rgba(255,255,255,.38) + `backdrop-filter: blur(8px)` + 1px 白描边 + 顶部 inset 内高光 + 柔和投影;hover 轻浮起提亮,拖拽悬停放大提亮,落纸 pulse 弹动保留;朱砂数量角标保留
+- 立体 SVG 篓体原样保留(布面渐变/竹篾/深色篓口/冒纸头),缩放为 44×46 坐进瓷片
+- 文案同步:BasketModal 空态「右下角」→「左下角书立里」;flyPaper 注释同步
+
+**怎么验的**:`pnpm build`(vue-tsc --noEmit + vite build)通过(2219 modules,19.8s)。书立内观感与拖拽落篓链路待主人浏览器实测。
+
+**已知限制 / 挂账**:backdrop-filter 毛玻璃在极旧浏览器退化为纯半透明白(不影响功能);书立底色较浅,毛玻璃对比偏含蓄——主人若觉得不够「浮」可再加投影或提高白底不透明度。
+
+## 2026-11-25 · 视频页「投喂台」改版(方案 A)· 执行者:Trae 新会话(主人拍板)
+
+**为什么做**:主人逐页精修第二轮选定视频页。现状三宗罪——「视频笔记」大标题与书立重复;没粘链接时页面只有一根输入条,冷启动死气沉沉;右侧 340px 设置栏为两个模式单常驻,分量过重。草图对比后主人拍板方案 A「投喂台」。
+
+**产物**(全在 `src/views/VideoView.vue`,纯模板/样式,脚本零改动):
+- 去大标题;布局从「左播放器+右 340px 设置」双栏改单列居中(`.feed` max-width 860,舞台虽 1440 档但页面自收)
+- 投喂台:空态=52px 高居中大输入框(placeholder「粘贴 B 站或抖音链接,喂给书房…」)+ 两张并排模式小卡(whisper 深度/字幕快速,整卡可点,radio 隐身保语义,选中黛青描边+浅底+✓)+ 导入钮(260px 居中)+ B 站登录收成一行小字+文字链扫码
+- 粘了链接:投喂台收成常规尺寸,下方原位展开 16:9 播放器(或抖音外链预览/无法识别提示)+ 导入进度卡
+- 删旧样式:`.video-layout`/`.player-section`/`.settings-section`/`.url-bar`/`.import-card`/`.mode-*` 旧体系/`.bili-login*`;新增 `.feed`/`.tray*`/`.mode-opt*`/`.bili-link`
+- 播放器/抖音预览/进度面板(含白盒日志)逻辑与结构原样保留
+
+**怎么验的**:`pnpm build`(vue-tsc --noEmit + vite build)通过(2219 modules,18.1s)。空态观感与粘贴后展开链路待主人浏览器实测。
+
+**已知限制 / 挂账**:①空态仅在没有链接且没有进度面板时出现(导入中清空链接不会误回空态);②抖音链接时「字幕快速」卡降透明度并禁点,但卡片文案未动态变灰说明,靠 desc 里「仅 B 站」提示。
+
+## 2026-11-25 · 视频页投喂台布局修正(输入行+滑块分段)· 执行者:Trae 新会话(主人实测反馈)
+
+**为什么做**:主人看后觉得卡片纵排布局奇怪,指定两点——①导入笔记按钮放输入框右边,整行与播放器同宽;②两种导入方式改「点击滑动切换」。
+
+**产物**(全在 `src/views/VideoView.vue` 模板/样式,脚本零改动):
+- 第一行 `.tray-bar`:输入框(flex:1)+ 导入钮同排,整行与播放器同宽;空态输入框降到 44px 高(去居中文字)
+- 第二行 `.tray-row2`:左侧 `.mode-switch` 胶囊分段控件——grid 两段等宽,`.mode-thumb` 墨色滑块 translateX 滑动(0.18s),选中段文字反白;radio 隐身保语义;抖音时「字幕快速」段降透明度禁点并给 title 说明
+- 右侧 B 站登录一行小字不变;删 `.mode-opt*` 卡片体系
+**怎么验的**:`pnpm build` 通过(2219 modules,18.9s);滑动手感待主人实测。
+
+## 2026-11-25 · 阅读页扉页头部(方案 A)· 执行者:Trae 新会话(主人拍板)
+
+**为什么做**:逐页精修第三页(阅读页)。现状两处扎眼——编辑/删除按钮常驻标题右侧,阅读时打眼;元信息「质量: 语言: 标签: 来源 #」冒号连环像表单。三方案草图后主人拍板方案 A「扉页」。
+
+**产物**(全在 `src/views/NoteView.vue`,纯模板/样式):
+- 操作悬停浮现:`.note-actions` 默认 opacity 0,`.note-head:hover/:focus-within` 浮现;触屏(hover:none)常显 0.9。编辑/删除按钮本体不动
+- 元信息一行点隔:去掉质量 badge 与「质量:/语言:/标签:/来源 #」冒号腔,改为纯文本 span 序列(`高 · markdown · 机器学习 / 笔记 · 来源 #483 · 12 节`),CSS `span + span::before` 自动加分隔点;标签改 `/` 连接
+- 细墨线:`.note-head` 加 border-bottom + padding-bottom,阅读区从线下展开,扉页感
+- 目录/正文/编辑器/灯箱零改动
+
+**怎么验的**:`pnpm build`(vue-tsc --noEmit + vite build)通过(2219 modules,21.1s)。悬停浮现与触屏兜底待主人实测。
+
+---
+
+## 2026-11-25 · 设置页删重复章程卡 · 执行者:Trae 新会话(主人已批)
+
+**为什么做**:章程入口在设置页和个人中心各一份,重复。主人已批准删设置页那份,章程入口统一收敛到个人中心(有预览+编辑跳转)。
+
+**产物**(全在 `src/views/SettingsView.vue`):
+- 模板:删整段 `.charter-section` 卡(标题/描述/「查看 / 修改章程」按钮)
+- 样式:删 `.charter-section` `.section-title` 两个 scoped 类
+- 脚本:删 `useRouter` import 与实例(删卡后无路由跳转,死代码清理)
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,21.10s)。
+
+---
+
+## 2026-11-25 · 个人中心重排(通栏+统计条形图+两栏) · 执行者:Trae 新会话(主人实测反馈)
+
+**为什么做**:主人三条——右侧大片留白(卡片限宽 640px 而舞台 1060px)、使用统计四格数字不像统计、
+「模型与偏好配置」名不副实(只有模型相关项,没有偏好项)。
+
+**产物**(全在 `src/views/ProfileView.vue`):
+- 通栏布局:去 `.card` 的 max-width 640px,三段填满书页宽——头像条 / 统计卡 / 下半 `.grid-2` 两栏(章程 | 模型配置),≤900px 降单列
+- 统计条形图:四格数字换成横向条形图(纯 CSS,零新依赖)——`chartRows` 按数量降序,`barPct` 以最大值为 100%(0 不画,>0 保底 4%),黛青渐变墨条 + `scaleX` 进场动画逐行错峰,衬线体数字右对齐。接口只有 4 个计数没有时间序列,条形图是唯一不造假的图型
+- 改名:「模型与偏好配置」→「模型配置」
+- 顺手清理:删无引用的 `.hint` 死样式
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,19.42s)。条形图观感与两栏比例待主人实测。
+
+---
+
+## 2026-11-25 · 个人中心删使用统计卡 · 执行者:Trae 新会话(主人实测反馈)
+
+**为什么做**:主人看完条形图版后拍板——使用统计整个多余,直接删。
+
+**产物**(全在 `src/views/ProfileView.vue`):
+- 模板:删整段「使用统计」卡(条形图)
+- 脚本:删 `chartRows` `barPct`(图表专用,死代码清理),注释同步(「通栏三段」→「通栏两段」)
+- 样式:删 `.chart-*` 全系与 `bar-in` keyframes
+- 布局现为:头像条 + 章程|模型配置两栏,页面更轻
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,21.94s)。后端 /api/profile 的 stats 字段未动(前端不展示而已)。
+
+---
+
+## 2026-11-25 · 设置页通栏两栏改版 · 执行者:Trae 新会话(主人实测反馈)
+
+**为什么做**:主人实测设置页布局不对称、右边空白——原 `.form` 卡限宽 560px,舞台 1060px,右侧空 ~500px。
+
+**产物**(全在 `src/views/SettingsView.vue`,纯模板/样式,脚本零改动):
+- 表单拆两栏(与个人中心同一套 grid-2 语言):左「模型服务」(网关地址/模型/API Key),右「联网与生成」(Tavily Key/上下文上限/输出上限/结构图开关),两卡等高
+- 保存按钮+提示移出卡片,变底部通栏操作行 `.actions`(按钮 + 「已保存」提示同行)
+- 新增 `.field--last`(卡内末字段不吃底边距,防止把卡撑高一截空);≤900px 降单列兜底
+- 删 `.form` 限宽样式;`.section-title` 回归(拆卡后每卡需要标题)
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,18.95s)。两栏观感待主人实测。
+
+---
+
+## 2026-11-25 · 问答页对话列限宽居中 · 执行者:Trae 新会话(主人拍板排期)
+
+**为什么做**:问答舞台 1440px 宽,侧栏 210px + 对话区撑满剩余 ~1200px——长答案行宽过宽(阅读舒适区约 70-80 字符),整体靠左。之前讨论过「对话列收窄 ~760px 居中」,本批落地。
+
+**产物**(全在 `src/views/QaView.vue`,纯样式,脚本零改动):
+- `.chat-main`:去 `flex: 1`,改 `width: 100% + max-width: 760px + margin: 0 auto`——对话列在侧栏之外的剩余空间里居中,两侧对称留白(ChatGPT 式);空态/消息列表/输入框/缓存状态行全部随列同宽
+- 侧栏(210px)与舞台宽(1440px)不动;文件头注释同步
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,18.19s)。列宽 760px 的观感待主人实测,嫌窄/嫌宽只调 `max-width` 一个数。
+
+---
+
+## 2026-11-25 · 问答页「眉批手帐」版式 · 执行者:Trae 新会话(主人拍板,四方案选一)
+
+**为什么做**:主人实测「整体布局太松散」,点名要「不寻常的设计」。四方案(眉批手帐/卷轴横卷/书问书答/只收紧)草图后主人选「眉批手帐」:整页一张摊开的宣纸,彻底消灭「侧栏/对话列/输入框三座孤岛」的松散感。
+
+**产物**(全在 `src/views/QaView.vue`,逻辑零改动——消息数据/流式/附件/斜杠命令/出处跳转全不动):
+- 纸面:`.qa-layout` 挂 `.manuscript`(panel 纸色大圆角 + 阴影,max-width 1240px 居中在桌面上)
+- 左书签绳:会话列表去卡片化,左侧竖虚线作「绳」,每条会话挂结点小圆,当前会话系朱砂结;侧栏 210→168px
+- 正文区:AI 回答去气泡框,文章式排版直接落纸,首行墨色「答」章;「思考中」也落正文列
+- 右眉批:用户提问改眉批体——衬线小字 + 右缘朱砂批线 + 朱砂「问」章,引用/附件 chips 跟在批注后(浅黛青牌)
+- 交错下行:`.msg-list` 气泡流改 `.msg-weave` 两列 grid(左正文 1fr / 右眉批 236px),每条消息按时间序占一行,`:style` 显式 gridRow/gridColumn 定位,问答交错自然下行,无需分组算法
+- 砚台墨带:输入区整条墨底(input-shell 墨化),chips 反色成墨上半透明纸牌,📎 幽灵键,发送钮纸白反转(墨带上唯一亮钮)
+- 顺手:删死样式 `.chat-toolbar`;文件头注释重写
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,22.27s)。眉批/墨带/书签绳观感与交错阅读节奏待主人实测。
+
+---
+
+## 2026-11-25 · 问答页书签绳滚动条修正 · 执行者:Trae 新会话(主人截图反馈)
+
+**为什么做**:主人截图反馈会话栏「有部分内容被遮住」——实为会话列表用了 Windows 原生滚动条(粗轨道+上下 ▲▼ 箭头按钮),压在列表右缘,视觉上像内容被裁;且侧栏 168px 偏窄,标题省略严重。
+
+**产物**(全在 `src/views/QaView.vue` 样式):
+- `.session-list` / `.msg-weave`:自定义细墨滚动条(6px 圆角墨灰、无箭头、透明轨道,`scrollbar-width: thin` + `::-webkit-scrollbar` 双写),两处滚动区观感统一
+- `.session-side`:168 → 190px,标题省略缓解、悬停按钮不再局促
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,20.69s)。原生 ▲▼ 粗滚动条消失,待主人刷新确认。
+
+---
+
+## 2026-11-25 · 问答页破盒出血 + 降饱和 · 执行者:Trae 新会话(主人实测反馈)
+
+**为什么做**:主人两条——整体颜色太刺眼(整条墨带/黑钮大面积深色)、所谓手帐只是「把内容装进一个盒子」,周边仍是大片桌面空白。
+
+**产物**:
+- `src/App.vue`:新增「出血」舞台形态——qa 路由时 `stage--bleed`(撤 padding)+`stage-inner--bleed`(撤 1440 限宽,flex column 撑满);isWide 里 qa 移到 bleed,书架/视频仍走 --wide。其他页面零影响
+- `src/views/QaView.vue`:
+  - 破盒:`.manuscript` 去边框/圆角/阴影/1240 限宽,纸面铺满视口剩余区域(顶栏以下整页是纸,不再有桌面空白);高度链 stage→qa-page→manuscript→msg-weave 全 flex 贯通,消息区从固定 56vh 改为 flex 自适应——屏幕越高可见对话越多,空态同享
+  - 降饱和:砚台墨带 → 浅纸墨槽(bg-soft 凹槽+描边,聚焦黛青光);输入文字/chips/📎 恢复浅色系;发送钮回归全局墨钮(小面积强调);「+ 新对话」黑钮 → 浅黛青;眉批朱砂批线 2px 实色 → 1.5px 40% 淡朱砂
+- 文件头注释同步
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,19.25s)。出血铺满后的沉浸感与降饱和后的观感待主人实测。
+
+---
+
+## 2026-11-25 · 问答页单列对话流 + 输入栏钉底 · 执行者:Trae 新会话(主人实测反馈)
+
+**为什么做**:主人两条——① 输入栏要拉到页面最底才能看到(高度链断:app-shell 是 min-height,stage--bleed 只撤留白没钳高度,长回答把整页顶长、窗口级滚动);② 眉批双列让提问挤在 236px 窄列、问与答视觉断裂、右列长期空白,与书架页气质不统一,要「简约大气」。讨论后主人拍板单列方案,并要求思考状态复用空间。
+
+**产物**(逻辑零改动——消息数据/流式/附件/斜杠命令/出处跳转全不动):
+- `src/App.vue`:`.stage--bleed` 补 `height: calc(100vh - 53px)` + `min-height: 0`(53px = 顶栏 52+1),`.stage-inner--bleed` 补 `min-height: 0`——高度链贯通,消息区内滚、输入栏永久钉底,其他页面零影响
+- `src/views/QaView.vue`:
+  - 单列对话流:`.msg-weave` 两列 grid → flex column,max-width 800px 居中(内容 ~760px);问答同列按时间垂直下行
+  - 用户提问:右对齐轻量块(`align-self: flex-end` + max-width 82%),衬线 + 右缘 2px 淡朱砂细线(眉批语言收进单列),引用/附件 chips 随块右对齐;模板删掉 gridRow/gridColumn 行内定位
+  - 思考状态:从正文流的临时占位 leaf 移到输入区上方常驻状态行(`.thinking-strip`),与缓存状态行同区;`.thinking-hint` 改行内;删不再用的 `.leaf--pending`
+  - 底区对齐:输入槽 / 思考行 / 缓存行 / 存笔记选项卡全部 max-width 800px 居中,与对话列同一条视觉中轴
+  - 会话侧栏 190 → 176px;文件头注释重写
+
+**怎么验的**:`pnpm build` 通过(vue-tsc 零错误,19.31s)。Playwright 实测 1440×900:50 条消息的长会话下 `document.documentElement` 不可滚动(window_scrollable=False),输入框固定在 y≈814 视口内;消息区滚到底输入栏仍在。观感待主人实测。
+
+---
+
+## 2026-11-25 · 问答页对话列放宽通栏 · 执行者:Trae 新会话(主人实测反馈)
+
+**为什么做**:主人实测单列方案后反馈「聊天框还可以大,两边空白拉到最小,不是一点不留」。
+
+**产物**(均在 `src/views/QaView.vue`,纯样式):`.msg-weave` / `.chat-input` / `.thinking-strip` / `.cache-status` / `.note-plan` 去掉 800px max-width 居中,改通栏 + 两侧 24px 呼吸边距;文件头注释同步。
+
+**怎么验的**:`pnpm build` 通过(19.59s);Playwright 1440×900 实测窗口不可滚、输入栏钉底(y≈814),内容区铺满。观感待主人实测。
+
+## 2026-11-25 · 验收后三处修复(搜索计数 / 笔记页双层滚动 / 无障碍底座) · 执行者:ZCode
+
+**为什么做**:主人自己完成工作台改造后我验收,实测抓出 2 个真 bug + 2 处横切缺口。
+
+### 产物(4 文件,全在 frontend/)
+
+| 文件 | 改动 |
+|---|---|
+| `src/views/LibraryView.vue` | `visibleTotal` 加条件:无搜索词才减纸篓数。原来 `total - trash.ids.length` 在搜索时把「命中 2 条」减成 0(实测显示 `1–2 / 0`) |
+| `src/styles.css` | ① 新增 `--chrome-h: 53px` 变量(顶栏 52px + 1px 分隔线);② 全站 `:focus-visible` 朱砂焦点环 + 输入框/墨底控件例外;③ `prefers-reduced-motion` 兜底 |
+| `src/App.vue` | 新增 `.stage--clamp` / `.stage-inner--clamp`:笔记页路由下把舞台高度钳在视口内;`.stage--bleed` 的魔数改用 `--chrome-h`;窄屏 900px 放开 |
+| `src/views/NoteView.vue` | `.note-page` 的 `height: calc(100vh - 96px)`(魔数,顶栏 53+舞台内边距 82=135,差了 39px)改 `flex:1`,高度由父级提供 |
+
+### 关键根因
+
+笔记页双层滚动的真因不是 NoteView 一个数写错,而是**高度约束链断在舞台层**:`.stage` 只 `flex:1` 没有确定高度,`.note-page` 用 `100vh` 硬算 → 与顶栏+内边距实际占用不符,页面多滚 39px。修法是把约束提到祖先(`.stage--clamp`),子级只负责占满(`flex:1`),不再各算一份视口魔数 —— 与 v33「不引视口魔数」决策一致,`--chrome-h` 让 53px 只定义一次。
+
+### 怎么验的
+
+Playwright 探针(口径同 `verify_fixes.py`,真后端 8000 + 真库,`--no-proxy-server` 绕系统代理),**11/11 PASS**:
+
+- T1 搜索计数:`1–2 / 2 · 纸篓 3`,实见卡 2 ✓
+- T2 笔记页 `scrollHeight == innerHeight == 900`(溢出 0px),正文栏自身仍可滚(contentH 631)✓
+- T3 Tab 到导航得 `outline: 2px solid rgb(176,58,46)`;输入框 `outline: none` 不双环 ✓
+- T4 `reduced_motion="reduce"` 下 transition 压到 `1e-05s` ✓
+- T5 问答/设置/个人中心零滚动,1280 窄屏笔记页零滚动,零 JS 报错 ✓
+
+**灵敏度验证(证明探针非假绿)**:撤回 `visibleTotal` 修复 → T1 FAIL(`1–2 / 0`);关掉 `stage--clamp` → T2 FAIL(溢出 12351px)。两处都能被探针抓到。
+
+`pnpm exec vue-tsc --noEmit` → 0 错误。
+
+### 环境坑(记录)
+
+系统代理开启时 Playwright chromium 访问 `localhost:5173` 会 `ERR_CONNECTION_RESET`/超时(curl 5ms 就回 200,只有浏览器卡),launch 加 `args=["--no-proxy-server"]` 解决。
+
+### 已知限制
+
+- 焦点环只覆盖 CSS 能触达的元素;`<details>/<summary>`(出处折叠)仍是浏览器默认焦点样式
+- `prefers-reduced-motion` 用通配 `*` 压时长,第三方库内部以 JS 驱动的动画(mermaid 渲染过程)不受控
+- 视频页 656px 空白、会话侧栏 176px 下 86% 标题截断 —— 验收时提出,主人决定下一批处理
+
+## 2026-11-25 · 体验补齐批（纸篓语义/侧栏/视频页/确认框/思维导图） · 执行者:ZCode
+
+**为什么做**:主人拍板「全部按你推荐的做」。上一批验收留的 4 项挂账 + 思维导图三选一的 A+B。
+
+### 一、思维导图改道 markmap（B 方案）
+
+**问题**:问答页的 mermaid `mindmap` 难看(neutral 主题下根节点以下涂成单色)+ 灯箱放大后拖不动。
+
+**改法**:
+1. 新增 `src/utils/mindmap.ts`:```mindmap → markdown 嵌套列表 → markmap 渲染。懒加载(与 mermaid 同纪律),自带 fold / zoom / pan,不做灯箱。配色走纸墨(连线淡墨、节点浓墨、当前节点朱砂),变量是 markmap v1 的 `--mm-*` 契约,不污染全局。
+2. 新增 `src/utils/mermaid.ts` 灯箱拖拽:pointerdown/move/up 平移 + cursor grab/grabbing + 位移 >4px 不算「点背景关闭」;滚轮缩放从「中心缩放」改为**以鼠标位置为锚点**;`zoom` 换成 `transform: translate() scale()` 一套坐标系(两者混用坐标会打架)。
+3. `src/utils/markdown.ts:181-197`:围栏补 `data-lang`。**这是必修项** —— 问答页渲染链原本丢弃语言标记,新围栏在问答页根本不生效(笔记页 section.ts 早就带,两条链不一致)。
+4. `src/utils/section.ts` 无需改(已带 data-lang),但笔记页也要接 renderMindmapsIn。
+5. 后端提示词:`answerer.py:83-97` 拆开「流程/结构/关系 → mermaid」与「思维导图/知识拆解 → ```mindmap + 普通嵌套列表」;`summarizer.py:23` 围栏保留清单加 ```mindmap(否则「存为笔记」会把导图转成文字)。
+
+**为什么不给 LLM 加工具**:导图是展示层问题。工具的价值是拿模型没有的信息,加导图工具只多一轮 tool-call 换零信息增益。业界(markmap/Kimi)同思路。
+
+**新依赖**:`@markmap/parse` + `@markmap/render` + `@markmap/view` = 1.1.1。**刻意不装 `markmap-lib`**(741KB,捆绑 prismjs/highlight.js/markdown-it/katex,与项目已有 katex + 自研渲染器重复三份)。构建产物:markmap 落在独立懒加载 chunk(91KB),未进主包。
+
+**旧会话兼容**:```mermaid mindmap 渲染路径完全保留,mermaid.ts 一行未删。
+
+### 二、纸篓语义标注(A 方案)
+
+纸篓是前端 localStorage,后端一行没动 → 问答检索仍会命中篓里的笔记。**不靠解释文字**,改在出处处挂「篓」标(`QaView.vue` `.cite-trash`,虚线灰签,`title` 说明"书架已隐藏,库中仍在,放回即恢复")。`QaView` 引入 `useTrashStore`。
+
+### 三、会话侧栏(216→248px)
+
+原来 176px 下 44 条会话 **38 条标题被截断(86%)**,11 条同名「TCP 三次握手…」完全无法区分。
+- 侧栏 176 → 248px
+- 会话行加**日期**(`shortDate` 用 `created_at`;后端列表契约无 `updated_at`,改它属 api.md 变更,故先用创建日)
+- 导出/删除按钮从 `flex-shrink:0` 占位改为**绝对定位**(`opacity:0` 仍占 74px 宽度,这才是标题只有 99px 的真凶)
+
+结果:标题可用宽度 99 → 189px(+91%),截断 44 → 26 条,余下均为超长标题(需 263px),属合理省略。
+
+### 四、视频页空态
+
+847px 舞台内容只到 244px(空 656px)。改为:整个投喂台垂直居中 + 空态显示**三步流程**(粘链接 → 自动转写 → 成一本书),用衬线汉字「一/二/三」编号,有链接或任务时整块消失。是「说清会发生什么」,不是标语。
+
+### 五、确认框统一
+
+新增 `src/utils/confirm.ts`(单例队列 + Promise<boolean>)+ `src/components/ConfirmDialog.vue`(纸墨风格、危险操作朱砂实底、Esc/点遮罩取消、打开即聚焦确认键)。替换 3 处 `window.confirm`:`BasketModal.purge` / `QaView.removeSession` / `NoteView.removeNote`。全库 `window.confirm` 归零。
+
+### 怎么验的
+
+两套 Playwright 探针(真后端 8000 + 真库,`--no-proxy-server`),**26 项全绿**:
+
+**verify_fixes.py 11/11**(回归上一批):搜索计数 `1–2 / 2`、笔记页零溢出、焦点环 `2px solid rgb(176,58,46)`、reduced-motion 压缩、各页零滚动、零 JS 报错。
+
+**verify_mindmap.py 15/15**(本批):
+- 两条渲染链都带 `data-lang`(markdown / section / 普通代码块)
+- `renderMindmapsIn` 真渲染出 SVG,markmap 画出节点文字 `['机器学习','监督学习','无监督学习','强化学习']`
+- 灯箱:打开 → 滚轮缩放到 `scale(2.8)` → **真鼠标拖拽** `translate(0,0) → translate(90px,50px)` → 拖后灯箱不误关 → 点外框关闭 → Esc 关闭
+- 确认框:弹出 / 朱砂危险样式 / 确认返回 true 并关闭 / 打开即聚焦确认键
+
+`pnpm exec vue-tsc --noEmit` → 0 错误;`pnpm build` ✓ 42.39s;后端 `uv run pytest -q` → **696 passed, 1 xfailed**(基线未降);`doc_lint` 0 ERROR。
+
+### 已知限制
+
+- markmap 渲染失败的降级是「保留列表 + 角标」,与 mermaid/svg 同款;但 markmap 内部异常不会冒泡到我们的 catch 之外
+- 会话列表仍只有 `created_at`(非最近活跃时间),因为后端 `SessionItem` 没透出 `updated_at`;要显示"最近活跃"需改 api.md 契约
+- 纸篓仍是本浏览器 localStorage:换浏览器/清缓存即空。这是当前设计,不是 bug;若要跨设备需后端软删除
+- 视频页三步流程是静态示意,不读取"最近导入"列表(那需要 GET /api/sources 前端封装,避免本批跨接口)

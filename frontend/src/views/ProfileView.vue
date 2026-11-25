@@ -1,8 +1,9 @@
 <script setup lang="ts">
 /**
- * 个人中心:GET /api/profile 一次聚合(用户信息 + 使用统计 + 章程预览 + 配置掩码)。
+ * 个人中心:GET /api/profile 一次聚合(用户信息 + 章程预览 + 配置掩码)。
  * 只读展示;编辑动作跳对应页(章程 → /charter,配置 → /settings)。
  * 明确不做的(改密码/邮箱等)见 docs/api.md §7,这里不出入口。
+ * 布局:通栏两段 —— 头像条 / 章程+模型配置两栏,填满 1060px 书页宽。使用统计已按主人意见删除。
  */
 import { computed, onActivated, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -28,7 +29,7 @@ async function load(): Promise<void> {
   }
 }
 
-// keep-alive 下 onActivated 初次挂载与每次重新进入都会触发:统计每次进页都拉最新
+// keep-alive 下 onActivated 初次挂载与每次重新进入都会触发:每次进页都拉最新
 onActivated(() => {
   void load()
 })
@@ -42,16 +43,6 @@ const registeredAt = computed(() => {
   return Number.isNaN(date.getTime())
     ? iso
     : date.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
-})
-
-const statsTiles = computed(() => {
-  const s = profile.value?.stats
-  return [
-    { num: s?.notes ?? 0, label: '笔记' },
-    { num: s?.sources ?? 0, label: '导入来源' },
-    { num: s?.qa_sessions ?? 0, label: '问答会话' },
-    { num: s?.qa_messages ?? 0, label: '问答消息' },
-  ]
 })
 
 /** 预览以「…」结尾 = 后端截断了,给个「看完整」的提示 */
@@ -80,60 +71,52 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
         </div>
       </div>
 
-      <div class="card">
-        <h2 class="section-title">使用统计</h2>
-        <div class="stats">
-          <div v-for="tile in statsTiles" :key="tile.label" class="stat">
-            <div class="stat-num">{{ tile.num }}</div>
-            <div class="stat-label">{{ tile.label }}</div>
-          </div>
+      <div class="grid-2">
+        <div class="card">
+          <h2 class="section-title">知识库章程</h2>
+          <template v-if="profile.charter.has_charter && profile.charter.preview">
+            <pre
+              class="charter-preview"
+              :title="charterTruncated ? '完整章程在章程页查看，此处仅预览前 300 字' : undefined"
+              >{{ profile.charter.preview }}</pre>
+          </template>
+          <button class="btn" type="button" @click="router.push({ name: 'charter' })">
+            {{ profile.charter.has_charter ? '查看 / 编辑章程' : '去填写章程问卷' }}
+          </button>
         </div>
-      </div>
 
-      <div class="card">
-        <h2 class="section-title">知识库章程</h2>
-        <template v-if="profile.charter.has_charter && profile.charter.preview">
-          <pre
-            class="charter-preview"
-            :title="charterTruncated ? '完整章程在章程页查看，此处仅预览前 300 字' : undefined"
-            >{{ profile.charter.preview }}</pre>
-        </template>
-        <button class="btn" type="button" @click="router.push({ name: 'charter' })">
-          {{ profile.charter.has_charter ? '查看 / 编辑章程' : '去填写章程问卷' }}
-        </button>
-      </div>
-
-      <div class="card">
-        <h2 class="section-title">模型与偏好配置</h2>
-        <dl class="config-list">
-          <div class="config-row">
-            <dt>网关地址</dt>
-            <dd>{{ profile.settings.llm_base_url }}</dd>
-          </div>
-          <div class="config-row">
-            <dt>模型</dt>
-            <dd>{{ profile.settings.llm_model }}</dd>
-          </div>
-          <div class="config-row">
-            <dt>API Key</dt>
-            <dd>
-              {{ keyView(profile.settings.api_key_set, profile.settings.api_key_tail, '未设置(AI 功能不可用)') }}
-            </dd>
-          </div>
-          <div class="config-row">
-            <dt>Tavily 联网搜索</dt>
-            <dd>{{ keyView(profile.settings.tavily_set, profile.settings.tavily_tail, '未设置(库外问题不联网)') }}</dd>
-          </div>
-        </dl>
-        <button class="btn" type="button" @click="router.push({ name: 'settings' })">修改配置</button>
+        <div class="card">
+          <h2 class="section-title">模型配置</h2>
+          <dl class="config-list">
+            <div class="config-row">
+              <dt>网关地址</dt>
+              <dd>{{ profile.settings.llm_base_url }}</dd>
+            </div>
+            <div class="config-row">
+              <dt>模型</dt>
+              <dd>{{ profile.settings.llm_model }}</dd>
+            </div>
+            <div class="config-row">
+              <dt>API Key</dt>
+              <dd>
+                {{ keyView(profile.settings.api_key_set, profile.settings.api_key_tail, '未设置(AI 功能不可用)') }}
+              </dd>
+            </div>
+            <div class="config-row">
+              <dt>Tavily 联网搜索</dt>
+              <dd>{{ keyView(profile.settings.tavily_set, profile.settings.tavily_tail, '未设置(库外问题不联网)') }}</dd>
+            </div>
+          </dl>
+          <button class="btn" type="button" @click="router.push({ name: 'settings' })">修改配置</button>
+        </div>
       </div>
     </template>
   </section>
 </template>
 
 <style scoped>
+/* 通栏:填满 1060px 书页宽,不再右侧留白 */
 .card {
-  max-width: 640px;
   padding: 20px 24px;
   margin-bottom: 16px;
 }
@@ -170,29 +153,26 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
   font-size: 16px;
 }
 
-.stats {
+/* ---------- 下半:章程 | 模型配置 两栏 ---------- */
+
+.grid-2 {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
 }
 
-.stat {
-  padding: 14px 8px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  text-align: center;
+.grid-2 .card {
+  margin-bottom: 0;
 }
 
-.stat-num {
-  font-family: var(--font-serif);
-  font-size: 26px;
-  font-weight: 700;
-}
+@media (max-width: 900px) {
+  .grid-2 {
+    grid-template-columns: 1fr;
+  }
 
-.stat-label {
-  margin-top: 4px;
-  color: var(--ink-3);
-  font-size: 13px;
+  .grid-2 .card {
+    margin-bottom: 16px;
+  }
 }
 
 .charter-preview {
@@ -205,13 +185,8 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
   line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
-  max-height: 200px;
+  max-height: 220px;
   overflow-y: auto;
-}
-
-.hint {
-  margin: 8px 0;
-  font-size: 12.5px;
 }
 
 .config-list {

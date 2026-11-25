@@ -41,6 +41,10 @@
   --shadow-lift: 0 2px 6px rgba(45, 40, 32, 0.06), 0 18px 44px rgba(45, 40, 32, 0.13);
   /* 字 */
   --font-serif: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+  /* 顶栏占位:内容 52px + 1px 分隔线。工作台里需要「钳在视口内」的页面
+     (问答出血形态、笔记两栏)用它算剩余高度 —— 别再各写一份 vh 魔数,
+     顶栏一改高度就到处对不上(2026-11-25 笔记页多滚 39px 就是这么来的) */
+  --chrome-h: 53px;
 }
 
 * {
@@ -205,6 +209,16 @@ ol {
   margin: 0 auto;
   padding: 30px 20px 64px;
   flex: 1;
+}
+
+/* 研究工作台(qa 路由):顶栏与容器同步放宽,给「会话栏 + 对话流 + 出处坞」三栏留位;
+   其余页面保持 1060px 书页宽度不变 */
+.topbar-inner--wide {
+  max-width: 1440px;
+}
+
+.container--wide {
+  max-width: 1440px;
 }
 
 .page-head {
@@ -414,6 +428,48 @@ ol {
   border: 0;
 }
 
+/* ---------- 键盘焦点 ----------
+ * 全站统一焦点环:只给键盘用户看(:focus-visible),鼠标点击不出环。
+ * 用朱砂,因为黛青是链接色、墨是按钮底色,只有朱砂在纸底/墨底上都跳得出来。
+ * 各页的按钮多是自己重画了 border/background 的小控件,没有系统焦点环,
+ * 所以这条必须写在这里兜底 —— 会话行、书卡、斜杠菜单项、书立导航全覆盖。 */
+:focus-visible {
+  outline: 2px solid var(--seal);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* 输入框/文本域已经有自己的 focus 边框+光晕,再套一圈会双环 */
+.input:focus-visible,
+.qa-input:focus-visible,
+textarea:focus-visible {
+  outline: none;
+}
+
+/* 墨底控件(主按钮/激活导航/纸篓)上的朱砂环不显眼,换纸色环 */
+.btn--primary:focus-visible,
+.nav-link--active:focus-visible,
+.rail-item--active:focus-visible,
+.trash-basket:focus-visible {
+  outline-color: var(--panel);
+  outline-offset: 1px;
+}
+
+/* ---------- 动效偏好 ----------
+ * 系统开了「减少动态效果」就把位移/缩放类动画关掉,只保留透明度变化。
+ * 涉及:飞纸入篓、拖书虚影、题签 hover 滚动、纸篓接纸弹跳、纸篓弹窗入场、
+ * 书卡上浮与轻旋、按钮 hover 位移。状态变化本身不受影响(仍会显示最终结果)。 */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 /* 详情页 markdown 渲染结果的排版(渲染器见 NoteView.vue) */
 .md {
   color: var(--ink);
@@ -519,11 +575,28 @@ ol {
   padding: 16px;
   border-radius: 10px;
   background: var(--panel);
+  /* 放大后可拖动:grab 光标 + 拖动时不选中文字 */
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+/* 只在「放大过 / 平移过」时才提示可拖 —— 1 倍且未平移时图上不该出现抓手 */
+.mermaid-lightbox-body.is-pannable {
+  cursor: grab;
+}
+
+.mermaid-lightbox-body.is-dragging {
+  cursor: grabbing;
 }
 
 .mermaid-lightbox-canvas {
   width: max-content;
   margin: 0 auto;
+  /* 缩放与平移统一走 transform(原来用 zoom,和 translate 混用坐标系会打架) */
+  transform-origin: center center;
+  /* 拖动时不要有过渡,否则跟手会拖出一段延迟 */
+  transition: none;
 }
 
 /* mermaid 解析失败:保留代码块 + 角标 */
@@ -533,6 +606,51 @@ pre.mermaid-error {
 }
 
 .mermaid-error-badge {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  color: var(--warn);
+  font-size: 11.5px;
+}
+
+/* 思维导图容器(utils/mindmap.ts → markmap):
+   自带 fold/zoom/pan,所以不做灯箱 —— 图本身就可以拖着看、点节点折叠。
+   高度给固定档:markmap 需要一个有确定高度的 svg 才能 fit。 */
+.mindmap-figure {
+  position: relative;
+  height: 420px;
+  margin: 14px 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  cursor: grab;
+}
+
+.mindmap-figure:active {
+  cursor: grabbing;
+}
+
+.mindmap-svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* 节点文字用正文黑体(默认会落到 markmap 自带字体,和页面不一致) */
+.mindmap-svg text {
+  font-family:
+    -apple-system, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui,
+    sans-serif;
+}
+
+/* 导图渲染失败:保留列表 + 角标(与 mermaid/svg 同款降级) */
+pre.mindmap-error {
+  position: relative;
+  padding-top: 30px;
+}
+
+.mindmap-error-badge {
   position: absolute;
   top: 8px;
   right: 10px;
@@ -555,8 +673,7 @@ pre.mermaid-error {
   border-radius: 8px;
 }
 
-/* SVG 解析失败:保留代码块 + 角标(与 mermaid 同款) */
-pre.svg-error {
+/* SVG 解析失败:保留代码块 + 角标(与 mermaid 同款) */pre.svg-error {
   position: relative;
   padding-top: 30px;
 }
@@ -725,4 +842,71 @@ a.sec-link {
   overflow-x: auto;
   overflow-y: hidden;
   text-align: center;
+}
+
+/* ---------- 飞纸动画(utils/flyPaper.ts 临时挂到 body 上的纸片) ----------
+   从书卡位置飞向右下角纸篓的一张小纸:左缘带书脊色,落篓时缩小+旋转+淡出。
+   必须是全局样式:元素挂在 body 下,进不了任何组件的 scoped 范围 */
+.fly-paper {
+  position: fixed;
+  z-index: 1200; /* 纸篓(1100)之上:纸要「落进」篓口,最后压在篓上消失 */
+  width: 28px;
+  height: 36px;
+  border: 1px solid var(--line-strong);
+  border-radius: 3px;
+  background: linear-gradient(180deg, #fffdf8, #f4efe3);
+  box-shadow: 0 2px 10px rgba(45, 40, 32, 0.2);
+  pointer-events: none;
+  opacity: 1;
+  transform: translate(0, 0) rotate(0deg) scale(1);
+  transition:
+    transform 0.55s cubic-bezier(0.5, 0, 0.7, 0.4),
+    opacity 0.55s ease;
+}
+
+.fly-paper::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 3px;
+  border-radius: 2px;
+  background: var(--spine, var(--ink-3));
+  opacity: 0.85;
+}
+
+/* 拖书自定义拖影(LibraryView dragstart 临时挂到 body,仅作 setDragImage 快照):
+   一张「抽出来的书」小卡——左缘书脊色 + 衬线题签,像把书从架上抽出来拎着走 */
+.drag-book-ghost {
+  position: fixed;
+  top: -220px;
+  left: -220px;
+  width: 48px;
+  height: 66px;
+  padding: 6px 8px 6px 13px;
+  border: 1px solid var(--line);
+  border-radius: 4px 10px 10px 4px;
+  background: linear-gradient(180deg, #fffdf8, #f4efe3);
+  box-shadow: 0 12px 24px rgba(45, 40, 32, 0.35);
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+  text-align: center;
+  overflow: hidden;
+  transform: rotate(-3deg);
+}
+
+.drag-book-ghost::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 4px;
+  width: 5px;
+  border-radius: 2px;
+  background: var(--spine, var(--ink-3));
+  opacity: 0.9;
 }

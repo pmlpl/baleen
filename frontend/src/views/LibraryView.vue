@@ -1,25 +1,30 @@
 <script setup lang="ts">
 /**
- * 笔记库:书架式网格(5 列 × 6 行 = 每页 30 本),多了翻页。
+ * 笔记库:双视图,每页 30 条,多了翻页。
+ * - 书架视图:书卡网格(列数自适应,锁 5:7 书的比例),横排题签,管"逛"的氛围
+ * - 列表视图:全名行条目,质量/段数/日期齐全,管查找和管理
+ * 右上角切换,localStorage 记住(默认书架)。
  *
  * GET /api/notes?q=&limit=&offset= —— 搜索框输入防抖 300ms 才发请求;
  * 翻页/搜索都通过 reload() 重拉,失败给人话提示不白屏。
  */
 import { computed, onActivated, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import type { Directive } from 'vue'
 import { RouterLink } from 'vue-router'
 
 import { describeApiError } from '../api/http'
-import { deleteNote, listNotes } from '../api/notes'
+import { listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
 import { createSource, getSource, MAX_UPLOAD_BYTES } from '../api/sources'
 import type { SourceDetail } from '../api/sources'
+import { useTrashStore } from '../stores/trash'
+import { flyToBasket } from '../utils/flyPaper'
+import { spineColor } from '../utils/spine'
 
 /** 输入停下来 300ms 才查(任务书要求的防抖值) */
 const DEBOUNCE_MS = 300
-/** 书架:5 列 × 6 行 */
-const GRID_COLS = 5
-const GRID_ROWS = 6
-const PAGE_SIZE = GRID_COLS * GRID_ROWS
+/** 每页 30 条(书架约 5~6 列 × 5 行;列表 30 行) */
+const PAGE_SIZE = 30
 
 const keyword = ref('')
 const appliedKeyword = ref('')
@@ -28,6 +33,42 @@ const total = ref(0)
 const page = ref(1)
 const loading = ref(false)
 const errorText = ref('')
+
+/** 纸篓(stores/trash,只记本浏览器):入篓的笔记书架隐藏、可放回,纸篓弹窗里彻底删除 */
+const trash = useTrashStore()
+/** 书架真正可见 = 服务端列表滤掉已入篓的 */
+const visibleNotes = computed(() => notes.value.filter((n) => !trash.has(n.id)))
+/**
+ * 展示总数:入篓的后端还在,只是书架不显示,从 total 里扣掉。
+ *
+ * 只在没有搜索词时扣 —— 那时服务端 total 是全库条数,减去篓里数量是精确的。
+ * 有搜索词时 total 已经是「命中条数」,而 trash.ids 是全量篓内容,硬减会算出
+ * 「命中 2 条、篓里 3 本 → 0」(实测显示 1–2 / 0),只能用服务端数字。
+ */
+const visibleTotal = computed(() =>
+  appliedKeyword.value === '' ? Math.max(0, total.value - trash.ids.length) : total.value,
+)
+
+// ---------------- 双视图:书卡管氛围,列表管查找 ----------------
+
+type ShelfView = 'books' | 'list'
+const SHELF_VIEW_KEY = 'baleen-shelf-view'
+const view = ref<ShelfView>('books')
+try {
+  const saved = localStorage.getItem(SHELF_VIEW_KEY)
+  if (saved === 'books' || saved === 'list') view.value = saved
+} catch {
+  /* storage 禁用/满:默认书架 */
+}
+
+function setView(next: ShelfView): void {
+  view.value = next
+  try {
+    localStorage.setItem(SHELF_VIEW_KEY, next)
+  } catch {
+    /* 记不住就当次会话有效 */
+  }
+}
 
 const pageCount = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
 const rangeStart = computed(() => (total.value === 0 ? 0 : (page.value - 1) * PAGE_SIZE + 1))
@@ -97,20 +138,6 @@ function goPage(next: number): void {
 }
 
 /** 页码列表:页数多时只显示当前页附近 + 首末页(用 null 表示省略号) */
-const pageItems = computed<(number | null)[]>(() => {
-  const last = pageCount.value
-  const current = page.value
-  if (last <= 7) return Array.from({ length: last }, (_, i) => i + 1)
-  const items: (number | null)[] = [1]
-  const from = Math.max(2, current - 1)
-  const to = Math.min(last - 1, current + 1)
-  if (from > 2) items.push(null)
-  for (let p = from; p <= to; p++) items.push(p)
-  if (to < last - 1) items.push(null)
-  items.push(last)
-  return items
-})
-
 function formatTime(iso: string): string {
   const date = new Date(iso)
   if (Number.isNaN(date.getTime())) return iso
@@ -138,44 +165,110 @@ function qualityTone(quality: string | null): string {
   return 'neutral'
 }
 
-/** 书脊配色:按 note.id 稳定取色,同一本书每次进来颜色一致。
- *  国画颜料八色(压灰低饱和,水墨书卷气):墨/藏青/黛绿/赭石/朱砂/紫棠/苔绿/灰梅 */
-const SPINES = [
-  '#2f2c28', // 墨
-  '#33506b', // 藏青
-  '#3e5c50', // 黛绿
-  '#8c5a3c', // 赭石
-  '#a8432f', // 朱砂
-  '#5d4a66', // 紫棠
-  '#6b7a4d', // 苔绿
-  '#75655e', // 灰梅
-]
+/** ---- 批量移入纸篓:点「批量删除」进入选择模式,点书卡/行选中或取消,选好统一入篓 ---- */
+const selecting = ref(false)
+const selectedIds = ref<Set<number>>(new Set())
+const batchDeleting = ref(false)
 
-function spineColor(id: number): string {
-  return SPINES[id % SPINES.length] as string
+function toggleBatch(): void {
+  if (selecting.value) {
+    selecting.value = false
+    selectedIds.value.clear()
+  } else {
+    selecting.value = true
+  }
 }
 
-/** ---- 删除(真删除:正文/切块/向量/原文件一起清,所以必须二次确认) ---- */
-const deletingId = ref<number | null>(null)
+function toggleSelect(id: number): void {
+  if (selectedIds.value.has(id)) selectedIds.value.delete(id)
+  else selectedIds.value.add(id)
+}
 
-async function removeNote(note: NoteListItem): Promise<void> {
-  if (deletingId.value !== null) return
-  const label = note.title === '' ? `#${note.id}` : `《${note.title}》`
-  const ok = window.confirm(`确定删除${label}吗?正文、检索索引和原文件会一起删除,不可恢复。`)
-  if (!ok) return
-  deletingId.value = note.id
+/** 批量模式下点书卡/行 = 选中切换,不进笔记;平时点 = 正常跳转。
+ *  必须挂在捕获阶段(@click.capture):RouterLink 在 a 元素自己的 click 监听里
+ *  就同步 router.push 了,冒泡阶段再 preventDefault 为时已晚;
+ *  捕获先拦,vue-router 的 guardEvent 见 defaultPrevented 会放弃跳转 */
+function onCardClick(event: MouseEvent, id: number): void {
+  if (!selecting.value) return
+  event.preventDefault()
+  toggleSelect(id)
+}
+
+/** 正在拖拽的书:原位留一道浅影,像书被从架上拎了起来 */
+const draggingId = ref<number | null>(null)
+
+/** 拖书入纸篓:dragstart 记下 id/书脊色,并换掉浏览器默认的半透明快照——
+ *  自绘一张「抽出来的书」小卡跟手;App.vue 篓口松手时消费 */
+function onDragStart(event: DragEvent, note: NoteListItem): void {
+  const data = event.dataTransfer
+  if (data === null) return
+  data.effectAllowed = 'move'
+  data.setData(
+    'application/x-baleen-note',
+    JSON.stringify({ id: note.id, spine: spineColor(note.id) }),
+  )
+  // 自定义拖影:竖着的小书(左缘书脊色+衬线题签),像把书从架上抽出来拎着走
+  const ghost = document.createElement('div')
+  ghost.className = 'drag-book-ghost'
+  ghost.style.setProperty('--spine', spineColor(note.id))
+  ghost.textContent = note.title
+  document.body.appendChild(ghost)
+  data.setDragImage(ghost, 24, 33)
+  draggingId.value = note.id
+  // 拖影在 dragstart 里被同步捕获完,随即摘掉;松手/取消后原位影由 onDragEnd 撤掉
+  window.setTimeout(() => ghost.remove(), 0)
+}
+
+function onDragEnd(): void {
+  draggingId.value = null
+}
+
+/** 「删除所选」:纸片逐张飞向右下角纸篓,落篓才入账。
+ *  移入可逆(纸篓里可放回),所以不再弹确认——桌面回收站的规矩 */
+async function trashSelected(): Promise<void> {
+  const ids = Array.from(selectedIds.value)
+  if (ids.length === 0 || batchDeleting.value) return
+  batchDeleting.value = true
   errorText.value = ''
   try {
-    await deleteNote(note.id)
-    // 乐观移除:API 成功后直接从本地列表滤掉,不重新 load —— 瞬时生效、不闪烁。
-    // total 同步减一保持计数/分页一致;窗口聚焦时的 load() 会兜底校准。
-    notes.value = notes.value.filter((n) => n.id !== note.id)
-    total.value = Math.max(0, total.value - 1)
-  } catch (error) {
-    errorText.value = describeApiError(error)
+    ids.forEach((id, i) => {
+      // 逐张错开 70ms 起飞,像一叠纸挨张丢进篓
+      window.setTimeout(() => {
+        trash.startFly(id)
+        void flyToBasket(
+          document.querySelector<HTMLElement>(`[data-note-id="${id}"]`),
+          spineColor(id),
+        )
+      }, i * 70)
+    })
+    // 等最后一张飞到位(错峰延迟 + 飞行时长)再统一入账
+    await new Promise((resolve) => setTimeout(resolve, ids.length * 70 + 620))
+    trash.add(ids)
   } finally {
-    deletingId.value = null
+    for (const id of ids) trash.endFly(id)
+    selectedIds.value.clear()
+    batchDeleting.value = false
   }
+}
+
+/** 题签溢出检测:实测超宽才允许 hover 滚动,滚动位移/时长按文字量定 */
+function checkTitleOverflow(el: HTMLElement): void {
+  const overflowPx = el.scrollWidth - el.clientWidth
+  const tracked = el.classList.contains('book-title--overflow')
+  if (overflowPx > 2) {
+    if (!tracked) el.classList.add('book-title--overflow')
+    // 位移 = 溢出像素(滚到文字末尾贴右缘即停,不滚出空白);约 60px/s,最少 3s
+    el.style.setProperty('--title-shift', `${-overflowPx}px`)
+    el.style.setProperty('--title-scroll-dur', `${Math.max(3, Math.round(el.scrollWidth / 60))}s`)
+  } else if (tracked) {
+    el.classList.remove('book-title--overflow')
+  }
+}
+
+/** 本地指令:v-for 里逐个题签量宽,比按字数估计准(短标题不乱滚) */
+const vTitleScroll: Directive<HTMLElement> = {
+  mounted: checkTitleOverflow,
+  updated: checkTitleOverflow,
 }
 
 /** ---- 导入笔记(从对话框搬来:文件 → POST /api/sources → 轮询 → 入库) ---- */
@@ -321,10 +414,6 @@ function onShelfDrop(event: DragEvent): void {
 
 <template>
   <section class="page">
-    <header class="page-head">
-      <h1 class="page-title">笔记库</h1>
-    </header>
-
     <div class="search-bar">
       <input
         v-model="keyword"
@@ -334,8 +423,72 @@ function onShelfDrop(event: DragEvent): void {
         aria-label="按标题搜索笔记"
       />
       <span class="muted count">
-        {{ loading ? '查询中…' : `${rangeStart}–${rangeEnd} / ${total}` }}
+        {{
+          loading
+            ? '查询中…'
+            : trash.ids.length === 0
+              ? `${rangeStart}–${rangeEnd} / ${total}`
+              : `${rangeStart}–${rangeEnd} / ${visibleTotal} · 纸篓 ${trash.ids.length}`
+        }}
       </span>
+      <!-- 视图切换:书卡管氛围,列表管查找 -->
+      <div class="view-switch" role="group" aria-label="视图切换">
+        <button
+          class="view-btn"
+          :class="{ 'view-btn--active': view === 'books' }"
+          type="button"
+          title="书架视图"
+          aria-label="书架视图"
+          @click="setView('books')"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <rect x="3" y="3" width="7" height="7" rx="1.5" />
+            <rect x="14" y="3" width="7" height="7" rx="1.5" />
+            <rect x="3" y="14" width="7" height="7" rx="1.5" />
+            <rect x="14" y="14" width="7" height="7" rx="1.5" />
+          </svg>
+        </button>
+        <button
+          class="view-btn"
+          :class="{ 'view-btn--active': view === 'list' }"
+          type="button"
+          title="列表视图"
+          aria-label="列表视图"
+          @click="setView('list')"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <line x1="4" y1="6" x2="20" y2="6" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="18" x2="20" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <button
+        class="btn batch-btn"
+        :class="{ 'batch-btn--on': selecting }"
+        type="button"
+        @click="toggleBatch"
+      >
+        {{ selecting ? '退出批量' : '批量删除' }}
+      </button>
       <button
         class="btn btn--primary import-btn"
         type="button"
@@ -358,6 +511,22 @@ function onShelfDrop(event: DragEvent): void {
 
     <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
 
+    <!-- 批量模式:点书选中/取消,「删除所选」把选中的书飞进右下角纸篓(可放回) -->
+    <div v-if="selecting" class="batch-bar">
+      <span class="batch-count">已选 {{ selectedIds.size }} 本 · 点击书卡选中</span>
+      <button
+        class="btn batch-del-btn"
+        type="button"
+        :disabled="selectedIds.size === 0 || batchDeleting"
+        @click="trashSelected"
+      >
+        {{ batchDeleting ? '移入纸篓…' : `删除所选(${selectedIds.size})` }}
+      </button>
+      <button class="batch-cancel" type="button" :disabled="batchDeleting" @click="toggleBatch">
+        取消
+      </button>
+    </div>
+
     <!-- 导入进度:一批里每个文件一条,推进/完成/失败如实显示;完成后书架自动刷新 -->
     <div v-if="imports.length > 0" class="import-panel card">
       <p class="import-title">
@@ -371,19 +540,35 @@ function onShelfDrop(event: DragEvent): void {
       </ul>
     </div>
 
-    <!-- 书架:固定 5 列;不足一页时也保持格子尺寸,不拉伸。拖文件到此处可直接导入 -->
+    <!-- 书架视图:列数自适应,5:7 书的比例,横排题签。拖文件到此处导入,拖书到纸篓移除 -->
     <ul
-      v-if="notes.length > 0"
+      v-if="visibleNotes.length > 0 && view === 'books'"
       class="shelf"
       :class="{ 'shelf--dim': loading }"
       @dragover.prevent
       @drop.prevent="onShelfDrop"
     >
-      <li v-for="note in notes" :key="note.id" class="book">
+      <li
+        v-for="note in visibleNotes"
+        :key="note.id"
+        class="book"
+        :data-note-id="note.id"
+        draggable="true"
+        :class="{
+          'book--selected': selecting && selectedIds.has(note.id),
+          'book--flying': trash.flying.includes(note.id),
+          'book--dragging': draggingId === note.id,
+        }"
+        @dragstart="onDragStart($event, note)"
+        @dragend="onDragEnd"
+        @click.capture="onCardClick($event, note.id)"
+      >
+        <!-- 批量模式的选中角标:空心圈=未选,实心勾=已选 -->
+        <span v-if="selecting" class="book-check" aria-hidden="true">✓</span>
         <RouterLink class="book-link" :to="`/notes/${note.id}`">
           <span class="book-cover" :style="{ '--spine': spineColor(note.id) }">
             <span class="book-spine" />
-            <span class="book-title" :title="note.title">{{ note.title }}</span>
+            <span v-title-scroll class="book-title" :title="note.title"><span class="book-title-text">{{ note.title }}</span></span>
             <span class="book-foot">
               <span class="book-chunks">{{ note.chunk_count }} 段</span>
               <span v-if="note.tags.length > 0" class="book-tags">
@@ -396,17 +581,49 @@ function onShelfDrop(event: DragEvent): void {
           <span class="badge" :class="`badge--${qualityTone(note.quality)}`">
             {{ qualityLabel(note.quality) }}
           </span>
-          <span class="book-meta-right">
-            <span class="muted book-date">{{ formatTime(note.created_at) }}</span>
-            <button
-              class="book-del"
-              type="button"
-              :disabled="deletingId !== null"
-              @click="removeNote(note)"
-            >
-              {{ deletingId === note.id ? '删除中…' : '删除' }}
-            </button>
+          <span class="muted book-date">{{ formatTime(note.created_at) }}</span>
+        </span>
+      </li>
+    </ul>
+
+    <!-- 列表视图:全名 + 质量/段数/日期一行齐,查找管理为主 -->
+    <ul
+      v-else-if="visibleNotes.length > 0 && view === 'list'"
+      class="shelf-rows"
+      :class="{ 'shelf--dim': loading }"
+      @dragover.prevent
+      @drop.prevent="onShelfDrop"
+    >
+      <li
+        v-for="note in visibleNotes"
+        :key="note.id"
+        class="book-row"
+        :data-note-id="note.id"
+        draggable="true"
+        :class="{
+          'book-row--selected': selecting && selectedIds.has(note.id),
+          'book--flying': trash.flying.includes(note.id),
+          'book--dragging': draggingId === note.id,
+        }"
+        @dragstart="onDragStart($event, note)"
+        @dragend="onDragEnd"
+        @click.capture="onCardClick($event, note.id)"
+      >
+        <RouterLink
+          class="row-link"
+          :to="`/notes/${note.id}`"
+          :style="{ '--spine': spineColor(note.id) }"
+        >
+          <span v-if="selecting" class="book-check row-check" aria-hidden="true">✓</span>
+          <span class="row-bar" />
+          <span class="row-title" :title="note.title">{{ note.title }}</span>
+        </RouterLink>
+        <span class="row-badges">
+          <span class="badge" :class="`badge--${qualityTone(note.quality)}`">
+            {{ qualityLabel(note.quality) }}
           </span>
+          <span class="muted row-num">{{ note.chunk_count }} 段</span>
+          <span class="muted row-date">{{ formatTime(note.created_at) }}</span>
         </span>
       </li>
     </ul>
@@ -418,29 +635,18 @@ function onShelfDrop(event: DragEvent): void {
       @drop.prevent="onShelfDrop"
     >
       {{ appliedKeyword === ''
-        ? '书架还是空的——把文件拖到这里即可导入。'
+        ? trash.ids.length > 0
+          ? `书架空了——纸篓里还有 ${trash.ids.length} 本。`
+          : '书架还是空的——把文件拖到这里即可导入。'
         : `没有标题匹配「${appliedKeyword}」的笔记。` }}
     </p>
 
-    <!-- 翻页 -->
+    <!-- 翻页:轻量文字链,数字页码一排按钮的重量感与书架不配 -->
     <nav v-if="pageCount > 1" class="pager" aria-label="分页">
       <button class="pager-btn" type="button" :disabled="page === 1 || loading" @click="goPage(page - 1)">
         上一页
       </button>
-      <template v-for="(item, idx) in pageItems" :key="`${item ?? 'gap'}-${idx}`">
-        <span v-if="item === null" class="pager-gap">…</span>
-        <button
-          v-else
-          class="pager-btn pager-num"
-          :class="{ 'pager-num--active': item === page }"
-          type="button"
-          :disabled="loading"
-          :aria-current="item === page ? 'page' : undefined"
-          @click="goPage(item)"
-        >
-          {{ item }}
-        </button>
-      </template>
+      <span class="pager-stat">第 {{ page }} / {{ pageCount }} 页</span>
       <button
         class="pager-btn"
         type="button"
@@ -539,12 +745,75 @@ function onShelfDrop(event: DragEvent): void {
   padding: 28px 16px;
 }
 
+/* ---------- 批量删除 ---------- */
+
+.batch-btn {
+  flex-shrink: 0;
+  min-width: 118px; /* 与「＋ 导入笔记」同宽,两个动作钮并排不一大一小 */
+}
+
+.batch-btn--on {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+/* 批量操作条:浅青底虚线框,像取书时夹在架间的便签 */
+.batch-bar {
+  display: flex;
+  margin-bottom: 14px;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border: 1px dashed var(--accent);
+  border-radius: 10px;
+  background: var(--accent-soft);
+}
+
+.batch-count {
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 删除所选:朱砂实底——真删除的分量感 */
+.batch-del-btn {
+  margin-left: auto;
+  border-color: var(--seal);
+  background: var(--seal);
+  color: #fff;
+}
+
+.batch-del-btn:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+
+.batch-del-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.batch-cancel {
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.batch-cancel:hover:not(:disabled) {
+  color: var(--accent-ink);
+}
+
 /* ---------- 书架 ---------- */
 
 .shelf {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
-  gap: 20px 18px;
+  /* 列数随舞台宽度自适应(1440 宽约 8 列),书高锁 5:7 比例跟随列宽 */
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 18px 16px;
   padding: 0;
   margin: 0;
   list-style: none;
@@ -556,6 +825,7 @@ function onShelfDrop(event: DragEvent): void {
 }
 
 .book {
+  position: relative; /* 批量选择角标的定位锚点(封面左上角) */
   display: flex;
   min-width: 0;
   flex-direction: column;
@@ -571,11 +841,12 @@ function onShelfDrop(event: DragEvent): void {
   text-decoration: none;
 }
 
-/* 书的封面:布面装帧(纵向微渐变)+ 左侧颜料书脊 + 右侧题签竖排书名 */
+/* 书的封面:布面装帧(纵向微渐变)+ 左侧颜料书脊 + 顶部横排题签。
+   高度不再写死:锁 5:7 真书比例,宽比高长的"明信片感"从此消失 */
 .book-cover {
   position: relative;
   display: block;
-  height: 186px;
+  aspect-ratio: 5 / 7;
   border: 1px solid var(--line);
   border-radius: 4px 10px 10px 4px;
   background: linear-gradient(180deg, #fffdf8, #f8f4ea);
@@ -598,47 +869,71 @@ function onShelfDrop(event: DragEvent): void {
   opacity: 0.9;
 }
 
+/* 抽书:悬停时上浮 + 一丝逆时针轻旋,像从架上抽出一格 */
 .book-link:hover .book-cover {
   border-color: var(--line-strong);
   box-shadow: var(--shadow-lift);
-  transform: translateY(-3px);
+  transform: translateY(-3px) rotate(-0.5deg);
 }
 
-/* 题签:古籍封面上贴的那条白签,竖排书名自上而下读;
-   长标题在竖排下截断出省略号,完整名靠 :title 悬停 */
+/* 题签:古籍封面上贴的那条白签。单行横排,右缘 12px 渐隐收尾;
+   超宽的悬停时向左滚动看全名(位移/时长由 v-title-scroll 指令实测后写入 CSS 变量) */
 .book-title {
   position: absolute;
-  top: 12px;
+  top: 10px;
   right: 10px;
-  max-height: calc(100% - 24px);
-  padding: 10px 4px;
+  left: 14px;
   overflow: hidden;
+  padding: 6px 8px;
   border: 1px solid rgba(33, 31, 28, 0.12);
   border-radius: 3px;
   background: rgba(255, 253, 248, 0.92);
   color: var(--ink);
   font-family: var(--font-serif);
-  font-size: 14px;
+  font-size: 12px;
   font-weight: 600;
-  letter-spacing: 0.14em;
-  line-height: 1;
-  text-overflow: ellipsis;
+  letter-spacing: 0.04em;
+  line-height: 1.55;
+  text-align: center;
   white-space: nowrap;
-  writing-mode: vertical-rl;
-  text-orientation: upright;
+  mask-image: linear-gradient(90deg, #000 calc(100% - 12px), transparent);
+  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 12px), transparent);
+}
+
+.book-title-text {
+  display: inline-block;
+  padding-right: 1.5em; /* 末尾留口气:滚到尽头时文字尾不贴边 */
+  white-space: nowrap;
+}
+
+/* 只有真溢出的题签才滚(指令量过才加类);首尾各停一拍,不会一碰就窜 */
+.book-title--overflow:hover .book-title-text {
+  animation: title-scroll var(--title-scroll-dur, 6s) linear infinite;
+}
+
+@keyframes title-scroll {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+
+  88%,
+  100% {
+    transform: translateX(var(--title-shift, -30%));
+  }
 }
 
 .book-foot {
   position: absolute;
-  right: 10px;
-  bottom: 9px;
-  left: 18px;
+  right: 8px;
+  bottom: 7px;
+  left: 14px;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
   gap: 8px;
   color: var(--ink-3);
-  font-size: 11.5px;
+  font-size: 11px;
 }
 
 .book-tags {
@@ -661,99 +956,235 @@ function onShelfDrop(event: DragEvent): void {
   font-variant-numeric: tabular-nums;
 }
 
-.book-meta-right {
+/* 批量选择角标:空心圈=未选,白勾黛青底=已选(仅批量模式渲染,无需 hover 显隐) */
+.book-check {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  z-index: 2;
   display: flex;
   align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1.5px solid var(--ink-3);
+  border-radius: 50%;
+  background: rgba(255, 253, 248, 0.95);
+  color: transparent;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* 选中态:整封蒙一层黛青纱 + 白边实心勾,与未选一眼可辨 */
+.book--selected .book-cover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-soft), var(--shadow);
+}
+
+.book--selected .book-cover::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: rgba(61, 90, 115, 0.22);
+}
+
+.book--selected .book-check {
+  border: 2px solid #fff;
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 1px 4px rgba(33, 31, 28, 0.25);
+}
+
+/* 飞往纸篓途中:卡片原地淡出缩小,呼应飞出去的那张纸 */
+.book--flying {
+  opacity: 0;
+  transform: scale(0.85);
+  transition:
+    opacity 0.4s ease,
+    transform 0.4s ease;
+}
+
+/* 拖起:书被拎离书架,原位只留一道浅影 */
+.book--dragging {
+  opacity: 0.35;
+  transform: scale(0.94) rotate(-2deg);
+  transition:
+    opacity 0.15s ease,
+    transform 0.15s ease;
+}
+
+/* 行内角标:随 flex 排在色条前,不绝对定位 */
+.book-check.row-check {
+  position: static;
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  font-size: 11px;
+}
+
+/* ---------- 列表视图:全名可查,查找管理为主 ---------- */
+
+.shelf-rows {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex-direction: column;
   gap: 8px;
 }
 
-/* 删除:平时低调,悬停才透出危险色 */
-.book-del {
-  padding: 2px 5px;
-  border: none;
-  border-radius: 4px;
-  background: none;
-  color: var(--ink-3);
-  font-size: 12px;
-  cursor: pointer;
-  transition: color 0.13s ease, background 0.13s ease;
-}
-
-.book-del:hover:not(:disabled) {
-  background: var(--err-soft);
-  color: var(--err);
-}
-
-.book-del:disabled {
-  opacity: 0.5;
-  cursor: wait;
-}
-
-/* ---------- 翻页 ---------- */
-
-.pager {
+.book-row {
+  position: relative;
   display: flex;
-  margin-top: 26px;
-  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 10px 6px 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  transition:
+    border-color 0.13s ease,
+    box-shadow 0.13s ease;
+}
+
+.book-row:hover {
+  border-color: var(--line-strong);
+  box-shadow: var(--shadow);
+}
+
+.row-link {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+  color: inherit;
+}
+
+.row-link:hover {
+  text-decoration: none;
+}
+
+/* 书脊色条延续书架隐喻:一眼认出这是同一本书 */
+.row-bar {
+  width: 4px;
+  align-self: stretch;
+  border-radius: 2px;
+  background: var(--spine);
+  opacity: 0.9;
+}
+
+.row-title {
+  display: -webkit-box;
+  overflow: hidden;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 550;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.row-badges {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.row-num,
+.row-date {
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* 选中行:黛青描边 + 浅青底,与书卡选中态同语言 */
+.book-row--selected,
+.book-row--selected:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1.5px var(--accent);
+}
+
+.book-row--selected .row-check {
+  border: 1.5px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ---------- 视图切换钮 ---------- */
+
+.view-switch {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+}
+
+.view-btn {
+  display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-}
-
-.pager-btn {
-  min-width: 34px;
-  padding: 6px 11px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
-  color: var(--ink-2);
-  font-size: 13px;
+  color: var(--ink-3);
   cursor: pointer;
-  transition: all 0.15s ease;
+  transition:
+    background 0.13s ease,
+    border-color 0.13s ease,
+    color 0.13s ease;
 }
 
-.pager-btn:hover:not(:disabled):not(.pager-num--active) {
+.view-btn:hover {
   border-color: var(--accent);
   color: var(--accent-ink);
 }
 
-.pager-btn:disabled {
-  opacity: 0.45;
-  cursor: not-allowed;
-}
-
-.pager-num {
-  font-variant-numeric: tabular-nums;
-}
-
-.pager-num--active {
+.view-btn--active,
+.view-btn--active:hover {
   border-color: var(--ink);
   background: var(--ink);
   color: var(--panel);
-  font-weight: 600;
 }
 
-.pager-gap {
-  padding: 0 2px;
+/* ---------- 翻页:文字链轻量风 ---------- */
+
+.pager {
+  display: flex;
+  margin-top: 26px;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+
+.pager-btn {
+  padding: 4px 8px;
+  border: none;
+  background: none;
+  color: var(--ink-2);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.13s ease;
+}
+
+.pager-btn:hover:not(:disabled) {
+  color: var(--accent-ink);
+}
+
+.pager-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.pager-stat {
   color: var(--ink-3);
-}
-
-/* 窄屏降为 4/3/2 列,避免书被压扁 */
-@media (max-width: 1200px) {
-  .shelf {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 900px) {
-  .shelf {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-}
-
-@media (max-width: 620px) {
-  .shelf {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
 }
 </style>
