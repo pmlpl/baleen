@@ -63,6 +63,15 @@ class QaRepo(Repo):
             )
         )
 
+    async def rename_session(self, session_id: int, title: str) -> QaSession | None:
+        """重命名会话标题(不动 updated_at——「最近活跃」只认落消息,重命名不算活跃)。"""
+        row = await self.get_session(session_id)
+        if row is None:
+            return None
+        row.title = title
+        await self.session.flush()
+        return row
+
     async def list_messages(self, session_id: int) -> list[QaMessage]:
         rows = await self.session.scalars(
             select(QaMessage)

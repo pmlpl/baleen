@@ -286,6 +286,48 @@ def test_delete_session(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None
     assert listing["total"] == min(before + 1, KEEP_SESSIONS) - 1
 
 
+def test_rename_session(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    sid = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()["session_id"]
+    resp = env.client.patch(f"/api/qa/sessions/{sid}", json={"title": "JS 闭包专题"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] == sid
+    assert body["title"] == "JS 闭包专题"
+    assert set(body) == {"id", "title", "created_at"}
+    # 列表与详情立即反映新标题
+    item = next(it for it in env.client.get("/api/qa/sessions").json()["items"] if it["id"] == sid)
+    assert item["title"] == "JS 闭包专题"
+    detail = env.client.get(f"/api/qa/sessions/{sid}").json()
+    assert detail["title"] == "JS 闭包专题"
+
+
+def test_rename_session_keeps_activity_order(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    # 重命名不算「最近活跃」:更旧的会话改名后不得浮到更新的会话上面
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    a = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()["session_id"]
+    qa_setup.responses.append((200, _chat("React hooks 让函数组件有了状态管理。[1]")))
+    b = env.client.post("/api/qa/chat", json={"question": "hooks 是什么"}).json()["session_id"]
+    assert (
+        env.client.patch(f"/api/qa/sessions/{a}", json={"title": "JS 闭包专题"}).status_code == 200
+    )
+    listing = env.client.get("/api/qa/sessions").json()
+    assert [it["id"] for it in listing["items"][:2]] == [b, a]
+
+
+def test_rename_session_validation_and_404(
+    env: SimpleNamespace, qa_setup: SimpleNamespace
+) -> None:
+    # 不存在/空白/超长:404 / 422 / 422(长度与首问标题同口径 TITLE_CHARS=30)
+    assert env.client.patch("/api/qa/sessions/999999", json={"title": "x"}).status_code == 404
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    sid = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()["session_id"]
+    assert env.client.patch(f"/api/qa/sessions/{sid}", json={"title": "   "}).status_code == 422
+    assert env.client.patch(f"/api/qa/sessions/{sid}", json={"title": "x" * 31}).status_code == 422
+
+
 def test_blank_question_rejected(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
     resp = env.client.post("/api/qa/chat", json={"question": "   "})
     assert resp.status_code == 422

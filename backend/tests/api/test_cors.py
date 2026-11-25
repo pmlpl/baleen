@@ -1,6 +1,7 @@
 """CORS preflight 端点测试(B5,2026-11-24):methods/headers 收紧为显式清单。
 
-- 依据实测:后端路由只用 GET/POST/PUT/DELETE;前端只发 Authorization/Content-Type/Accept。
+- 依据实测:后端路由只用 GET/POST/PUT/DELETE/PATCH(v36 会话重命名引入 PATCH);
+  前端只发 Authorization/Content-Type/Accept。
 - preflight(OPTIONS + Origin + Access-Control-Request-Method)由 CORSMiddleware 直接应答,
   不走路由、不碰 DB/Redis → 用裸 TestClient,不依赖 docker。
 - starlette 的失败语义:origin/method/header 任一不允许 → 400 "Disallowed CORS ..."。
@@ -39,19 +40,19 @@ def test_preflight_whitelisted_origin_with_allowed_method_and_headers() -> None:
     assert resp.headers["access-control-allow-origin"] == origin
     assert resp.headers["access-control-allow-credentials"] == "true"
     methods = resp.headers["access-control-allow-methods"]
-    for m in ("GET", "POST", "PUT", "DELETE"):
+    for m in ("GET", "POST", "PUT", "DELETE", "PATCH"):
         assert m in methods, f"收紧后的 methods 清单必须覆盖路由实际用到的 {m}:{methods}"
     headers = resp.headers["access-control-allow-headers"]
     assert "authorization" in headers.lower(), "前端带 token 必须能过 preflight"
 
 
 def test_preflight_disallowed_method_rejected() -> None:
-    """白名单 Origin 但 PATCH(无路由使用、未列入清单)→ 不放行。"""
+    """白名单 Origin 但清单外 method(TRACE,路由从未使用)→ 不放行。"""
     resp = _client().options(
         "/api/qa/chat",
         headers={
             "Origin": _whitelisted_origin(),
-            "Access-Control-Request-Method": "PATCH",
+            "Access-Control-Request-Method": "TRACE",
         },
     )
     assert resp.status_code == 400

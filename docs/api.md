@@ -1,4 +1,4 @@
-# API 契约 v35
+# API 契约 v36
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -433,10 +433,11 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 |---|---|
 | `GET /api/qa/sessions?limit=50` | 会话列表（**v33 起按最近活跃在前**，`updated_at desc`），`{total, items:[{id,title,created_at}]}` |
 | `GET /api/qa/sessions/{id}` | 重开会话，`{id,title,created_at,messages:[Message]}` |
+| `PATCH /api/qa/sessions/{id}` | **v36** 重命名会话，body `{"title"}`（1–30 字，剥首尾空白），返回 `{id,title,created_at}`；**不刷 `updated_at`**（重命名不算「活跃」） |
 | `DELETE /api/qa/sessions/{id}` | 删会话（消息 CASCADE），204 |
 | `GET /api/qa/sessions/{id}/export` | 导出 Markdown（浏览器下载；同时在 `tmp/qa_exports/` 落一份） |
 
-**最近活跃与保留策略（v33）**：会话列表按**最近活跃**排序——落一条消息（user/assistant）即刷新该会话的活跃时间，旧会话发一轮新对话就上浮到顶部；仅打开/查看/导出**不**刷新。每用户只保留**最新 50 个**会话，更旧的**硬删**（消息/摘要 FK CASCADE 连带删；`qa_sessions.updated_at` 迁移 0018，存量回填 = `created_at`）。裁剪只在**新建会话时**触发（只有新会话出现才可能超上限），删了几个记进后端日志，不建表。已知边界：闲置旧会话可能正开在别的标签页里被裁掉 → 之后该标签页发消息得 `404 会话不存在`，前端兜底「已开新对话」提示。
+**最近活跃与保留策略（v33）**：会话列表按**最近活跃**排序——落一条消息（user/assistant）即刷新该会话的活跃时间，旧会话发一轮新对话就上浮到顶部；仅打开/查看/导出/重命名**不**刷新。每用户只保留**最新 50 个**会话，更旧的**硬删**（消息/摘要 FK CASCADE 连带删；`qa_sessions.updated_at` 迁移 0018，存量回填 = `created_at`）。裁剪只在**新建会话时**触发（只有新会话出现才可能超上限），删了几个记进后端日志，不建表。已知边界：闲置旧会话可能正开在别的标签页里被裁掉 → 之后该标签页发消息得 `404 会话不存在`，前端兜底「已开新对话」提示。
 
 **`cache_hit_rate` 口径**：prompt 前缀缓存命中占比 = hit/(hit+miss)；上游未命中时不下发字段 → `null`（前端显示「—」）。字段双格式归一：DeepSeek `prompt_cache_hit_tokens` / OpenAI `prompt_tokens_details.cached_tokens`。v29 起消息附带原始计数 `cache_hit_tokens` / `cache_miss_tokens`（双 0 = 该条无缓存数据），前端问答页用它算会话级**平均缓存命中率** Σhit/Σ(hit+miss)（token 加权，比各轮 rate 算术平均更贴近真实缓存效率），替代此前「取最近一条非空 rate」的口径。
 
@@ -574,6 +575,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-25 | v36 | **会话重命名**：§5 会话管理新增 `PATCH /api/qa/sessions/{id}`——body `{"title"}`（1–30 字，剥首尾空白；长度与首问标题同口径 `TITLE_CHARS=30`），返回 `{id,title,created_at}`；不存在/非本人会话 404，空白 422。**不刷 `updated_at`**——「最近活跃」只认落消息，重命名不算活跃，列表位次不动。**CORS `allow_methods` 补 `PATCH`**（B5 显式清单的首个 PATCH 路由，分域部署时预检会拒，开发态 vite 同源看不出；`test_cors.py` 同步——清单外拒绝例改 TRACE）。配套前端（UI 设计阶段）：侧栏会话行右键菜单（删除/导出/重命名）+ 行内编辑重命名 |
 | 2026-11-22 | v35 | **转写治本三件套**（spike 实测拍板，eval/runs/transcribe_spike_2026-11-22.md）：①whisper 模型 small→**large-v3-turbo**（专名原生准确率接近 large-v3、速度等同 small、显存 Δ2.3GB）+**language=None 自动检测**（zh 强制对英文视频是灾难放大器——8093 专名错字 ≥20 的根源）；模型文件预置在仓库根之外的 models/ 目录（.env `WHISPER_MODEL_DIR` 指路，生产禁运行时在线下载——spike 在线 load 63min 教训；未配置退回 hub 名）。②worker 管线转写后、organizer 前插 **LLM 自校正 pass**：盲修疑似错听的专名/术语（零词典宁缺毋滥，只出修改清单程序化应用），修正留痕写 `parse_meta.llm_transcript_fix`；LLM 失败降级用原转写（凡失败必留痕），输入 3 万字符封顶，max_tokens 16000（推理网关 8000 全烧 reasoning 教训）；client 可注入可 mock。③`video_log` 新 stage「转写校正中…」；pipeline video_keep 白名单放行新键。测试 +7（turbo/None 参数断言、校正应用/降级/skipped/封顶、留痕 merge）；真链路验证留给下一批喂料 |
 | 2026-11-20 | v34 | **agent 流式输出**（主人验收反馈：「我希望前端流式输出AI内容，而不是从『思考中』之后直接跳出整段内容」）：①`chat_stream` 加 `tools`/`tool_choice`/`timeout` 透传 + `tool_calls` 流式分片拼装（流末事件，与非流式 `ChatResult.tool_calls` 同形）。②`agent.py` 重构为 `run_agent_iter` 异步生成器：`streaming=True` 产 `status`/`delta` 事件、[NO_KB] 首行门扣下标记答案、流式不做假引用修复轮（已放行文本无法收回——幻觉编号只从 citations 剔除，死徽章与决策树流式同语义）；`run_agent` 为薄包装，非流式行为不变（含修复轮）。③流式端点 agent loop 移入 `gen()`：事件序 `meta → status* → delta* → done`，最终答案**逐段放行**（多帧 delta），工具轮发 status（带检索词）；agent 回落时决策树前置（4.5 预检+附图）gen 内现算，最坏=现状；`meta.agent` 语义改为「本轮是否按 agent 模式跑」。④前端 `qa.ts` 加 `onStatus`；问答页思考行显示工具轮进度。测试 +7（client 3 + iter 4）；真链路实测：直答题 386 帧 delta、换词/转网题 3 条 status + 594 帧 delta |
 | 2026-11-20 | v33 | **会话「最近活跃」排序 + 每用户保留最新 50 个**（主人 2026-11-20 拍板）：§5 会话列表从「按创建时间」改为「按最近活跃」（`updated_at desc`）——落一条消息（user/assistant）即刷该会话活跃时间，旧会话发一轮新对话上浮到顶；仅打开/查看/导出不刷新。保留策略：每用户只留最新 50 个会话，更旧的**硬删**（消息/摘要 FK CASCADE 连带删），只在新建会话时触发裁剪（删几个记日志不建表）。迁移 0018：`qa_sessions.updated_at`（NOT NULL，server_default now()）+ `(owner_id, updated_at DESC)` 索引 + 存量回填 `updated_at = created_at`；老用户零感知（只加列回填，digest/缓存不受影响）。响应字段不变（`created_at` 照旧返回，前端不显示日期）。已知边界：闲置旧会话开在别的标签页时可能被裁 → 之后发消息 404，前端兜底「已开新对话」 |

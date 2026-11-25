@@ -59,7 +59,9 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title="baleen", lifespan=lifespan)
     # CORS 收紧(B5,2026-11-24):methods/headers 从 "*" 改显式清单,白名单依据=实测
-    # ① 后端路由只用 GET/POST/PUT/DELETE(grep @router.* 无 PATCH/HEAD/OPTIONS);
+    # ① 后端路由只列实际用到的 method(2026-11-25 起含 PATCH——v36 会话重命名是首个
+    #    PATCH 路由;新增 method 必须同步这里+test_cors.py,开发态走 vite 代理是同源
+    #    看不出 CORS 问题,分域部署才爆);
     # ② 前端实际发送的头只有 Authorization/Content-Type/Accept(src/api/{http,qa}.ts、
     #    QaView.vue;multipart 上传故意不设 Content-Type,由浏览器带 boundary 自动写)。
     # origins 白名单与 allow_credentials 维持原逻辑不动。
@@ -67,7 +69,7 @@ def create_app() -> FastAPI:
         CORSMiddleware,
         allow_origins=settings.cors_origin_list,
         allow_credentials=True,
-        allow_methods=["GET", "POST", "PUT", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
         allow_headers=["Authorization", "Content-Type", "Accept"],
     )
     app.include_router(health_router)

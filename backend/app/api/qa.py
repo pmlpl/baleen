@@ -178,6 +178,20 @@ class SessionDetail(BaseModel):
     messages: list[MessageOut]
 
 
+class RenameSessionRequest(BaseModel):
+    """PATCH /api/qa/sessions/{id} 请求体:重命名会话(侧栏行内编辑/右键菜单)。"""
+
+    title: str = Field(min_length=1, max_length=TITLE_CHARS)
+
+    @field_validator("title")
+    @classmethod
+    def _strip_and_reject_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("title 不能为空白")
+        return stripped
+
+
 async def get_llm_client(session: SessionDep, owner_id: CurrentOwnerDep) -> LLMClient:
     """LLM client 工厂:设置页(DB 单行)优先,回退 .env;每次请求现读 → 热生效。
 
@@ -1029,6 +1043,18 @@ async def delete_session(session_id: int, session: SessionDep, owner_id: Current
     if not deleted:
         raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
     await session.commit()
+
+
+@router.patch("/sessions/{session_id}", response_model=SessionItem)
+async def rename_session(
+    session_id: int, body: RenameSessionRequest, session: SessionDep, owner_id: CurrentOwnerDep
+) -> SessionItem:
+    """重命名会话。updated_at 语义是「最近活跃」——重命名不算活跃不刷它,列表位次不动。"""
+    qa_session = await QaRepo(session, owner_id).rename_session(session_id, body.title)
+    if qa_session is None:
+        raise HTTPException(status_code=404, detail=f"会话不存在:{session_id}")
+    await session.commit()
+    return SessionItem(id=qa_session.id, title=qa_session.title, created_at=qa_session.created_at)
 
 
 def _export_markdown(qa_session: QaSession, messages: list[QaMessage]) -> str:
