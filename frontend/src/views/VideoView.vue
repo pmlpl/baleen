@@ -382,31 +382,6 @@ onMounted(async () => {
       </div>
       <p v-if="biliError" class="bili-error">❌ {{ biliError }}</p>
 
-      <!-- 空态三步:用图形+编号说明会发生什么,不是标语。
-           有链接/有任务时整块消失,不占地方 -->
-      <ol v-if="urlInput.trim() === '' && imports.length === 0" class="tray-steps">
-        <li class="step">
-          <span class="step-num" aria-hidden="true">一</span>
-          <span class="step-body">
-            <span class="step-title">粘链接</span>
-            <span class="step-desc">B 站 BV 号、b23.tv 短链,或抖音分享链接</span>
-          </span>
-        </li>
-        <li class="step">
-          <span class="step-num" aria-hidden="true">二</span>
-          <span class="step-body">
-            <span class="step-title">自动转写</span>
-            <span class="step-desc">下载音频 + whisper 转写;有 CC 字幕可秒级拉取</span>
-          </span>
-        </li>
-        <li class="step">
-          <span class="step-num" aria-hidden="true">三</span>
-          <span class="step-body">
-            <span class="step-title">成一本书</span>
-            <span class="step-desc">抽帧配图、AI 整理成带章节的笔记,进书架可检索</span>
-          </span>
-        </li>
-      </ol>
     </div>
 
     <!-- 粘了链接:原位展开播放器/预览 -->
@@ -477,12 +452,8 @@ onMounted(async () => {
 <style scoped>
 /* 投喂台:单列居中,内容列压到 860 书页宽(舞台虽是 1440 宽档,页面自己收) */
 .feed {
-  display: flex;
   max-width: 860px;
-  min-height: 100%;
   margin: 0 auto;
-  flex-direction: column;
-  justify-content: center;
 }
 
 .tray {
@@ -500,62 +471,6 @@ onMounted(async () => {
 .tray--empty .tray-input {
   height: 44px;
   font-size: 15px;
-}
-
-/* 空态三步:编号用衬线汉字(一/二/三),像书里的分节,不用 1/2/3 的列表感 */
-.tray-steps {
-  display: flex;
-  margin: 26px 0 0;
-  padding: 0;
-  flex-direction: column;
-  gap: 2px;
-  list-style: none;
-}
-
-.step {
-  display: flex;
-  align-items: flex-start;
-  gap: 14px;
-  padding: 14px 4px;
-  border-bottom: 1px solid var(--line);
-}
-
-.step:last-child {
-  border-bottom: none;
-}
-
-.step-num {
-  display: flex;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--line-strong);
-  border-radius: 50%;
-  color: var(--ink-2);
-  font-family: var(--font-serif);
-  font-size: 13px;
-  line-height: 1;
-}
-
-.step-body {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  padding-top: 2px;
-}
-
-.step-title {
-  color: var(--ink);
-  font-size: 14px;
-  font-weight: 600;
-}
-
-.step-desc {
-  color: var(--ink-3);
-  font-size: 12.5px;
-  line-height: 1.6;
 }
 
 /* 第一行:链接输入 + 导入钮同行,整行与播放器同宽 */

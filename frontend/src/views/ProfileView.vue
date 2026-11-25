@@ -1,9 +1,11 @@
 <script setup lang="ts">
 /**
- * 个人中心:GET /api/profile 一次聚合(用户信息 + 章程预览 + 配置掩码)。
- * 只读展示;编辑动作跳对应页(章程 → /charter,配置 → /settings)。
- * 明确不做的(改密码/邮箱等)见 docs/api.md §7,这里不出入口。
- * 布局:通栏两段 —— 头像条 / 章程+模型配置两栏,填满 1060px 书页宽。使用统计已按主人意见删除。
+ * 个人中心:只展示**别处没有的信息**(账号身份 + 使用统计),其余一律跳转。
+ *
+ * 主人 2026-11-25 铁律「不重叠功能和内容」——本页原有两块只读副本已删:
+ * - 章程预览(前 300 字,截断后不可读)→ 章程真源在 /charter,这里只留跳转；
+ * - 模型/网关/Key 只读清单 → 设置页是唯一可编辑真源,改配置还得跳过去,留副本纯属重复。
+ * 「使用统计」(笔记/来源/会话/消息)是本页独有信息,保留。
  */
 import { computed, onActivated, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -44,13 +46,6 @@ const registeredAt = computed(() => {
     ? iso
     : date.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric' })
 })
-
-/** 预览以「…」结尾 = 后端截断了,给个「看完整」的提示 */
-const charterTruncated = computed(() => profile.value?.charter.preview?.endsWith('…') ?? false)
-
-function keyView(set: boolean, tail: string, unsetHint: string): string {
-  return set ? `已设置(末四位 ${tail})` : unsetHint
-}
 </script>
 
 <template>
@@ -71,44 +66,14 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
         </div>
       </div>
 
-      <div class="grid-2">
-        <div class="card">
-          <h2 class="section-title">知识库章程</h2>
-          <template v-if="profile.charter.has_charter && profile.charter.preview">
-            <pre
-              class="charter-preview"
-              :title="charterTruncated ? '完整章程在章程页查看，此处仅预览前 300 字' : undefined"
-              >{{ profile.charter.preview }}</pre>
-          </template>
-          <button class="btn" type="button" @click="router.push({ name: 'charter' })">
-            {{ profile.charter.has_charter ? '查看 / 编辑章程' : '去填写章程问卷' }}
-          </button>
-        </div>
-
-        <div class="card">
-          <h2 class="section-title">模型配置</h2>
-          <dl class="config-list">
-            <div class="config-row">
-              <dt>网关地址</dt>
-              <dd>{{ profile.settings.llm_base_url }}</dd>
-            </div>
-            <div class="config-row">
-              <dt>模型</dt>
-              <dd>{{ profile.settings.llm_model }}</dd>
-            </div>
-            <div class="config-row">
-              <dt>API Key</dt>
-              <dd>
-                {{ keyView(profile.settings.api_key_set, profile.settings.api_key_tail, '未设置(AI 功能不可用)') }}
-              </dd>
-            </div>
-            <div class="config-row">
-              <dt>Tavily 联网搜索</dt>
-              <dd>{{ keyView(profile.settings.tavily_set, profile.settings.tavily_tail, '未设置(库外问题不联网)') }}</dd>
-            </div>
-          </dl>
-          <button class="btn" type="button" @click="router.push({ name: 'settings' })">修改配置</button>
-        </div>
+      <!-- 章程与配置的**唯一入口**分别在 /charter 与 /settings,这里只给跳转,不放副本 -->
+      <div class="card links-card">
+        <button class="btn" type="button" @click="router.push({ name: 'charter' })">
+          {{ profile.charter.has_charter ? '知识库章程' : '填写章程问卷' }}
+        </button>
+        <button class="btn" type="button" @click="router.push({ name: 'settings' })">
+          模型配置
+        </button>
       </div>
     </template>
   </section>
@@ -153,70 +118,15 @@ function keyView(set: boolean, tail: string, unsetHint: string): string {
   font-size: 16px;
 }
 
-/* ---------- 下半:章程 | 模型配置 两栏 ---------- */
-
-.grid-2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 16px;
-}
-
-.grid-2 .card {
-  margin-bottom: 0;
-}
-
-@media (max-width: 900px) {
-  .grid-2 {
-    grid-template-columns: 1fr;
-  }
-
-  .grid-2 .card {
-    margin-bottom: 16px;
-  }
-}
-
-.charter-preview {
-  /* 截断预览底部与按钮留一口气(截断提示行砍掉后,这里不再有间距来源) */
-  margin: 0 0 10px;
-  padding: 12px 14px;
-  border-radius: 8px;
-  background: var(--bg-soft);
-  font-size: 13.5px;
-  line-height: 1.7;
-  white-space: pre-wrap;
-  word-break: break-word;
-  max-height: 220px;
-  overflow-y: auto;
-}
-
-.config-list {
-  margin: 0 0 12px;
-}
-
-.config-row {
+/* 跳转区:章程与配置的唯一入口在各自页面,这里只放两个按钮并排。
+   不再展示任何只读副本(主人 2026-11-25 铁律:同一信息只在一处)。 */
+.links-card {
   display: flex;
-  gap: 12px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--line);
-  font-size: 14px;
-}
-
-.config-row:last-child {
-  border-bottom: none;
-}
-
-.config-row dt {
-  flex-shrink: 0;
-  width: 120px;
-  color: var(--ink-2);
-}
-
-.config-row dd {
-  margin: 0;
-  word-break: break-all;
+  gap: 10px;
+  flex-wrap: wrap;
 }
 
 .btn {
-  margin-top: 4px;
+  margin-top: 0;
 }
 </style>

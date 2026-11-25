@@ -323,29 +323,23 @@ function onInputKeydown(event: KeyboardEvent): void {
   onHistoryKeydown(event)
 }
 
+/**
+ * 斜杠命令(**只留唯一入口的**,主人 2026-11-25 铁律「不重叠功能和内容」)。
+ *
+ * 已删两条 —— 它们各自已有别的入口,留着就是同一功能的第二个入口:
+ * - `/新对话` → 侧栏「+ 新对话」按钮(显式、一眼懂)
+ * - `/导出`   → 会话行右键菜单「导出 Markdown」(且能导出**任意**会话,作用域更宽)
+ *
+ * 留下的两条**没有其他入口**,而斜杠菜单本身是可见的(输入框左侧「/」钮),
+ * 点开就能看到它们 —— 所以既不算重复入口,也不会不可发现。
+ */
 const CHAT_COMMANDS: ChatCommand[] = [
-  {
-    name: '/新对话',
-    desc: '开一个空白会话',
-    keywords: ['新', '对话', '会话', '清空', 'new'],
-    run: () => {
-      startNew()
-    },
-  },
   {
     name: '/存为笔记',
     desc: '分析本次对话,给出生成选项',
     keywords: ['笔记', '存', '整理', 'note'],
     run: () => {
       void saveAsNote()
-    },
-  },
-  {
-    name: '/导出',
-    desc: '导出当前会话为 Markdown',
-    keywords: ['导出', '下载', 'markdown', 'export'],
-    run: () => {
-      if (currentSessionId.value !== null) void exportSession(currentSessionId.value)
     },
   },
   {

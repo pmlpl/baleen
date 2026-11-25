@@ -277,17 +277,10 @@ onMounted(async () => {
 
 <template>
   <section class="page">
+    <!-- 页头只留标题:章程作用已在设置页与个人中心的入口按钮上表达过,
+         这里再解释一遍就是「自解释的功能又加一段描述」(主人 2026-11-25 铁律) -->
     <header class="page-head">
       <h1 class="page-title">{{ hasCharter ? '修改知识库章程' : '先设置你的知识库章程' }}</h1>
-      <p class="page-desc">
-        章程决定导入时哪些笔记收、哪些不收。
-        <template v-if="hasCharter">
-          下面是当前的章程，可以直接改文字，也可以重新填一遍问卷。
-        </template>
-        <template v-else>
-          这是开始使用前唯一需要完成的一步，填完即可使用全部功能。
-        </template>
-      </p>
     </header>
 
     <p v-if="hasCharter" class="note note--warn">
