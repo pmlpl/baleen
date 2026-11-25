@@ -274,3 +274,16 @@ export function getSession(id: number): Promise<QaSessionDetail> {
 export function deleteSession(id: number): Promise<null> {
   return http.del<null>(`/qa/sessions/${id}`)
 }
+
+/** 会话标题上限:与后端 TITLE_CHARS 同口径(首问取前 30 字),前端据此做即时校验 */
+export const SESSION_TITLE_MAX = 30
+
+/**
+ * PATCH /api/qa/sessions/{id} —— 重命名会话(api.md v36)。
+ *
+ * 后端剥首尾空白、空白/超长 422;**不刷 updated_at**(重命名不算最近活跃,
+ * 列表位次不动),所以调用方改本地那一条即可,无需重拉列表。
+ */
+export function renameSession(id: number, title: string): Promise<QaSessionItem> {
+  return http.patch<QaSessionItem>(`/qa/sessions/${id}`, { title })
+}

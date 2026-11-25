@@ -123,6 +123,14 @@ export const http = {
       body,
     })
   },
+  /** PATCH:局部更新(如会话重命名)。与 PUT 同形,只是语义上「只改给的字段」 */
+  patch<T>(path: string, body: unknown): Promise<T> {
+    return request<T>(path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+  },
   /**
    * multipart/form-data 上传。
    * ⚠️ 故意不设 Content-Type:必须让浏览器自己写 boundary,手写会缺 boundary → 后端 422。
