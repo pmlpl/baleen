@@ -369,3 +369,21 @@ uvicorn.exe：(空)
 ### 需要确认的问题
 
 - （无）
+
+## 2026-11-25 · 问答页「历史对话点不开」修复 · 执行者：ZCode
+
+**为什么做**：主人报换 Chrome 后侧栏历史会话点不开。排查链逐层排除（DB 44 会话消息全在 / 后端 API 列表与打开全 200 / vite 代理 GET 拿到真 401），Playwright 复现：点击后 `GET /api/qa/sessions/{id}` 200 拿到数据但渲染抛 `TypeError: Cannot read properties of undefined (reading 'replace')`，Vue 渲染函数崩、消息区空白=「点不开」。换浏览器纯属巧合。
+
+**根因**：3b41e7a（11-22 质检修正批#2，8093 编号渲染链）给有序列表正则加编号捕获组时，把 `markdown.ts` 三处 `listItem[1]` 一刀切成 `listItem[2]`——有序项（编号组+内容组）正确，**无序项（单捕获组）的 `[2]` 是 undefined**，任一 `- ` 列表项让 QaView 整条渲染崩。同批 section.ts 的同款改动处理是对的（注释明写「UL 内容仍在 m[1]」），只有 markdown.ts 中招。11-22 后没有 UI 真聊会话，直到 11-25 点历史才撞上。
+
+**产物**：
+- `src/utils/markdown.ts`：`itemText = ordered !== null ? ordered[2] : bullet?.[1] ?? ''`，三处渲染换用
+- `../scripts/probe_qa_render_crash.mjs`（回归护栏）：内置 5 例必跑（无序/有序/`start="3"` 续号/嵌套），真实消息 dump 可选（psql 生成命令在文件头）
+
+**怎么验的**：
+- `node scripts/probe_qa_render_crash.mjs` → 内置回归 5/5 PASS；52 条真实消息（7095 全部+6802 对照）崩溃 0（修复前 4 条崩）
+- 浏览器端到端（Playwright chromium）：登录→侧栏 44 条→点击 7095/7094 各渲染 50 条消息→`?session=6802` 渲染 2 条→零 pageerror
+- `pnpm exec vue-tsc --noEmit` 0 错误
+- 途中顺手修：主人 wedged 的 `fastapi dev` 后端（healthz 超时/登录 500）杀干净重启，日志落仓库外 %TEMP%——WatchFiles 连 backend/tmp 都 watch（日志实锤「detected changes in 'tmp\...'」），探针写一个 reload 一次
+
+**已知限制 / 挂账**：前端仍零单测——markdown.ts 这类回归只有探针护栏兜着；「同款改动多处落地必须每处同测」教训（section.ts 有探针罩、markdown.ts 裸奔三天）。

@@ -256,6 +256,10 @@ export function renderMarkdown(markdown: string): string {
     if (listItem !== null) {
       flushParagraph()
       const tag = ordered === null ? 'ul' : 'ol'
+      // 有序内容组在 [2](编号占 [1]),无序仍在 [1]——3b41e7a 加编号捕获组时把三处
+      // listItem[1] 一刀切成 [2],无序列表项从此渲染即崩(2026-11-25「历史对话点不开」
+      // 根因:任一 "- " 项就让 QaView 整条渲染 TypeError,空白页)
+      const itemText = ordered !== null ? ordered[2] : bullet?.[1] ?? ''
       // 有序列表开新 <ol> 时带上首项编号:段落会打断列表,后一段 3. 开头的新列表
       // 不带 start 会从 1 重数(8093 倒金字塔「先 1、2 又 1、2」实锤)
       const listAttr =
@@ -274,16 +278,16 @@ export function renderMarkdown(markdown: string): string {
         closeOneList()
         closeLi()
         const parent = listStack[listStack.length - 1]
-        out.push(`<li>${renderInline(listItem[2])}`)
+        out.push(`<li>${renderInline(itemText)}`)
         if (parent !== undefined) parent.liOpen = true
         continue
       } else {
         closeLi()
-        out.push(`<li>${renderInline(listItem[2])}`)
+        out.push(`<li>${renderInline(itemText)}`)
         top.liOpen = true
         continue
       }
-      out.push(`<li>${renderInline(listItem[2])}`)
+      out.push(`<li>${renderInline(itemText)}`)
       continue
     }
 
