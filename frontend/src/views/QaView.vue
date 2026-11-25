@@ -1368,17 +1368,19 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
               @input="updateSlash(); onPickerInput()"
               @keydown="onInputKeydown"
             />
+            <!-- 附件入口:同住输入壳内,和 / 钮一起构成「输入框自带的两个小工具」;
+                 壳外只剩发送键,三个按钮不再散落三处 -->
+            <button
+              class="attach-btn"
+              type="button"
+              :disabled="sending"
+              title="附加参考文件/图片给 AI 看,不入库"
+              aria-label="附加参考文件或图片"
+              @click.stop="attachFileInput?.click()"
+            >
+              📎
+            </button>
           </div>
-          <button
-            class="btn attach-btn"
-            type="button"
-            :disabled="sending"
-            title="附加参考文件/图片给 AI 看,不入库"
-            aria-label="附加参考文件或图片"
-            @click="attachFileInput?.click()"
-          >
-            📎
-          </button>
           <button class="btn btn--primary" type="submit" :disabled="sending">发送</button>
         </form>
 
@@ -1968,17 +1970,30 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
 }
 
 /* 📎 附件按钮:低调图标键,与发送键区分 */
+/* 附件入口:住在输入壳里(与 / 钮同列),所以不是 .btn 那种带边框的独立键,
+   而是一个无框图标位 —— 壳的边框已经表达了「这里是一个输入框」 */
 .attach-btn {
-  padding: 0 13px;
-  font-size: 17px;
-  line-height: 1;
+  display: flex;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: none;
   color: var(--ink-3);
-  border-color: var(--line);
-  background: var(--panel);
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
+  transition:
+    color 0.15s ease,
+    background 0.15s ease;
 }
 
 .attach-btn:hover:not(:disabled) {
-  border-color: var(--accent);
+  background: var(--bg-soft);
   color: var(--accent-ink);
 }
 
