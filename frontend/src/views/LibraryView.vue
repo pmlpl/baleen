@@ -820,8 +820,12 @@ function onShelfDrop(event: DragEvent): void {
 
 .shelf {
   display: grid;
-  /* 列数随舞台宽度自适应(1440 宽约 8 列),书高锁 5:7 比例跟随列宽 */
-  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  /* 固定 6 列 × 5 行 = 30 本/页,一行正好排满、末行不留残本
+     (主人 2026-11-25 拍板「刚好装下五行六列」)。
+     不用 auto-fill:那是「能塞几列塞几列」,1440 舞台会铺成 7 列,
+     30 本就变成 4 满行 + 2 本残行,格子还被压扁。
+     6 列下书封约 203×284(锁 5:7 真书比例),比 7 列时更接近实物书。 */
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 18px 16px;
   padding: 0;
   margin: 0;
