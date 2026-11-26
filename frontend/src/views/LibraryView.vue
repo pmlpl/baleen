@@ -855,8 +855,12 @@ function onShelfDrop(event: DragEvent): void {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  /* 内容不满一屏时垂直居中,上下留白均分(否则全堆在顶部、底部空一大块) */
-  align-content: center;
+  /* 内容不满一屏时垂直居中,上下留白均分(否则全堆在顶部、底部空一大块)。
+     ⚠️ 必须带 safe:普通 center 在内容超高时会让上下都溢出,而 overflow 的滚动
+     起点仍是内容顶部 —— 结果第一行顶部与第二行底部**同时被裁且滚不回来**
+     (实测 768 及以下:row1Top 120 < shelfTop 134、row2Bottom 675 > 661、
+     scrollTop 恒为 0)。safe center 在溢出时自动退化为 start,不裁切。 */
+  align-content: safe center;
   /* 与侧栏会话列表同款细墨滚动条 */
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
@@ -1245,4 +1249,42 @@ function onShelfDrop(event: DragEvent): void {
   font-size: 12.5px;
   font-variant-numeric: tabular-nums;
 }
+/* ---------- 矮视口自适应 ----------
+   12 本 2 行在 1440 宽下书封 168×235,两行内容约 555px。
+   带搜索栏/翻页/舞台内边距后,视口高 <800px 就装不下(实测 780 时溢出 17px、
+   768 笔记本常见分辨率溢出 29px)—— 靠 overflow 滚动虽不裁切,但"一页两行"
+   的意义就没了。这里按**视口高度**收书封,保住"一屏两行"的核心承诺。
+
+   用 max-height 媒体查询而非 max-width:要解决的问题是纵向装不下。 */
+@media (max-height: 800px) {
+  .shelf {
+    grid-template-columns: repeat(6, minmax(0, 148px));
+    gap: 20px 24px;
+  }
+}
+
+@media (max-height: 740px) {
+  .shelf {
+    grid-template-columns: repeat(6, minmax(0, 128px));
+    gap: 16px 20px;
+  }
+}
+
+@media (max-height: 680px) {
+  .shelf {
+    grid-template-columns: repeat(6, minmax(0, 112px));
+    gap: 14px 16px;
+  }
+
+  /* 书封变小后标题字号也跟着收,否则题签里只看得见两个字 */
+  .book-title {
+    font-size: 11px;
+    padding: 4px 6px;
+  }
+
+  .book-foot {
+    font-size: 10px;
+  }
+}
+
 </style>
