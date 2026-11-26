@@ -1,4 +1,4 @@
-# API 契约 v40
+# API 契约 v41
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -573,24 +573,30 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 
 ---
 
-## 8. Charter 章程（**已实现**；**v40 问卷事实化**）
+## 8. 画像 Persona（**已实现**；**v41 由 Charter 扩成「我的画像」**）
 
 **每个账号各自一份章程**（`app_settings` 每用户一行）。首次登录弹问卷向导 → LLM 生成章程 → 存该用户行 → 导入整理（organizer）热生效。
 DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；项目根的 charter 文件或 `CHARTER` 环境变量仍可覆盖，但已非常规配置）。charter.md 已退役，未填问卷时用 `config.py` 的通用 `DEFAULT_CHARTER` 兜底；好笔记的内容层骨架见 `docs/note-format.md` §5。
 
-**v40 问卷事实化**（主人 2026-11-26 拍板）：旧问卷全是偏好题（「想收什么」「什么算好笔记」），用户面对空库答不出来；新问卷**只问事实**（昵称/年龄段/性别/学历/当前状态/为什么用 baleen），偏好由 LLM 从事实**推导**。「拿不准口径」不再问（固定「宁收低质量」写进生成 prompt）。**昵称**是唯一结构化消费的事实：迁移 0020 `app_settings.nickname`，问答 system prompt 注入（AI 用它称呼用户，没填不称呼）。
+**v41 页面语义扩展**（主人 2026-11-26）：「知识库章程」→「**我的画像**」，`/charter` → `/persona`（旧路径 301 重定向）。
+页面左右两栏：**左 = 我是谁**（问卷事实 + 据此推导的章程，全部原地可编辑），**右 = 我在做什么**（系统从真实数据数出来的统计）。
+`charter` 这个词在内部沿用（导入流水线 G2 判据、worker 都叫 charter），只改对外命名。
 
-### `GET /api/charter`
+**v40 问卷事实化**（主人 2026-11-26 拍板）：旧问卷全是偏好题（「想收什么」「什么算好笔记」），用户面对空库答不出来；新问卷**只问事实**（昵称/年龄段/性别/学历/当前状态/为什么用 baleen），偏好由 LLM 从事实**推导**。「拿不准口径」不再问（固定「宁收低质量」写进生成 prompt）。**昵称**是唯一被问答消费的事实：迁移 0020 `app_settings.nickname`，问答 system prompt 注入（AI 用它称呼用户，没填不称呼）。**v41 起其余五项也落库**（迁移 0021），但只供画像页左栏展示，**不进 prompt**。
+
+### `GET /api/persona`
 
 ```json
-{ "has_charter": false, "charter": null, "nickname": null }
+{
+  "nickname": "小明", "age_band": "18-24", "gender": "男",
+  "education": "本科在读", "status": "在读学生", "why": "课程学习",
+  "has_charter": true, "charter": "## 这是谁的库\n……"
+}
 ```
 
-`has_charter=true` 表示**当前账号**已有章程；`false` = 回退内置默认章程。前端用它判断要不要弹问卷。
+`has_charter=false` = 当前账号还没有章程（前端进问卷流程）。五项事实为 `null` = 这题没答过（老用户迁移 0021 之前的数据本来就不存在，**不做假回填**）。
 
-`PUT /api/charter` 传空串 = 清空该账号的章程（回退内置默认）。
-
-### `POST /api/charter/generate`
+### `POST /api/persona/generate`
 
 问卷答案（六个事实，**全部可空**）→ LLM 从事实推导章程文本（**不落库**，前端预览编辑后再 PUT）。
 
@@ -618,18 +624,74 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 { "charter": "## 这是谁的库\n「小明」的库，一名在读本科生……" }
 ```
 
-### `PUT /api/charter`
+### `PUT /api/persona`
 
-保存章程到 DB（热生效：导入整理下次调用即用新章程）。**可选连带 `nickname`**。
+保存左栏（章程 + 可选的昵称与五项事实）。**热生效**：导入整理下次调用即用新章程，问答下次请求即用新昵称。
 
 ```json
-{ "charter": "## 这是谁的库\n……", "nickname": "小明" }
+{
+  "charter": "## 这是谁的库\n……",
+  "nickname": "小明",
+  "age_band": "18-24",
+  "gender": "男",
+  "education": "本科在读",
+  "status": "在读学生",
+  "why": "课程学习"
+}
 ```
 
-- 返回同 `GET` 的 `{ has_charter, charter, nickname }`
-- `charter` 空串 = 清空（回退内置默认章程）
-- `nickname` 缺省 = 不动已有昵称；传了（含空串）才更新/清空
+- `charter` **必传**（≤20000 字）；空串 = 清空（回退内置默认章程）
+- 其余六个字段**全部可选**：缺省 = 不动，空串 = 清空；首尾空白自动剥除
+- 返回同 `GET` 的完整对象（未传字段保持原值 —— 只改昵称时不必回传整份事实）
 - **昵称消费链**：问答（agent 与决策树两条路径）的 system prompt 注入「用户的名字是『X』」（`resolve_nickname` 每请求现读，保存后热生效；没填不注入，prompt 与旧版一致）
+
+### `GET /api/persona/stats`
+
+右栏全部统计。**纯只读、每次现算**（主人拍板暂不把画像注入问答 prompt —— 不注入就不存在摘要陈旧问题）。
+
+```json
+{
+  "size": { "notes": 62, "chunks": 2580, "sessions": 46, "asks": 297 },
+  "sources": { "video": 37, "doc": 25 },
+  "quality": { "core": 49, "normal": 11, "reference": 2 },
+  "answers": { "kb": 135, "web": 63, "self": 91, "total": 289 },
+  "top_cited": [{ "id": 156, "title": "闭包 —— 面试必问，装逼必备", "hits": 58 }],
+  "dead_notes": { "total": 26, "items": [{ "id": 70, "title": "Git Bash 常用命令备忘", "quality": "core" }] },
+  "self_answered": ["为什么 Docker 容器里的进程比虚拟机更重？"],
+  "activity": [{ "week": "2026-11-23", "notes": 8 }],
+  "topics": [{ "topic": "编程开发", "notes": 22 }],
+  "untagged": 0
+}
+```
+
+| 字段 | 口径 |
+|---|---|
+| `sources` | 视频转写 vs 文档导入。判据 `sources.parse_meta ? 'video_url'`。视频笔记落地后就是普通 md，**画像里与文档笔记完全平等** |
+| `answers` | **互斥三分，三项相加 = `total`**：`kb` = 有笔记引用（不论是否也联网）；`web` = 无笔记引用但有网页引用；`self` = 两者都没有（AI 用自身知识答） |
+| `top_cited` | 被引用次数最多的笔记 Top 5（只数 note 引用，网页引用是外部内容不算「我的笔记」） |
+| `dead_notes` | 一次都没被引用过的活跃笔记：前 8 条 + 总数 |
+| `self_answered` | 库和网都没用上的问题（前 8 条，已过滤问候语）。**这才是该补笔记的地方** |
+| `activity` | 近 8 周每周新增笔记数，空周补 0（只回有数据的周会让「停了两周」看不出来） |
+| `topics` | 主题分布，读 `notes.tags`；空 = 还没分析过 |
+| `untagged` | 还没打主题标签的活跃笔记数 |
+
+⚠️ **口径警告**：`kb` 与 `web` 早期版本各自计数（有交集），会让前端算出 47%+37%+31%=115% 的荒唐百分比。现在是互斥口径，`web` 已排除「也有笔记引用」那部分。**不许退回旧口径。**
+
+### `POST /api/persona/topics`
+
+给未打标的笔记批量打主题标签，写回 `notes.tags`（该列 0002 建表至今无写入方，本端点是第一个）。
+
+| 查询参数 | 说明 |
+|---|---|
+| `retag` | `true` = 清空全部已有标签重打（标签集合漂移成近义词后收敛用） |
+
+```json
+{ "tagged": 62, "remaining": 0, "topics": [{ "topic": "编程开发", "notes": 22 }] }
+```
+
+- **增量**（默认）：只处理 `tags` 为空的笔记，打过的跳过。全打完时返回 `tagged=0, remaining=0`，不重复烧 token
+- **两阶段打标**：① 全部标题 → 归纳 ≤8 个主题名；② 拿固定主题表分批打标（单阶段实测会让标签漂移成「AI」「AI与大模型」「AI与智能体」三个近义词并肩）
+- LLM 报错或输出被截断 → **502**，`detail` 是中文可读原因
 
 ---
 
@@ -637,6 +699,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-26 | v41 | **「知识库章程」扩成「我的画像」**（主人拍板：左右布局，左边是用户开始用时写的问卷内容，右边是 AI 自统计的偏向统计图；页面/路由不能叫章程）：路由 `/charter`→`/persona`（旧路径重定向），顶栏「知识库章程」→「我的画像」，端点前缀 `/api/charter`→`/api/persona`（内部 `charter` 概念不动，只改对外命名；端点 34→**36**）。**迁移 0021** 补存五项问卷事实（`age_band`/`gender`/`education`/`status`/`why`）——v40 只存了昵称，其余五项喂完 LLM 就丢，左栏没数据源；全部 nullable，老用户留 NULL 不假回填。新增 `GET /api/persona/stats`（八块统计，纯只读现算：规模/来源/质量/**回答方式互斥三分**/Top5 引用/死库存/纯自答问题/周活跃）；新增 `POST /api/persona/topics`（两阶段 LLM 主题打标写回 `notes.tags` 增量 + `?retag=true` 重打）。**口径修正**：`answers` 的 kb/web 早期各自计数会相加超 100%，改互斥口径（`kb` 有笔记引用、`web` 无笔记引用但有网页引用、`self` 两者皆无），三项相加 = total。§8 重写 |
 | 2026-11-26 | v40 | **问卷事实化 + 昵称问答称呼**（主人拍板「问卷填的内容」是主要问题）：旧问卷全是偏好题（「想收什么」「什么算好笔记」），用户面对空库答不出来；新问卷**只问六个事实**——昵称/年龄段/性别/学历/当前状态/为什么用 baleen（全部可空），偏好（收什么/怎么整理/口吻深度）由 LLM 从事实**推导**；「拿不准口径」不再问，固定「宁收低质量」写进生成 prompt（本来就是代码默认值）。**昵称结构化消费**：迁移 0020 `app_settings.nickname`，`GET /api/charter` 响应加 `nickname`，`PUT` 可选连带保存；问答（agent+决策树两路径）system prompt 注入称呼行（`resolve_nickname` 现读热生效，没填不注入）。§8 重写；测试改写 3+新增 1（六事实进 prompt/固定规则入 prompt/旧字段忽略/昵称往返）+ 问答昵称注入断言 1 |
 | 2026-11-26 | v39 | **个人中心整页下线 + `GET /api/profile` 删除**（主人拍板「先把个人中心裁了」——铁律推演余波：v38 后该页只剩头像条+章程按钮，已无独有信息）：前端删 `/profile` 路由与 ProfileView 视图文件、书立「我的」按钮；工作台顶栏「个人中心」链接改「**知识库章程**」（/charter 在工作台态的唯一入口原本在个人中心里，入口平移顶栏，与引导态顶栏同款）；账号身份顶栏常驻（用户名），注册时间无展示位不再提供；`/profile` 旧 URL 走 catch-all 回 `/qa`。**后端同步删端点**（唯一消费方就是该页——无消费方的端点即死代码）：profile 端点实现文件+`main.py` 路由挂载+8 个 profile 测试全删；§10 整节移除。账号信息仍可走 `GET /api/auth/me`（§9） |
 | 2026-11-26 | v38 | **`GET /api/profile` 收缩到两项**（主人 2026-11-25 铁律「不重叠功能和内容」）：删 `settings`（与 `GET /api/settings` 六字段完全同口径——原测试直接断言两者相等，自证重复）、`stats`（前端使用统计区块已删，无人消费）、`charter.preview`（截断不可读，真源在 `GET /api/charter`）。只留 `user`（注册时间无处可查，本端点独有）与 `charter.has_charter`（前端据此决定按钮文案）。响应从四块变两块，密钥相关内容完全不出此端点。无迁移、无新端点；前端 profile 类型定义同步收缩 |

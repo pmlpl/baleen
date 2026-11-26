@@ -96,7 +96,7 @@ def test_protected_endpoints_require_auth(env: SimpleNamespace) -> None:
         "/api/sources",
         "/api/qa/sessions",
         "/api/settings",
-        "/api/charter",
+        "/api/persona",
     ]:
         resp = env.client.get(path)
         assert resp.status_code == 401, f"{path} 未拦截:{resp.status_code}"
@@ -112,7 +112,7 @@ def test_two_users_are_isolated(env: SimpleNamespace) -> None:
     env.client.headers["Authorization"] = f"Bearer {a['access_token']}"
     # A 写一份自己的章程(不依赖 LLM)
     a_charter = f"# {a_name} 的章程\n只收测试相关的内容。"
-    assert env.client.put("/api/charter", json={"charter": a_charter}).status_code == 200
+    assert env.client.put("/api/persona", json={"charter": a_charter}).status_code == 200
 
     # B 注册后:看不到 A 的章程
     _noauth(env)
@@ -122,7 +122,7 @@ def test_two_users_are_isolated(env: SimpleNamespace) -> None:
     ).json()
     env.client.headers["Authorization"] = f"Bearer {b['access_token']}"
 
-    b_charter = env.client.get("/api/charter").json()
+    b_charter = env.client.get("/api/persona").json()
     assert b_charter["has_charter"] is False
     assert b_charter["charter"] is None
 
@@ -130,6 +130,6 @@ def test_two_users_are_isolated(env: SimpleNamespace) -> None:
     assert env.client.get("/api/qa/sessions").json()["total"] == 0
 
     # B 写了章程后,A 的仍然是原来那份(各自独立)
-    env.client.put("/api/charter", json={"charter": "# B 的章程"})
+    env.client.put("/api/persona", json={"charter": "# B 的章程"})
     env.client.headers["Authorization"] = f"Bearer {a['access_token']}"
-    assert env.client.get("/api/charter").json()["charter"] == a_charter
+    assert env.client.get("/api/persona").json()["charter"] == a_charter

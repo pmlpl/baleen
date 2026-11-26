@@ -150,8 +150,8 @@ watch(basketOpen, (open) => {
           >
             配置 API Key
           </RouterLink>
-          <RouterLink v-else class="nav-link" :to="{ name: 'charter' }" active-class="nav-link--active">
-            知识库章程
+          <RouterLink v-else class="nav-link" :to="{ name: 'persona' }" active-class="nav-link--active">
+            我的画像
           </RouterLink>
         </nav>
         <span class="user-box">
@@ -171,8 +171,8 @@ watch(basketOpen, (open) => {
       <div class="topbar-inner topbar-inner--wb">
         <RouterLink class="brand" :to="{ name: 'qa' }">baleen</RouterLink>
         <span class="user-box user-box--wb">
-          <RouterLink class="nav-link" :to="{ name: 'charter' }" active-class="nav-link--active">
-            知识库章程
+          <RouterLink class="nav-link" :to="{ name: 'persona' }" active-class="nav-link--active">
+            我的画像
           </RouterLink>
           <span class="user-name">{{ auth.username }}</span>
           <a class="logout" @click="logout">退出</a>
@@ -372,7 +372,8 @@ watch(basketOpen, (open) => {
           }"
         >
           <RouterView v-slot="{ Component }">
-            <keep-alive :exclude="['CharterWizard', 'LoginView']">
+            <!-- PersonaView 排除在 keep-alive 外:首次填完后要重新挂载读最新统计 -->
+            <keep-alive :exclude="['PersonaView', 'LoginView']">
               <component :is="Component" />
             </keep-alive>
           </RouterView>

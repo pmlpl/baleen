@@ -10,7 +10,7 @@
  * 后端不可用时 fail-open(按已通过处理):否则后端一挂,用户连页面都进不去。
  */
 
-import { getCharter } from './api/charter'
+import { getPersona } from './api/persona'
 import { getSettings } from './api/settings'
 
 export interface GateState {
@@ -57,7 +57,7 @@ export function resetGate(): void {
 export async function ensureGateChecked(): Promise<GateState> {
   if (checked) return state
   if (pending === null) {
-    pending = Promise.all([getSettings(), getCharter()])
+    pending = Promise.all([getSettings(), getPersona()])
       .then(([settings, charter]) => {
         state = { hasKey: settings.api_key_set, hasCharter: charter.has_charter }
         return state

@@ -23,6 +23,11 @@ class SettingsRepo(Repo):
         tavily_api_key: str | None = None,
         charter: str | None = None,
         nickname: str | None = None,
+        age_band: str | None = None,
+        gender: str | None = None,
+        education: str | None = None,
+        status: str | None = None,
+        why: str | None = None,
         llm_context_tokens: int | None = None,
         llm_max_output_tokens: int | None = None,
         allow_diagrams: bool | None = None,
@@ -45,6 +50,17 @@ class SettingsRepo(Repo):
             row.charter = charter or None
         if nickname is not None:
             row.nickname = nickname or None
+        # 画像页左栏五项事实(0021):同样 None=不动、空串=清空
+        if age_band is not None:
+            row.age_band = age_band or None
+        if gender is not None:
+            row.gender = gender or None
+        if education is not None:
+            row.education = education or None
+        if status is not None:
+            row.status = status or None
+        if why is not None:
+            row.why = why or None
         if llm_context_tokens is not None:
             # 0/负 = 清空(回退兜底:不截断全文喂);正数 = 用户填的上限
             row.llm_context_tokens = llm_context_tokens if llm_context_tokens > 0 else None

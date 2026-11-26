@@ -8,7 +8,7 @@ import { useAuthStore } from '../stores/auth'
 // 1) 总共就 5 个视图,体积很小,拆 chunk 省不下多少;
 // 2) 答辩演示时不想因为分块请求多一次网络往返(或断网)出现白屏;
 // 3) 静态 import 让 vue-tsc 一次性把全部视图都查一遍,漏写类型跑不过 type-check。
-import CharterWizard from '../views/CharterWizard.vue'
+import PersonaView from '../views/PersonaView.vue'
 import LibraryView from '../views/LibraryView.vue'
 import LoginView from '../views/LoginView.vue'
 import NoteView from '../views/NoteView.vue'
@@ -25,8 +25,10 @@ const router = createRouter({
     { path: '/notes/:id', name: 'note', component: NoteView, props: true },
     { path: '/video', name: 'video', component: VideoView },
     { path: '/qa', name: 'qa', component: QaView },
-    // 首次强制填(无「稍后再填」);填过以后可从顶栏「知识库章程」进,是编辑模式
-    { path: '/charter', name: 'charter', component: CharterWizard },
+    // 首次强制填(无「稍后再填」);填过以后可从顶栏「我的画像」进,是编辑模式
+    { path: '/persona', name: 'persona', component: PersonaView },
+    // 旧路径兼容:书签/历史里的 /charter 重定向到新页面
+    { path: '/charter', redirect: { name: 'persona' } },
     { path: '/settings', name: 'settings', component: SettingsView },
     // 纸篓走右下角悬浮钮弹窗(App.vue BasketModal),不再占路由页面
     // 兜底:路径写错也回导入页,别让人看到空白
@@ -63,9 +65,9 @@ router.beforeEach(async (to) => {
     return to.name === 'settings' ? true : { name: 'settings' }
   }
 
-  // ③ 配了 key 但没填章程:只能去章程页
+  // ③ 配了 key 但没填章程:只能去画像页
   if (!gate.hasCharter) {
-    return to.name === 'charter' ? true : { name: 'charter' }
+    return to.name === 'persona' ? true : { name: 'persona' }
   }
 
   return true

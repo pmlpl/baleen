@@ -42,6 +42,15 @@ class AppSettings(Base):
     charter: Mapped[str | None] = mapped_column(Text)
     # 用户昵称(问卷第 1 题;问答 system prompt 注入,AI 用它称呼用户;NULL = 不称呼)
     nickname: Mapped[str | None] = mapped_column(Text)
+    # 问卷其余五项事实(迁移 0021,画像页左栏展示;NULL = 这题没答过):
+    #   age_band/gender/education/status 是选项题,why 是一句话自由文本。
+    # 只有昵称被问答消费(称呼);这五项是「我是谁」的展示事实,不进 prompt。
+    # 老用户这批数据本来就不存在 → 全 NULL,画像页显示空位,不假回填。
+    age_band: Mapped[str | None] = mapped_column(Text)
+    gender: Mapped[str | None] = mapped_column(Text)
+    education: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str | None] = mapped_column(Text)
+    why: Mapped[str | None] = mapped_column(Text)
     # LLM 预算(per-user 自适应;NULL = 走兜底):
     #   llm_context_tokens —— 输入上下文上限;NULL = 不截断,整篇喂模型
     #   llm_max_output_tokens —— 输出上限;NULL = 用 organizer 兜底(ORGANIZER_DEFAULT_OUTPUT_TOKENS)

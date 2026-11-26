@@ -38,6 +38,30 @@ class NotesRepo(Repo):
             )
         )
 
+    async def set_tags(self, note_id: int, tags: list[str]) -> bool:
+        """覆盖某篇笔记的 tags 并落库(主题打标专用,2026-11-26)。
+
+        tags 列建表(0002)至今没有写入方,书架 ``.book-tags`` 与笔记页一直在渲染空数组。
+        主题分析是第一个真正的写入方。返回 False = 笔记不存在或不属于该 owner。
+        """
+        result = await self.session.execute(
+            update(Note)
+            .where(Note.id == note_id, Note.owner_id == self.owner_id)
+            .values(tags=tags)
+        )
+        return bool(result.rowcount)
+
+    async def clear_tags(self) -> int:
+        """清空该 owner 全部笔记的 tags(主题重打用),返回受影响行数。
+
+        只在用户显式要求重打时调用:单阶段打标会让标签漂移成近义词集合
+        (「AI」「AI与大模型」「AI与智能体」),重打是唯一的收敛手段。
+        """
+        result = await self.session.execute(
+            update(Note).where(Note.owner_id == self.owner_id).values(tags=[])
+        )
+        return int(result.rowcount or 0)
+
     async def create(
         self,
         *,

@@ -14,6 +14,7 @@
 
 | 日期 | 批次 | 一句话 | pytest |
 |---|---|---|---|
+| 2026-11-26 | 画像页 v41（左右布局+八块统计） | 章程页扩成「我的画像」：左栏五项事实可原地编辑（迁移 0021 补存），右栏八块真实统计（互斥三分口径）+ 两阶段主题打标写 notes.tags，api.md v41 | 713 |
 | 2026-11-26 | 问卷事实化+昵称问答称呼 | 旧问卷偏好题→六事实题（昵称/年龄段/性别/学历/状态/为什么用），偏好由 LLM 推导；迁移 0020 昵称注入问答 system prompt，api.md v40 | 704 |
 | 2026-11-26 | 书架布局五连修 | 翻页钉底+宽度固定+书封按视口高自适应（纯 CSS） | 702 |
 | 2026-11-26 | 个人中心整页下线 | v38 收缩到两项 → v39 删页删端点；端点 35→34，api.md v39 | 702 |
@@ -26,7 +27,7 @@
 | 2026-11-23 | 联网搜索两级链 | Tavily 任何失败自动降级 DeepSeek Search，降级留痕 | 680 |
 | 2026-11-23 | 负例集创建批 | 负例 8→25 条，preflight v2 三段式 | 668 |
 
-测试基线 **704 passed**（+1 xfailed）。每批完整交付说明 → `backend/delivery/`（2026-11 月见 `2026-11.md`）；更早基线轨迹见该文件交付块。
+测试基线 **713 passed**（+1 xfailed）。每批完整交付说明 → `backend/delivery/`（2026-11 月见 `2026-11.md`）；更早基线轨迹见该文件交付块。
 
 **backlog #1/#3/#6 全部落地(2026-11-19 深夜续)**：#3 渲染回归探针 35 断言(探针当天抓出 `looksLikeCode` 把 `**粗体**` 开头段落吞成代码的真缺陷,400 父块对拍只 4 处变化全是修复)+ g2_eval 视觉通道修复(9 条 G0 假缺口)+ #6 帧选择评测(16 条题集,首跑 5 FAIL 全对应主人裁决)+ #1 驳回样本筛选工具(发现一个三方标注分歧待裁决)
 
@@ -47,10 +48,10 @@
 | **查询 / 检索 API** | `app/repo/library.py`、`app/api/library.py` | ✅ **线 M**；契约 4 接口 + 真实链路自测 |
 | **问答服务** | `app/service/qa/`、`app/api/qa.py` | ✅ **线 Q 批1-7**；多轮会话（0003/0004 + llm_content 重放缓存对齐）+ SSE 流式 + 问题改写 + 会话导出 |
 | **设置** | `app/models/setting.py`、`app/api/settings.py` | ✅ **线 Q 批8**；app_settings 单行覆盖 .env，热生效；**v22 加 llm_context_tokens/llm_max_output_tokens(per-user 预算,没填走兜底)** |
-| **API 端点总览** | `app/main.py` | ✅ 34 个：healthz 1 · 认证 3 · 章程 3 · 上传 3 · 笔记/检索 10（v37 加纸篓 3 个）· 问答/会话/导出 10（v36 加重命名）· 解析 1 · 设置 2 · B站登录 2（数字由 `scripts/doc_lint.py` 守门） |
+| **API 端点总览** | `app/main.py` | ✅ 36 个：healthz 1 · 认证 3 · 画像 5（v41：章程 3 + 统计 1 + 主题打标 1）· 上传 3 · 笔记/检索 10（v37 加纸篓 3 个）· 问答/会话/导出 10（v36 加重命名）· 解析 1 · 设置 2 · B站登录 2（数字由 `scripts/doc_lint.py` 守门） |
 | **前端** | `frontend/` | ✅ 三页 + 问答（流式）/设置页 + 登录注册 + 书架 + 笔记两栏阅读 |
 | **多用户认证** | `app/service/auth/`、`app/api/auth.py`、`app/models/user.py` | ✅ 用户名+scrypt+JWT；`owner_id` 从常量改 token 解出；数据按账号隔离 |
-| **Charter 问卷** | `app/service/charter/`、`app/api/charter.py` | ✅ 首次登录强制问卷（v40 事实化：六事实题，偏好由 LLM 推导）→ LLM 生成章程 → 存 DB → 导入整理热生效；每用户一份；昵称（迁移 0020）随保存落库，问答 system prompt 注入称呼 |
+| **Charter 问卷 + 画像** | `app/service/charter/`、`app/api/persona.py` | ✅ 首次登录强制问卷（v40 事实化：六事实题，偏好由 LLM 推导）→ LLM 生成章程 → 存 DB → 导入整理热生效；每用户一份；昵称（迁移 0020）随保存落库，问答 system prompt 注入称呼；**v41 扩成「我的画像」页**：左栏五项事实可原地编辑（迁移 0021 补存），右栏系统统计（纯只读现算）+ 主题打标写 `notes.tags` |
 | **标题结构整理** | `app/service/rewrite/` | ✅ 导入时 LLM 出语义标题、代码算编号；超长文档分段；**需非推理模型** |
 | **存量回填（线 R）** | `app/service/rewrite/backfill.py`、`scripts/backfill_outline.py` | ✅ 历史 15 篇全部收口（11 rewritten + 4 该跳），与导入同构、幂等闭环 |
 | **会话优先前端** | `frontend/` | ✅ 导入/检索并入对话（/导入 文件选择器+拖放、/检索 引用选择器）；删 /import /search 路由页；导航只剩 笔记库/问答/设置 |
@@ -90,7 +91,7 @@
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  702 passed, 1 xfailed（2026-11-26 个人中心下线批实测;702=710-8[profile 8 测随端点全删]）
+cd backend && uv run pytest -q     →  713 passed, 1 xfailed（2026-11-26 画像批实测;704→713,+9[五项事实存取 3 测/统计三分互斥与形状与隔离 3 测/主题解析过滤 3 测]）
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
@@ -143,6 +144,7 @@ cd backend && uv run pytest -q     →  702 passed, 1 xfailed（2026-11-26 个�
 → **708**（纸篓软删除 v37:DELETE 变移篓 status='archived'+trash 列表/restore/purge 三端点+30 天 arq cron 清理+重导三分类判据,+9 测;2026-11-25）
 → **710**（v38 profile 收缩到 user+has_charter 两项,测试重写 8 个净 +2[其中 3 个守住「字段不许回退」];2026-11-26）
 → **702**（个人中心整页下线 v39:GET /api/profile 随唯一消费方一起删,8 测全删;2026-11-26）
+→ **713**（画像 v41:五项事实存取/缺省不动/剥空白 3 测 + 统计三分互斥与形状与 owner 隔离 3 测 + 主题解析过滤自创标签与幻觉 id/围栏 JSON 容错/坏 JSON 不抛 3 测;2026-11-26）
 
 **任何新任务都不许把这个数降下来。**
 
