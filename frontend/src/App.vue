@@ -557,6 +557,10 @@ watch(basketOpen, (open) => {
 
 .stage-inner--fill {
   display: flex;
+  /* width:100% 必须有:base .stage-inner 是块级(自然撑满),改成 flex column 后
+     会按内容宽度收缩 —— 实测书架页曾缩到 749px、列表页 586px(应在 1302px),
+     两个视图来回切换时宽度还不一致。flex:1 管主轴(高度),宽度得显式给。 */
+  width: 100%;
   flex: 1;
   min-width: 0;
   min-height: 0;
