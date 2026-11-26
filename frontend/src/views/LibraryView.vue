@@ -842,11 +842,31 @@ function onShelfDrop(event: DragEvent): void {
   flex-direction: column;
 }
 
-/* 书架/列表/空态自己撑开剩余空间 —— 这是 margin-top:auto 能生效的前提 */
+/* 书架/列表/空态占满剩余空间并**自己滚动**:
+   整页不滚、翻页永远贴底。
+   为什么不让整页滚:5 行书约 1520px、窗口 900px 根本装不下,
+   一旦整页滚,翻页就被推到内容之后 —— 第 1 页滚 95px 才看见翻页、
+   末页只有 2 本反而在 633px,同一控件在不同页位置差 150px+。
+   改成书架内部滚动后,搜索栏 / 书架视口 / 翻页三者位置恒定。 */
 .library-page > .shelf,
-.library-page > .shelf-rows,
+.library-page > .shelf-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  /* 与侧栏会话列表同款细墨滚动条 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+  /* 右侧留一条 gutter,滚动条出现/消失时格子宽度不跳 */
+  scrollbar-gutter: stable;
+  padding-right: 4px;
+}
+
+/* 空态不需要滚动,但也别把翻页顶走 */
 .library-page > .empty {
-  flex: 1 0 auto;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .shelf--dim {
