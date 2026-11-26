@@ -821,13 +821,15 @@ function onShelfDrop(event: DragEvent): void {
 
 .shelf {
   display: grid;
-  /* 固定 6 列,配合 PAGE_SIZE=12 → 正好 2 行,一屏放下不滚动
-     (主人 2026-11-25:「一页两行即可」)。
-     不用 auto-fill:那是「能塞几列塞几列」,1440 舞台会铺成 7 列,
-     12 本就变成 1 满行 + 5 本残行。
-     6 列下书封约 204×285(锁 5:7 真书比例)。 */
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: 18px 16px;
+  /* 固定 6 列 × 2 行 = 12 本/页(主人 2026-11-25「一页两行」)。
+     列宽不再拉满:minmax(0,168px) + justify-content:center,让书**定宽**排布,
+     两侧留白自然变宽 —— 这是「简约大气」的关键:书不撑满、格子间留呼吸。
+     若用 1fr,书会随窗口变胖,间距反而显得挤。
+     gap 也调大(32/28):疏朗的留白比塞满更好看。 */
+  grid-template-columns: repeat(6, minmax(0, 168px));
+  justify-content: center;
+  /* 列间距 28 保留疏朗感;行间距收到 24 —— 32 时两行之间显得空,而底部还剩 60px */
+  gap: 24px 28px;
   padding: 0;
   margin: 0;
   list-style: none;
@@ -853,6 +855,8 @@ function onShelfDrop(event: DragEvent): void {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  /* 内容不满一屏时垂直居中,上下留白均分(否则全堆在顶部、底部空一大块) */
+  align-content: center;
   /* 与侧栏会话列表同款细墨滚动条 */
   scrollbar-width: thin;
   scrollbar-color: var(--line-strong) transparent;
