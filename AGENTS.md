@@ -224,6 +224,25 @@ python eval/scripts/metrics.py --labels eval/inputs/labels.csv --preds eval/runs
 - `vue-tsc` 类型检查必须过
 - API 调用统一走 `src/api/` 封装，组件里不许直接 `fetch`
 
+**视图 script 行数闸（2026-11-26 主人拍板：上限 1000 行，语义 =「必须做决定」）**
+
+- 每个 `frontend/src/views/*.vue` 的 `<script>` 段（含 `<script setup>`，多段累加）**不超过 1000 行**；
+  `scripts/doc_lint.py` 机械检查（pre-commit 拦），超限即 ERROR。
+- 超限时的处理**不是「必须拆」**，而是必须从下面选一条并留痕：
+  1. **沿真实边界拆，且先测后拆**——拆前先给现有行为补 Playwright 探针当等价网
+     （C1 / C2 / QaView 三次拆分都是这个模式），拆后探针跑绿再提交；
+  2. **确认无自然边界 → 豁免登记**（下表），写清为什么拆不动。
+     豁免 =「这个决定做过了」，不是「没人管」；
+  3. **禁止为凑行数硬拆。**
+- **反例（真实教训，别重复）**：QaView 的 SSE 发送循环只有 154 行，却读写父组件 **16 个状态**——
+  照 props/emit 硬拆要 16 个 prop + 十几个 emit，比大文件更难读；它最后用 composable
+  （共享 ref、不做管道）才拆成。**行数是信号，不是目标。**
+- 豁免表（`doc_lint` 从本表读；行数已回落到阈值内必须删除该行，否则 WARN）：
+
+| 豁免视图 | 登记时行数 | 登记日期 | 为什么拆不动 |
+|---|---|---|---|
+| （空） | — | — | — |
+
 **提交信息**（Conventional Commits）
 
 ```
@@ -272,6 +291,7 @@ chore: 升级 uv 到 0.13
 | 2026-10-28 | 模型自包含：bge 从 `asklaw` 搬到 `智能笔记库\models\bge-large-zh-v1.5`（展开符号链接，1.21 GB）；§6 路径与说明同步更新 |
 | 2026-11-07 | **解除「禁止 AI 修改本文件」**（主人明确授权）：§3.11 改为「改必须留痕」（§11 记录 + 回复明示），头部声明同步；理由——原限制挡住的是「有痕改动」，挡不住真实漂移，而漂移只能靠改约定来治 |
 | 2026-11-07 | §10 开工流程把「文档同步」列为第 6 步（原来只在第 6 步「交付说明」里含糊带过）：交付块 / 当天日志 / api.md 版本 / `doc_lint` 0 ERROR；并明确「没写文档的交付不算交付」 |
+| 2026-11-26 | §9 新增「视图 script 行数闸」（**主人拍板**，WorkBuddy 复评报告 §3 P0.2 落地）：视图 `<script>` 上限 **1000 行**，`doc_lint` 机械拦；语义是「**必须做决定**」而非「必须拆」——超限时二选一：①沿真实边界**先测后拆**（补 Playwright 等价网再动），②确认无自然边界则**豁免登记**（表在 §9，须写清理由）；**禁止为凑行数硬拆**。理由：QaView 两周内「拆到 1890 → 又长回 2482 → 再拆到 832」的循环证明没有闸的约定拦不住增长；send() 读写 16 个父状态的教训证明硬拆会造出更脆的架构。阈值取 1000（非提案的 800）是主人裁决——豁免机制存在后数字只是提前量，不必让闸上线第一天就逼拆 |
 | 2026-11-09 | charter.md 退役 + 笔记契约内容层：① 删 `charter.md`（charter 已问卷化存 DB，不再手写文件）；② `config.py` `DEFAULT_CHARTER` 改通用兜底（去掉"软件本科生"身份预设）；③ `docs/note-format.md` 加 §5 内容层（5 条好笔记骨架：用自己的话/原子化/定义+例子/三段可复现/出处，融合 charter 判据 + Zettelkasten）；④ `generator.py` prompt「判据」「笔记长什么样」对齐内容层；⑤ `g2.py` warning 文案 `charter.md`→章程；⑥ `api.md` v18→v19 + 优先级描述更新；⑦ NAVIGATION/HANDOFF/各 docstring 同步清理 `charter.md` 引用。跨 docs/backend/frontend/根目录，理由：charter.md 退役的引用散落全项目 |
 | 2026-11-12 | §1 定位去掉「中文优先」（主人拍板：定位就是「智能笔记库」）：同步 `docs/adr/0001` §1、`backend/pyproject.toml` description、`eval/TASK.md` §一。跨根目录/docs/backend/eval，理由：同一句定位散落 4 处；测试 fixture `utf8.txt` 中的「中文优先」是 UTF-8 编码测试文本，与定位无关，不动 |
 | 2026-11-18 | eval/ 目录按职责重组（inputs 标注语料 / queries 题集 / runs 跑批产物 / analysis 分析 / scripts 脚本，顶层 27→9 条目）：samples/candidates/labels/split_meta 迁入 inputs/，report/ci/preds 迁入 runs/，消融与缺陷台账迁入 analysis/；§3/§6/§10 的 eval 路径同步；eval_capture.py 归档路径随迁（532 passed，doc_lint 0/0） |

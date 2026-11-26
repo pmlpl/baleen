@@ -320,6 +320,93 @@ def check_no_dead_docs() -> None:
         add(INFO, "清理残留", "运行时目录存在（正常，落盘会重建）：" + "、".join(present))
 
 
+# --------------------------------------------- 10. 视图 script 行数闸(AGENTS §9)
+VIEW_SCRIPT_LIMIT = 1000
+
+
+def _view_script_lines(path: Path) -> int:
+    """<script> 段行数(含 <script setup lang="ts"> 与 </script> 边界行)。
+
+    多段 script(SFC 允许 <script> + <script setup>)时累加。
+    """
+    total = 0
+    inside = False
+    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        stripped = line.strip()
+        if stripped.startswith("<script"):
+            inside = True
+            total += 1
+            continue
+        if inside:
+            total += 1
+            if "</script>" in stripped:
+                inside = False
+    return total
+
+
+def _view_exemptions() -> dict[str, int]:
+    """AGENTS.md §9 豁免表:视图名 → 登记时行数(| QaView.vue | 1234 | ...)。
+
+    只认数据行(含 .vue),表头/分隔行/「（空）」占位行都不算。
+    """
+    out: dict[str, int] = {}
+    for line in read("AGENTS.md").splitlines():
+        s = line.strip()
+        if not s.startswith("|") or ".vue" not in s:
+            continue
+        cells = [c.strip() for c in s.strip("|").split("|")]
+        name = cells[0]
+        if not name.endswith(".vue"):
+            continue
+        try:
+            out[name] = int(cells[1]) if len(cells) > 1 and cells[1].isdigit() else 0
+        except ValueError:
+            out[name] = 0
+    return out
+
+
+def check_view_script_limit() -> None:
+    """视图 script 超 1000 行必须「做决定」:真拆(先测后拆)或豁免登记(AGENTS §9)。
+
+    主人 2026-11-26 拍板:闸的语义是「必须决定」不是「必须拆」——没有自然边界的视图
+    登记豁免即可(send() 读写 16 个父状态的历史教训:硬拆 props/emit 比大文件更难读)。
+    """
+    views_dir = ROOT / "frontend" / "src" / "views"
+    if not views_dir.is_dir():
+        add(INFO, "视图行数", "frontend/src/views 不存在,跳过")
+        return
+    exempt = _view_exemptions()
+    over: list[str] = []
+    stale: list[str] = []
+    for path in sorted(views_dir.glob("*.vue")):
+        n = _view_script_lines(path)
+        name = path.name
+        if n > VIEW_SCRIPT_LIMIT and name not in exempt:
+            over.append(f"{name}={n}")
+        elif n <= VIEW_SCRIPT_LIMIT and name in exempt:
+            stale.append(f"{name}={n}")
+    if over:
+        add(
+            ERROR,
+            "视图行数",
+            f"script 超 {VIEW_SCRIPT_LIMIT} 行且未登记豁免:{'、'.join(over)}"
+            "——要么沿真实边界先测后拆,要么在 AGENTS.md §9 豁免表登记理由(不许为凑行数硬拆)",
+        )
+    if stale:
+        add(
+            WARN,
+            "视图行数",
+            f"豁免表过时(已回落 {VIEW_SCRIPT_LIMIT} 行内,删掉这几行):{'、'.join(stale)}",
+        )
+    if not over and not stale:
+        peak = max((_view_script_lines(p) for p in views_dir.glob("*.vue")), default=0)
+        if exempt:
+            note = f"豁免 {len(exempt)} 个（{', '.join(f'{k}={v}' for k, v in exempt.items())}）"
+        else:
+            note = "无豁免"
+        add(INFO, "视图行数", f"最高 {peak} 行，{note}")
+
+
 def main() -> int:
     quiet = "--quiet" in sys.argv
     for fn in (
@@ -332,6 +419,7 @@ def main() -> int:
         check_ledger_stats,
         check_links,
         check_no_dead_docs,
+        check_view_script_limit,
     ):
         try:
             fn()
