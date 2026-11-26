@@ -40,6 +40,8 @@ class AppSettings(Base):
     bilibili_uid: Mapped[str | None] = mapped_column(Text)
     # 知识库章程(问卷生成的自然语言,DB 优先于内置默认;NULL = 回退内置默认章程)
     charter: Mapped[str | None] = mapped_column(Text)
+    # 用户昵称(问卷第 1 题;问答 system prompt 注入,AI 用它称呼用户;NULL = 不称呼)
+    nickname: Mapped[str | None] = mapped_column(Text)
     # LLM 预算(per-user 自适应;NULL = 走兜底):
     #   llm_context_tokens —— 输入上下文上限;NULL = 不截断,整篇喂模型
     #   llm_max_output_tokens —— 输出上限;NULL = 用 organizer 兜底(ORGANIZER_DEFAULT_OUTPUT_TOKENS)

@@ -1,29 +1,23 @@
 /**
  * Charter 接口封装。GET /api/charter 查状态、POST /api/charter/generate 生成、PUT /api/charter 保存。
- * 问卷答案 → LLM 生成章程 → 存 DB → G2 热生效。
+ * 2026-11-26 问卷事实化:答案只有六个事实(昵称/年龄段/性别/学历/当前状态/为什么用),
+ * 偏好由 LLM 从事实推导;昵称随保存落库,问答时 AI 用它称呼用户。
  */
 import { http } from './http'
 
 export interface CharterStatus {
   has_charter: boolean
   charter: string | null
+  nickname: string | null
 }
 
 export interface CharterAnswers {
-  direction: string
-  purpose: string
-  collect: string[]
-  reject: string[]
-  unsure: string
-  extra: string
-  /** 技术领域多选(扩展问卷) */
-  domains?: string[]
-  /** 笔记来源偏好 */
-  sources?: string[]
-  /** 喜欢的笔记形态 */
-  formats?: string[]
-  /** 好笔记的标准 */
-  quality_marks?: string[]
+  nickname: string
+  age_band: string
+  gender: string
+  education: string
+  status: string
+  why: string
 }
 
 export interface CharterGenerateResponse {
@@ -38,6 +32,9 @@ export function generateCharter(answers: CharterAnswers): Promise<CharterGenerat
   return http.post<CharterGenerateResponse>('/charter/generate', answers)
 }
 
-export function saveCharter(charter: string): Promise<CharterStatus> {
-  return http.put<CharterStatus>('/charter', { charter })
+export function saveCharter(charter: string, nickname?: string): Promise<CharterStatus> {
+  // nickname 缺省 = 不动已有昵称;传了(含空串)才更新
+  return nickname === undefined
+    ? http.put<CharterStatus>('/charter', { charter })
+    : http.put<CharterStatus>('/charter', { charter, nickname })
 }

@@ -113,6 +113,17 @@ async def resolve_agent_enabled(session: AsyncSession, owner_id: int) -> bool:
     return bool(row.agent_enabled)
 
 
+async def resolve_nickname(session: AsyncSession, owner_id: int) -> str | None:
+    """用户昵称(问卷事实化第一题,迁移 0020):问答 system prompt 注入,AI 用它称呼用户。
+
+    行不存在或字段为 NULL → None(不称呼,按现状)。每次请求现读 → 问卷保存后热生效。
+    """
+    row = await _row(session, owner_id)
+    if row is None:
+        return None
+    return row.nickname or None
+
+
 __all__ = [
     "resolve_agent_enabled",
     "resolve_allow_diagrams",
@@ -120,5 +131,6 @@ __all__ = [
     "resolve_charter",
     "resolve_llm_budgets",
     "resolve_llm_config",
+    "resolve_nickname",
     "resolve_tavily_key",
 ]

@@ -22,6 +22,7 @@ class SettingsRepo(Repo):
         llm_model: str | None = None,
         tavily_api_key: str | None = None,
         charter: str | None = None,
+        nickname: str | None = None,
         llm_context_tokens: int | None = None,
         llm_max_output_tokens: int | None = None,
         allow_diagrams: bool | None = None,
@@ -42,6 +43,8 @@ class SettingsRepo(Repo):
             row.tavily_api_key = tavily_api_key or None
         if charter is not None:
             row.charter = charter or None
+        if nickname is not None:
+            row.nickname = nickname or None
         if llm_context_tokens is not None:
             # 0/负 = 清空(回退兜底:不截断全文喂);正数 = 用户填的上限
             row.llm_context_tokens = llm_context_tokens if llm_context_tokens > 0 else None

@@ -2,14 +2,18 @@
 
 - GET  /api/charter           查询当前 charter(DB 有 → has_charter=true;无 → false 回退文件)
 - POST /api/charter/generate  问卷答案 → LLM 生成 charter 文本(不落库,前端预览后再 PUT)
-- PUT  /api/charter           保存 charter 文本到 DB(热生效,G2 下次调用即用新章程)
+- PUT  /api/charter           保存 charter 文本(可选带 nickname)到 DB(热生效)
 
 复用 settings.py 的 SettingsRepo 与 qa.py 的 LLMClientDep 模式。
+
+问卷 2026-11-26 事实化(v40,主人拍板):旧问卷全是偏好题(「想收什么」「什么算好笔记」),
+用户没法回答;新问卷只问事实(昵称/年龄段/性别/学历/当前状态/为什么用),
+偏好由 LLM 从事实推导。昵称是唯一要结构化消费的(问答打招呼),随 PUT 落库。
 """
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field, field_validator
@@ -40,36 +44,26 @@ LLMClientDep = Annotated[LLMClient, Depends(get_llm_client)]
 class CharterStatus(BaseModel):
     has_charter: bool  # DB 里有问卷生成的 charter → true;没有 → false(回退内置默认章程)
     charter: str | None  # 有则返回全文,无则 null
-
-
-def _str_list(max_items: int = 12, max_len: int = 60) -> Any:
-    """多选字段的校验:字符串列表,截断条数与单条长度。"""
-
-    def check(value: list[str]) -> list[str]:
-        return [v.strip()[:max_len] for v in value if isinstance(v, str) and v.strip()][:max_items]
-
-    return check
+    nickname: str | None = None  # 用户昵称(问答打招呼用;null = 未填)
 
 
 class CharterAnswers(BaseModel):
-    """问卷答案:字段对应向导各步,全部可空(旧版客户端少传字段也兼容)。"""
+    """问卷答案(2026-11-26 事实化):只问事实,不问偏好——偏好由 LLM 从事实推导。
 
-    direction: str = Field(default="", max_length=200)  # 你是什么方向
-    purpose: str = Field(default="", max_length=200)  # 这个库用来做什么
-    collect: list[str] = Field(default_factory=list)  # 想收什么(多选)
-    reject: list[str] = Field(default_factory=list)  # 不收什么(多选)
-    unsure: str = Field(default="collect_low")  # 拿不准怎么办:collect_low/reject/discuss
-    extra: str = Field(default="", max_length=1000)  # 补充说明
-    # --- 扩展问卷(每步多选 + 自填) ---
-    domains: list[str] = Field(default_factory=list)  # 技术领域
-    sources: list[str] = Field(default_factory=list)  # 笔记来源偏好
-    formats: list[str] = Field(default_factory=list)  # 喜欢的笔记形态
-    quality_marks: list[str] = Field(default_factory=list)  # 好笔记的标准
+    全部可空(没有「必答」):每题不答 = LLM 按通用情况推导。
+    """
 
-    @field_validator("domains", "sources", "formats", "quality_marks")
+    nickname: str = Field(default="", max_length=30)  # 怎么称呼你(问答时 AI 用它打招呼)
+    age_band: str = Field(default="", max_length=20)  # 年龄段:<18/18-24/25-30/31-40/40+
+    gender: str = Field(default="", max_length=10)  # 性别:男/女/不说
+    education: str = Field(default="", max_length=20)  # 学历:高中及以下/本科在读/本科/硕士及以上
+    status: str = Field(default="", max_length=20)  # 当前状态:在读学生/在职/自由职业/待业/退休
+    why: str = Field(default="", max_length=400)  # 为什么使用 baleen(一句话)
+
+    @field_validator("nickname", "age_band", "gender", "education", "status", "why")
     @classmethod
-    def _clean_lists(cls, value: list[str]) -> list[str]:
-        return _str_list()(value)
+    def _strip(cls, value: str) -> str:
+        return value.strip()
 
 
 class CharterGenerateResponse(BaseModel):
@@ -77,9 +71,18 @@ class CharterGenerateResponse(BaseModel):
 
 
 class CharterUpdate(BaseModel):
-    """charter 全文;空串 = 清空(删除该账号的章程,回退内置默认章程)。"""
+    """charter 全文;空串 = 清空(删除该账号的章程,回退内置默认章程)。
+
+    nickname 可选(None = 不动;空串 = 清空;非空 = 更新)——问卷保存时一并带上。
+    """
 
     charter: str = Field(max_length=20000)
+    nickname: str | None = Field(default=None, max_length=30)
+
+    @field_validator("nickname")
+    @classmethod
+    def _strip_nickname(cls, value: str | None) -> str | None:
+        return value.strip() if isinstance(value, str) else value
 
 
 # ── 端点 ──
@@ -90,7 +93,8 @@ async def get_charter(session: SessionDep, owner_id: CurrentOwnerDep) -> Charter
     """查 charter:DB 有 → 返回全文 + has_charter=true;DB 无 → null + false(回退内置默认章程)。"""
     row = await SettingsRepo(session, owner_id).get()
     text = row.charter if row is not None else None
-    return CharterStatus(has_charter=bool(text), charter=text)
+    nickname = (row.nickname if row is not None else None) or None
+    return CharterStatus(has_charter=bool(text), charter=text, nickname=nickname)
 
 
 @router.post("/generate", response_model=CharterGenerateResponse)
@@ -104,8 +108,13 @@ async def generate(payload: CharterAnswers, llm: LLMClientDep) -> CharterGenerat
 async def save_charter(
     payload: CharterUpdate, session: SessionDep, owner_id: CurrentOwnerDep
 ) -> CharterStatus:
-    """保存 charter 到该用户的 DB 行(热生效:G2 下次调用即从 DB 读到新章程)。"""
-    await SettingsRepo(session, owner_id).save(charter=payload.charter)
+    """保存 charter(可选连 nickname)到该用户的 DB 行(热生效:导入整理与问答打招呼即时用新值)。"""
+    await SettingsRepo(session, owner_id).save(charter=payload.charter, nickname=payload.nickname)
     await session.commit()
     text = payload.charter.strip()
-    return CharterStatus(has_charter=bool(text), charter=text or None)
+    if payload.nickname is not None:
+        nickname = payload.nickname.strip() or None
+    else:
+        row = await SettingsRepo(session, owner_id).get()
+        nickname = (row.nickname if row is not None else None) or None
+    return CharterStatus(has_charter=bool(text), charter=text or None, nickname=nickname)

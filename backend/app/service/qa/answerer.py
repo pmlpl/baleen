@@ -97,9 +97,16 @@ FORMAT_GUIDE = (
 )
 
 
-def _system_prompt() -> str:
+def _greet_line(nickname: str | None) -> str:
+    """昵称称呼行(问卷事实化,迁移 0020):有昵称时拼进两条 system prompt 开头。"""
+    return f"用户的名字是「{nickname}」,交流时自然地用这个称呼。" if nickname else ""
+
+
+def _system_prompt(nickname: str | None = None) -> str:
     return (
-        "你是「baleen」个人笔记库的问答助手。用户在和他的笔记库对话,你要根据"
+        "你是「baleen」个人笔记库的问答助手。"
+        + _greet_line(nickname)
+        + "用户在和他的笔记库对话,你要根据"
         "最后一条消息提供的笔记片段,结合之前的对话历史回答。\n\n"
         "规则:\n"
         "1. 回答优先依据 <reference_files>/<context>/<referenced_notes> 里的内容和对话历史;"
@@ -194,6 +201,7 @@ def build_qa_messages(
     hits: list[ContextHit],
     *,
     history: list[dict[str, str]] | None = None,
+    nickname: str | None = None,
     budget: int = CONTEXT_TOKEN_BUDGET,
     history_budget: int = HISTORY_TOKEN_BUDGET,
     history_max: int = HISTORY_MAX_MESSAGES,
@@ -215,7 +223,7 @@ def build_qa_messages(
     ``attachments`` 是用户本次上传的参考文件 [{name, text}](不入库,纯对话上下文);
     块平行于 ``<referenced_notes>``,按 ``ATTACHMENT_TOKEN_BUDGET`` 截断。
     """
-    system = _system_prompt()
+    system = _system_prompt(nickname)
     ref_block = _ref_notes_block(ref_notes or [])
     att_block = _reference_files_block(attachments or [])
     # 固定开销:system + 三个块包装 + "问题:" 行 + 余量
@@ -308,6 +316,7 @@ def build_web_answer_messages(
     results: list[dict[str, str]],
     *,
     history: list[dict[str, str]] | None = None,
+    nickname: str | None = None,
     history_budget: int = HISTORY_TOKEN_BUDGET,
     history_max: int = HISTORY_MAX_MESSAGES,
     ref_notes: list[dict[str, str]] | None = None,
@@ -326,7 +335,9 @@ def build_web_answer_messages(
         f"{ref_block}{att_block}<web_context>\n{context}\n</web_context>\n\n"
         f"问题:{question.strip()}"
     )
-    messages: list[dict[str, str]] = [{"role": "system", "content": WEB_SYSTEM_PROMPT}]
+    # 无昵称时与 WEB_SYSTEM_PROMPT 字节一致(保持前缀缓存/等价性)
+    system = WEB_SYSTEM_PROMPT + (f"\n{_greet_line(nickname)}" if nickname else "")
+    messages: list[dict[str, str]] = [{"role": "system", "content": system}]
     digest_block = compose_digest_block(digest_summaries or [])
     if digest_block:
         messages.append({"role": "system", "content": digest_block})
@@ -358,6 +369,7 @@ def answer_web(
     results: list[dict[str, str]],
     *,
     history: list[dict[str, str]] | None = None,
+    nickname: str | None = None,
     client: LLMClient | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
@@ -373,7 +385,7 @@ def answer_web(
     """
     cli = client or LLMClient.from_settings()
     messages = build_web_answer_messages(
-        question, results, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
+        question, results, history=history, nickname=nickname, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
     )
     if images:
         attach_images(messages, images)
@@ -430,6 +442,7 @@ def answer(
     hits: list[ContextHit],
     *,
     history: list[dict[str, str]] | None = None,
+    nickname: str | None = None,
     client: LLMClient | None = None,
     max_tokens: int = DEFAULT_MAX_TOKENS,
     temperature: float = DEFAULT_TEMPERATURE,
@@ -449,7 +462,7 @@ def answer(
 
     cli = client or LLMClient.from_settings()
     messages, meta = build_qa_messages(
-        question, hits, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
+        question, hits, history=history, nickname=nickname, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
     )
     if images:
         attach_images(messages, images)

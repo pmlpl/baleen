@@ -194,6 +194,27 @@ def test_chat_creates_session_and_persists(env: SimpleNamespace, qa_setup: Simpl
     assert detail["messages"][0]["content"] == "闭包是什么"
 
 
+def test_chat_prompt_greets_by_nickname(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
+    """问卷昵称(迁移 0020)注入问答 system prompt——AI 用它称呼用户;没填则不带称呼行。"""
+    # 没填昵称:prompt 与现状一致,不带称呼行
+    env.client.put("/api/charter", json={"charter": "", "nickname": ""})
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    assert env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).status_code == 200
+    system_text = json.loads(qa_setup.transports[-1].calls[0]["body"].decode("utf-8"))[
+        "messages"
+    ][0]["content"]
+    assert "名字是" not in system_text
+
+    # 填了昵称:system prompt 开头带称呼行
+    env.client.put("/api/charter", json={"charter": "", "nickname": "小明"})
+    qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
+    assert env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).status_code == 200
+    system_text = json.loads(qa_setup.transports[-1].calls[0]["body"].decode("utf-8"))[
+        "messages"
+    ][0]["content"]
+    assert "名字是「小明」" in system_text
+
+
 def test_chat_followup_retrieves_rewritten_query_and_replays_history(
     env: SimpleNamespace, qa_setup: SimpleNamespace
 ) -> None:

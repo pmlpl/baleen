@@ -1,4 +1,4 @@
-# API 契约 v39
+# API 契约 v40
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -573,15 +573,17 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 
 ---
 
-## 8. Charter 章程（**已实现**）
+## 8. Charter 章程（**已实现**；**v40 问卷事实化**）
 
-**每个账号各自一份章程**（`app_settings` 每用户一行）。首次登录弹问卷向导 → LLM 生成章程 → 存该用户行 → G2 热生效。
+**每个账号各自一份章程**（`app_settings` 每用户一行）。首次登录弹问卷向导 → LLM 生成章程 → 存该用户行 → 导入整理（organizer）热生效。
 DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；项目根的 charter 文件或 `CHARTER` 环境变量仍可覆盖，但已非常规配置）。charter.md 已退役，未填问卷时用 `config.py` 的通用 `DEFAULT_CHARTER` 兜底；好笔记的内容层骨架见 `docs/note-format.md` §5。
+
+**v40 问卷事实化**（主人 2026-11-26 拍板）：旧问卷全是偏好题（「想收什么」「什么算好笔记」），用户面对空库答不出来；新问卷**只问事实**（昵称/年龄段/性别/学历/当前状态/为什么用 baleen），偏好由 LLM 从事实**推导**。「拿不准口径」不再问（固定「宁收低质量」写进生成 prompt）。**昵称**是唯一结构化消费的事实：迁移 0020 `app_settings.nickname`，问答 system prompt 注入（AI 用它称呼用户，没填不称呼）。
 
 ### `GET /api/charter`
 
 ```json
-{ "has_charter": false, "charter": null }
+{ "has_charter": false, "charter": null, "nickname": null }
 ```
 
 `has_charter=true` 表示**当前账号**已有章程；`false` = 回退内置默认章程。前端用它判断要不要弹问卷。
@@ -590,46 +592,44 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 ### `POST /api/charter/generate`
 
-问卷答案 → LLM 生成章程文本（**不落库**，前端预览编辑后再 PUT）。
+问卷答案（六个事实，**全部可空**）→ LLM 从事实推导章程文本（**不落库**，前端预览编辑后再 PUT）。
 
 ```json
 {
-  "direction": "软件工程本科生",
-  "purpose": "课设、答辩",
-  "collect": ["讲清概念或方法的笔记（定义+例子）", "技术文档、论文、项目说明"],
-  "reject": ["单据与行政表格", "空文件、hello world、测试文件"],
-  "unsure": "collect_low",
-  "extra": "关注前端技术栈"
+  "nickname": "小明",
+  "age_band": "18-24",
+  "gender": "男",
+  "education": "本科在读",
+  "status": "在读学生",
+  "why": "课程学习、课设沉淀"
 }
 ```
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
-| `direction` | string | 专业方向 / 身份 |
-| `purpose` | string | 笔记库用途 |
-| `collect` | string[] | 想收什么（多选） |
-| `reject` | string[] | 不收什么（多选） |
-| `unsure` | string | `collect_low`（收下标低质量）/ `reject`（拒掉）/ `discuss`（提出来聊） |
-| `extra` | string | 补充说明（可选） |
-| `domains` | string[] | 技术领域多选（扩展问卷，可选） |
-| `sources` | string[] | 笔记来源偏好 |
-| `formats` | string[] | 喜欢的笔记形态 |
-| `quality_marks` | string[] | 好笔记的标准 |
+| `nickname` | string | 怎么称呼你（≤30 字；问答时 AI 用它称呼用户） |
+| `age_band` | string | 年龄段：<18 / 18-24 / 25-30 / 31-40 / 40+ |
+| `gender` | string | 性别：男 / 女 / 不说 |
+| `education` | string | 学历：高中及以下 / 本科在读 / 本科 / 硕士及以上 |
+| `status` | string | 当前状态：在读学生 / 在职 / 自由职业 / 待业 / 退休 |
+| `why` | string | 为什么用 baleen（一句话） |
 
 ```json
-{ "charter": "## 这是谁的库\n我是一名软件工程本科生……" }
+{ "charter": "## 这是谁的库\n「小明」的库，一名在读本科生……" }
 ```
 
 ### `PUT /api/charter`
 
-保存章程到 DB（热生效：G2 下次调用即从 DB 读到新章程）。
+保存章程到 DB（热生效：导入整理下次调用即用新章程）。**可选连带 `nickname`**。
 
 ```json
-{ "charter": "## 这是谁的库\n我是一名软件工程本科生……" }
+{ "charter": "## 这是谁的库\n……", "nickname": "小明" }
 ```
 
-- 返回同 `GET` 的 `{ has_charter, charter }`
-- 空串 = 清空（回退内置默认章程）
+- 返回同 `GET` 的 `{ has_charter, charter, nickname }`
+- `charter` 空串 = 清空（回退内置默认章程）
+- `nickname` 缺省 = 不动已有昵称；传了（含空串）才更新/清空
+- **昵称消费链**：问答（agent 与决策树两条路径）的 system prompt 注入「用户的名字是『X』」（`resolve_nickname` 每请求现读，保存后热生效；没填不注入，prompt 与旧版一致）
 
 ---
 
@@ -637,6 +637,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-26 | v40 | **问卷事实化 + 昵称问答称呼**（主人拍板「问卷填的内容」是主要问题）：旧问卷全是偏好题（「想收什么」「什么算好笔记」），用户面对空库答不出来；新问卷**只问六个事实**——昵称/年龄段/性别/学历/当前状态/为什么用 baleen（全部可空），偏好（收什么/怎么整理/口吻深度）由 LLM 从事实**推导**；「拿不准口径」不再问，固定「宁收低质量」写进生成 prompt（本来就是代码默认值）。**昵称结构化消费**：迁移 0020 `app_settings.nickname`，`GET /api/charter` 响应加 `nickname`，`PUT` 可选连带保存；问答（agent+决策树两路径）system prompt 注入称呼行（`resolve_nickname` 现读热生效，没填不注入）。§8 重写；测试改写 3+新增 1（六事实进 prompt/固定规则入 prompt/旧字段忽略/昵称往返）+ 问答昵称注入断言 1 |
 | 2026-11-26 | v39 | **个人中心整页下线 + `GET /api/profile` 删除**（主人拍板「先把个人中心裁了」——铁律推演余波：v38 后该页只剩头像条+章程按钮，已无独有信息）：前端删 `/profile` 路由与 ProfileView 视图文件、书立「我的」按钮；工作台顶栏「个人中心」链接改「**知识库章程**」（/charter 在工作台态的唯一入口原本在个人中心里，入口平移顶栏，与引导态顶栏同款）；账号身份顶栏常驻（用户名），注册时间无展示位不再提供；`/profile` 旧 URL 走 catch-all 回 `/qa`。**后端同步删端点**（唯一消费方就是该页——无消费方的端点即死代码）：profile 端点实现文件+`main.py` 路由挂载+8 个 profile 测试全删；§10 整节移除。账号信息仍可走 `GET /api/auth/me`（§9） |
 | 2026-11-26 | v38 | **`GET /api/profile` 收缩到两项**（主人 2026-11-25 铁律「不重叠功能和内容」）：删 `settings`（与 `GET /api/settings` 六字段完全同口径——原测试直接断言两者相等，自证重复）、`stats`（前端使用统计区块已删，无人消费）、`charter.preview`（截断不可读，真源在 `GET /api/charter`）。只留 `user`（注册时间无处可查，本端点独有）与 `charter.has_charter`（前端据此决定按钮文案）。响应从四块变两块，密钥相关内容完全不出此端点。无迁移、无新端点；前端 profile 类型定义同步收缩 |
 | 2026-11-25 | v37 | **笔记纸篓（软删除）**：§3 `DELETE /api/notes/{id}` 从真删除改为**移入纸篓**（`status='archived'` + `archived_at`），依据 ADR 0003 §3⑤ 原设计（软删+检索过滤+定时清理，字段与过滤早已就位但从未接上）。新增 `GET /api/notes/trash`（清单带 `archived_at`/`expires_at`/`days_left`，`retention_days=30` 随响应下发，`days_left` 后端向上取整）、`POST /api/notes/{id}/restore`（放回，零成本）、`DELETE /api/notes/{id}/purge`（彻底删除，只认 archived 防绕过）。保留期 **30 天**，从 `archived_at`（移入那一刻）起算，arq cron 每日 03:10 清理（`purge_expired_trash`；⚠️ 依赖 worker 存活）。迁移 **0019** `notes.archived_at` + 局部索引（`WHERE status='archived'`）。连带：`_reset_stale_done_job` 改三分类判据（无 active 但有 archived → 重导必须重跑，否则「删了再导入」被静默去重）。前端退役 localStorage 纸篓（旧方案换浏览器即空、不同账号共用同一 key），改查后端；「篓」引用标随之下线（检索已不命中 archived）。**背景（主人 2026-11-25 三条诉求）**：纸篓应 30 天自动删除、不同用户不互通、换浏览器纸篓还在 |

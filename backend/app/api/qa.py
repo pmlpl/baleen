@@ -35,7 +35,12 @@ from app.api.library import RetrieveCallable, RetrieveDep
 from app.models.qa import QaMessage, QaSession
 from app.repo.qa import KEEP_SESSIONS, QaRepo
 from app.service.llm import LLMClient, LLMError, estimate_tokens
-from app.service.llm.resolve import resolve_agent_enabled, resolve_llm_config, resolve_tavily_key
+from app.service.llm.resolve import (
+    resolve_agent_enabled,
+    resolve_llm_config,
+    resolve_nickname,
+    resolve_tavily_key,
+)
 from app.service.qa.agent import run_agent, run_agent_iter
 from app.service.qa.answerer import (
     _EMPTY_ANSWER,
@@ -408,6 +413,7 @@ class _ChatRound:
     llm_user_text: str
     tavily_key: str | None
     agent_enabled: bool
+    nickname: str | None
 
 
 async def _prepare_chat_round(
@@ -476,16 +482,18 @@ async def _prepare_chat_round(
     ref_notes = await _load_ref_notes(session, owner_id, payload.note_ids)
     attachments = [{"name": a.name, "text": a.text} for a in payload.attachments]
     user_images = [{"mime": i.mime, "data_url": i.data_url} for i in payload.images]
+    tavily_key = await resolve_tavily_key(session, owner_id)
+    agent_enabled = await resolve_agent_enabled(session, owner_id)
+    nickname = await resolve_nickname(session, owner_id)  # None = prompt 与现状字节一致
     messages, _build_meta = build_qa_messages(
         payload.question,
         kb_hits,
         history=history,
+        nickname=nickname,
         ref_notes=ref_notes,
         attachments=attachments,
         digest_summaries=digest_summaries,
     )
-    tavily_key = await resolve_tavily_key(session, owner_id)
-    agent_enabled = await resolve_agent_enabled(session, owner_id)
     return _ChatRound(
         repo=repo,
         payload=payload,
@@ -505,6 +513,7 @@ async def _prepare_chat_round(
         llm_user_text=messages[-1]["content"],
         tavily_key=tavily_key,
         agent_enabled=agent_enabled,
+        nickname=nickname,
     )
 
 
@@ -547,6 +556,7 @@ async def _answer_web_round(rnd: _ChatRound, web_results: list[dict[str, str]]) 
         rnd.payload.question,
         web_results,
         history=rnd.history,
+        nickname=rnd.nickname,
         client=rnd.llm,
         ref_notes=rnd.ref_notes,
         attachments=rnd.attachments,
@@ -586,6 +596,7 @@ async def _kb_answer_full(rnd: _ChatRound, *, images: list[dict]) -> AsyncIterat
         rnd.payload.question,
         rnd.kb_hits,
         history=rnd.history,
+        nickname=rnd.nickname,
         client=rnd.llm,
         ref_notes=rnd.ref_notes,
         attachments=rnd.attachments,
@@ -820,6 +831,7 @@ async def chat(
             owner_id=owner_id,
             top_k=payload.top_k,
             history=rnd.history,
+            nickname=rnd.nickname,
             ref_notes=rnd.ref_notes,
             attachments=rnd.attachments,
             digest_summaries=rnd.digest_summaries,
@@ -946,6 +958,7 @@ async def chat_stream_endpoint(
                     owner_id=owner_id,
                     top_k=payload.top_k,
                     history=rnd.history,
+                    nickname=rnd.nickname,
                     ref_notes=rnd.ref_notes,
                     attachments=rnd.attachments,
                     digest_summaries=rnd.digest_summaries,
