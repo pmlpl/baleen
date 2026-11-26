@@ -244,6 +244,22 @@ def _make_progress_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEvent
     return cb
 
 
+def _make_cover_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEventLoop):
+    """线程安全封面回调：抖音提取器在拿到封面 media key 时立即调，
+    通过 run_coroutine_threadsafe 写进 parse_meta（同 _make_progress_cb 的做法）。
+
+    为什么要这么早写：封面在下载视频之前就拿到了，而整条提取链（下载+转写+抽帧）
+    可能要十几分钟。早写一次，前端轮询就能立刻把提示条升级成海报卡，
+    不必等整个导入结束（实测 40 分钟视频：转写阶段封面仍 None 的坑）。
+    """
+    def cb(cover_key: str) -> None:
+        asyncio.run_coroutine_threadsafe(
+            _merge_parse_meta_fields(source_id, owner_id, {"video_cover_key": cover_key}),
+            loop,
+        )
+    return cb
+
+
 def _make_bilibili_login_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEventLoop):
     """B站兜底缺登录态（未配置/SESSDATA 过期）时的钩子（video_extractor 调用，2026-11-19）。
 
@@ -403,8 +419,13 @@ async def extract_and_import_video(
 
             await _update_video_stage(source_id, "获取视频中…", owner_id, progress=8)
             vc = await asyncio.to_thread(
-                extract_video_content, url, sessdata=sessdata, client=client, progress_cb=progress_cb,
+                extract_video_content,
+                url,
+                sessdata=sessdata,
+                client=client,
+                progress_cb=progress_cb,
                 bilibili_login_cb=_make_bilibili_login_cb(source_id, owner_id, loop),
+                cover_cb=_make_cover_cb(source_id, owner_id, loop),
             )
             markdown_content = vc.markdown
             video_title = vc.title
@@ -413,6 +434,13 @@ async def extract_and_import_video(
             if getattr(vc, "transcript_fix", None):
                 await _merge_parse_meta_fields(
                     source_id, owner_id, {"llm_transcript_fix": vc.transcript_fix}
+                )
+            # 封面 media key（2026-11-26）：抖音不支持网页内嵌播放，前端拿它渲染海报卡
+            # 代替「纯黑占位框」。存的是 media 内容寻址 key（不是抖音 URL——两周过期）。
+            # 键名带 video_ 前缀 → pipeline 的 video_keep_meta 自动放行，G0 落盘不丢。
+            if getattr(vc, "cover_key", None):
+                await _merge_parse_meta_fields(
+                    source_id, owner_id, {"video_cover_key": vc.cover_key}
                 )
             if not vc.frame_images:
                 # 6014 教训:帧全军覆没不能静默——候选>0 全被筛除/提取失败/场景数为 0,

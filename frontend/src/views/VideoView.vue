@@ -56,8 +56,39 @@ const embedUrl = computed(() => {
   return `https://player.bilibili.com/player.html?bvid=${bvid.value}&page=${pageNum.value}&high_quality=1&danmaku=0&autoplay=0`
 })
 
-/** 是否可以预览（B站有BV号能嵌入；抖音显示外链） */
-const canPreview = computed(() => bvid.value !== null || isDouyin.value)
+/** 抖音链接的站点简称（提示条上显示「v.douyin.com」这类，比整条长链好看） */
+const douyinHost = computed(() => {
+  try {
+    return new URL(cleanUrl.value).hostname
+  } catch {
+    return 'v.douyin.com'
+  }
+})
+
+/** 源的 filename 是「视频标题.md」——海报卡上只显示标题本体 */
+function stripMdExt(filename: string): string {
+  return filename.replace(/\.(md|markdown)$/i, '')
+}
+
+/**
+ * 抖音封面：只有导入走到提取阶段才有（粘贴那一刻前端只有 URL，拿不到封面）。
+ * 取最近一条导入的 —— 一次只会粘一个链接进来。
+ */
+const douyinCover = computed<string | null>(() => {
+  const last = imports.value[imports.value.length - 1]
+  return last?.coverUrl ?? null
+})
+
+/**
+ * 抖音视频标题：导入时源的 filename 就是「标题.md」（后端用视频标题命名），
+ * 去掉扩展名直接用。不额外请求、不编造 —— 拿不到就空着不显示。
+ * 时长没透出（SourceStatus 没这个字段），所以海报卡不显示时长，宁缺勿造。
+ */
+const douyinTitle = computed<string>(() => {
+  const last = imports.value[imports.value.length - 1]
+  if (last === undefined) return ''
+  return last.videoTitle
+})
 
 /** 抖音只支持 whisper 模式，检测到抖音 URL 时自动切换 */
 watch(isDouyin, (douyin) => {
@@ -107,6 +138,10 @@ interface ImportItem {
   noteId: number | null
   /** 白盒日志：worker/pipeline 各阶段条目，轮询时整体替换触发重渲染 */
   log: VideoLogEntry[]
+  /** 封面地址（抖音海报卡用）：导入完成后才有，之前是 null */
+  coverUrl: string | null
+  /** 视频标题（源自 filename，去掉 .md）：海报卡标题用；拿不到就空串 */
+  videoTitle: string
 }
 
 const imports = ref<ImportItem[]>([])
@@ -221,10 +256,15 @@ async function trackImport(sourceId: number, item: ImportItem): Promise<void> {
   item.stage = importStageText(first)
   item.progress = computeProgress(first)
   item.log = first.video_log
+  item.coverUrl = first.video_cover_url ?? null
+  item.videoTitle = stripMdExt(first.filename)
   const detail = await waitImportDone(sourceId, (d) => {
     item.stage = importStageText(d)
     item.progress = computeProgress(d)
     item.log = d.video_log
+    // 封面在提取阶段就写进 parse_meta 了，轮询过程中一旦有就更新海报卡
+    item.coverUrl = d.video_cover_url ?? null
+    if (d.filename !== '') item.videoTitle = stripMdExt(d.filename)
   })
 
   if (detail.job.status === 'failed') {
@@ -259,6 +299,8 @@ async function importVideo(): Promise<void> {
     progress: 2,
     noteId: null,
     log: [],
+    coverUrl: null,
+    videoTitle: '',
   })
   imports.value.push(item)
 
@@ -310,6 +352,8 @@ onMounted(async () => {
       progress: computeProgress(detail),
       noteId: null,
       log: detail.video_log,
+      coverUrl: detail.video_cover_url ?? null,
+      videoTitle: stripMdExt(detail.filename),
     })
     imports.value.push(item)
     await trackImport(saved.sourceId, item)
@@ -385,9 +429,9 @@ onMounted(async () => {
     </div>
 
     <!-- 粘了链接:原位展开播放器/预览 -->
-    <div v-if="canPreview && urlInput.trim() !== ''" class="player-box">
+    <!-- B 站:真 iframe 播放器,16:9 黑框是正确的(iframe 加载前不闪白) -->
+    <div v-if="bvid" class="player-box">
       <iframe
-        v-if="bvid"
         :src="embedUrl"
         class="player-iframe"
         scrolling="no"
@@ -397,13 +441,38 @@ onMounted(async () => {
         allowfullscreen="true"
         sandbox="allow-scripts allow-same-origin allow-popups"
       />
-      <div v-else-if="isDouyin" class="douyin-preview">
-        <p>🎵 抖音视频</p>
+    </div>
+
+    <!-- 抖音:不支持网页内嵌播放,**不能复用 player-box** ——
+         那是给 iframe 留 16:9 的黑底容器,抖音塞进去就是一个 850×480 的黑洞里
+         飘两行小字(主人 2026-11-26 反馈「这是一个黑色的,我觉得不好看」)。
+         改成轻量提示条;拿到封面后升级成海报卡。 -->
+    <div v-else-if="isDouyin" class="douyin-preview">
+      <!-- 封面海报卡:要等导入完成才有(粘贴那一刻前端只有 URL,拿不到封面) -->
+      <div v-if="douyinCover !== null" class="douyin-poster">
+        <img :src="douyinCover" class="poster-img" alt="" loading="lazy" referrerpolicy="no-referrer" />
+        <div class="poster-body">
+          <p class="poster-kicker">抖音视频</p>
+          <p v-if="douyinTitle !== ''" class="poster-title">{{ douyinTitle }}</p>
+          <a :href="cleanUrl" target="_blank" rel="noopener noreferrer" class="douyin-link">
+            在抖音中打开 ↗
+          </a>
+        </div>
+      </div>
+
+      <!-- 无封面(粘贴瞬间 / 平台没给封面 / 存量笔记):一行高的提示条 -->
+      <div v-else class="douyin-strip">
+        <span class="strip-icon" aria-hidden="true">♪</span>
+        <span class="strip-text">
+          <span class="strip-host">{{ douyinHost }}</span>
+          <span class="strip-hint">抖音不支持网页内播放;导入后自动转写 + 抽帧,这段等待不用盯</span>
+        </span>
         <a :href="cleanUrl" target="_blank" rel="noopener noreferrer" class="douyin-link">
-          在抖音中打开 →
+          在抖音中打开 ↗
         </a>
       </div>
     </div>
+
     <div v-else-if="urlInput.trim() !== ''" class="player-hint muted">
       <p>⚠️ 无法识别视频链接。</p>
       <p>支持 B 站(BV号/b23.tv)和抖音(v.douyin.com)链接。</p>
@@ -649,32 +718,132 @@ onMounted(async () => {
   text-align: right;
 }
 
+/* ── 抖音:没有内嵌播放器,所以**绝不套 player-box 黑底** ──
+   主人 2026-11-26 反馈「这是一个黑色的,不好看」—— 根因是抖音复用了给 iframe
+   留 16:9 的黑底容器,变成一个 850×480 的黑洞里飘两行小字。
+   现在两种形态:有封面 → 海报卡;没封面 → 一行高的提示条。 */
+
 .douyin-preview {
-  padding: 40px 20px;
-  text-align: center;
-  font-size: 14px;
-  line-height: 1.8;
+  margin-top: 18px;
 }
 
-.douyin-preview p:first-child {
-  font-size: 18px;
-  margin-bottom: 12px;
+/* 提示条:一行高、纸面底色、左侧一道黛青竖线当作「视频」的视觉锚点 */
+.douyin-strip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px 12px 16px;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.strip-icon {
+  flex-shrink: 0;
+  color: var(--accent);
+  font-size: 16px;
+}
+
+.strip-text {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.strip-host {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.strip-hint {
+  overflow: hidden;
+  color: var(--ink-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 海报卡:封面在左(固定 16:9 小图),信息在右 */
+.douyin-poster {
+  display: flex;
+  align-items: stretch;
+  gap: 16px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+/* 抖音是竖屏平台（实测封面 1080×1920），用 9:16 竖版 ——
+   按 16:9 裁会切掉大半个标题和人物，等于把封面糟蹋了 */
+.poster-img {
+  flex-shrink: 0;
+  width: 112px;
+  aspect-ratio: 9 / 16;
+  border-radius: 6px;
+  object-fit: cover;
+  background: var(--bg-soft);
+}
+
+.poster-body {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+
+.poster-kicker {
+  margin: 0;
+  color: var(--ink-3);
+  font-size: 11.5px;
+  letter-spacing: 0.06em;
+}
+
+.poster-title {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-serif);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .douyin-link {
-  display: inline-block;
-  color: var(--accent);
-  text-decoration: none;
-  font-weight: 600;
-  padding: 8px 20px;
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 6px 14px;
   border: 1px solid var(--accent);
   border-radius: 6px;
-  margin-bottom: 8px;
+  color: var(--accent);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-decoration: none;
+  transition: all 0.15s ease;
 }
 
 .douyin-link:hover {
-  background: var(--accent);
   color: #fff;
+  background: var(--accent);
+}
+
+/* 窄屏:海报卡改竖排,封面撑满宽度 */
+@media (max-width: 720px) {
+  .douyin-poster {
+    flex-direction: column;
+  }
+
+  .poster-img {
+    width: 100%;
+  }
 }
 
 .card-title {

@@ -79,6 +79,11 @@ export interface SourceDetail {
   video_est_seconds: number | null
   /** 白盒日志：提取+整理全程的阶段性条目，非视频导入为空数组 */
   video_log: VideoLogEntry[]
+  /**
+   * 视频封面地址（抖音海报卡用）。抖音不支持网页内嵌播放，前端拿它渲染海报卡
+   * 代替纯黑占位框。null = 平台没给封面 / 非抖音 / 还在提取中。
+   */
+  video_cover_url: string | null
   note_id: number | null
   created_at: string
   job: JobInfo
@@ -194,6 +199,7 @@ function toSourceDetail(raw: unknown): SourceDetail {
     video_progress: asNullableNumber(data.video_progress),
     video_est_seconds: asNullableNumber(data.video_est_seconds),
     video_log: asVideoLogArray(data.video_log),
+    video_cover_url: asNullableText(data.video_cover_url),
     note_id: typeof data.note_id === 'number' ? data.note_id : null,
     created_at: asText(data.created_at),
     job: toJobInfo(data.job),

@@ -3,7 +3,7 @@ name: CI
 # 2026-11-26 落地（WorkBuddy 复评报告 P1.3，主人拍板选 GitHub Actions）：
 # pytest + doc_lint + vue-tsc 三道门，基线从「本地纪律 + pre-commit」升级为远端强制门。
 #
-# ⚠️ pytest 摘要门（下面 grep 的 715）与 STATUS 基线同数——动了测试的批次
+# ⚠️ pytest 摘要门（下面 grep 的 720）与 STATUS 基线同数——动了测试的批次
 #    必须同步升这里和 STATUS（同一条「基线只增不降」纪律）。
 # CI 与本地同口径的前提：下载 bge 模型（含图编辑 PUT 等测试真走嵌入，
 # 缺模型不是 skip 是 fail，因此不能省）；embed 单测也因模型在场而全跑。
@@ -72,7 +72,7 @@ jobs:
           uv run --project backend pytest -q 2>&1 | tee pytest-output.log
           tail -n 3 pytest-output.log
           # 摘要行与本地全量一致（模型在场，无 skip 档）；掉线此处非零退出
-          grep -qE "^715 passed, 1 xfailed" pytest-output.log
+          grep -qE "^720 passed, 1 xfailed" pytest-output.log
 
   frontend:
     runs-on: ubuntu-latest

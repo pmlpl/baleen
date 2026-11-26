@@ -97,6 +97,10 @@ class VideoContent:
     # source.parse_meta.llm_transcript_fix（pipeline video_ 前缀保留机制的例外键）。
     # None = 非 whisper 路径（字幕模式无转写）
     transcript_fix: dict | None = None
+    # 封面图 media key（2026-11-26）：抖音不支持网页内嵌播放，前端拿它渲染海报卡
+    # 代替「纯黑占位框」。存的是本项目 media 的内容寻址 key（**不是**抖音原始 URL ——
+    # 那是两周过期的签名链）。目前只有抖音路径能拿到；其他平台留 None。
+    cover_key: str | None = None
 
 
 def _load_whisper(device: str):
@@ -866,6 +870,7 @@ def _content_from_media(
     client=None,
     progress_cb=None,
     output_dir: Path,
+    cover_key: str | None = None,
 ) -> VideoContent:
     """公共尾部：音频转写 + 场景抽帧 + 视觉转录 + 嵌图 markdown（douyin / B站兜底 / yt-dlp 共用）。
 
@@ -912,6 +917,7 @@ def _content_from_media(
         markdown=markdown,
         frame_candidates=frame_candidates,
         transcript_fix=transcript_fix,
+        cover_key=cover_key,
         frame_images=[
             {
                 "index": i,
@@ -925,7 +931,9 @@ def _content_from_media(
     )
 
 
-def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> VideoContent:
+def _extract_douyin_content(
+    url: str, *, client=None, progress_cb=None, cover_cb=None
+) -> VideoContent:
     """抖音专用路径：Playwright 拦截详情接口拿元信息+视频，免 cookie（2026-11-14）。
 
     视频文件在手 → 帧提取必定可用（比 yt-dlp 路径的「视频下载经常失败」更稳）。
@@ -934,7 +942,11 @@ def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> Video
 
     output_dir = Path(tempfile.mkdtemp(prefix="douyin_extract_"))
     dv = fetch_douyin_video(
-        url, output_dir=output_dir, max_duration_s=5400, progress_cb=progress_cb,
+        url,
+        output_dir=output_dir,
+        max_duration_s=5400,
+        progress_cb=progress_cb,
+        cover_cb=cover_cb,
     )
 
     return _content_from_media(
@@ -948,6 +960,7 @@ def _extract_douyin_content(url: str, *, client=None, progress_cb=None) -> Video
         client=client,
         progress_cb=progress_cb,
         output_dir=output_dir,
+        cover_key=getattr(dv, "cover_key", None),
     )
 
 
@@ -1025,6 +1038,7 @@ def extract_video_content(
     client=None,
     progress_cb=None,
     bilibili_login_cb=None,
+    cover_cb=None,
 ) -> VideoContent:
     """主入口：路由平台 → 提取 → whisper 转写 →（可选）帧 → markdown。
 
@@ -1038,6 +1052,8 @@ def extract_video_content(
     bilibili_login_cb：B站兜底缺登录态（未配置/SESSDATA 已过期）时调用的钩子，无参，
     返回扫码登录抓到的新 SESSDATA（worker 注入：弹窗+落库；API 手动入口不用）。
     钩子自己负责失败时抛翻译好的中文错误；None = 不半自动，直接报错指引。
+    cover_cb(media_key)：拿到视频封面时**立即**回调（抖音路径）。前端据此尽早显示
+    海报卡 —— 比等整个提取+转写结束再返回快十几分钟（40 分钟视频实测）。
     """
     # 用户可能粘贴整段分享文本（"8.48 复制打开抖音… https://v.douyin.com/xxx/ 复制此链接"），
     # 提取出真正的 URL 再交给提取器
@@ -1047,7 +1063,9 @@ def extract_video_content(
     from app.service.douyin import detect_douyin
 
     if detect_douyin(url):
-        return _extract_douyin_content(url, client=client, progress_cb=progress_cb)
+        return _extract_douyin_content(
+            url, client=client, progress_cb=progress_cb, cover_cb=cover_cb
+        )
 
     # B站链接：yt-dlp 失败（典型为页面级 412 风控）时走 cookie 收获兜底
     from app.service.bilibili import extract_bvid

@@ -41,6 +41,11 @@ class DouyinVideo:
     author: str
     duration_s: int  # 秒
     video_path: Path
+    # 封面图 media key（2026-11-26）：抖音不支持网页内嵌播放，前端拿它渲染海报卡
+    # 代替「纯黑占位框」。**存的是本项目 media 的内容寻址 key，不是抖音原始 URL** ——
+    # 抖音封面是两周过期的签名链，存原样会变裂图（实测 x-expires 见 _download_cover）。
+    # 取不到就是 None（前端退化成无封面的提示条），不抛错。
+    cover_key: str | None = None
 
 
 def resolve_video_id(url: str) -> str:
@@ -62,6 +67,58 @@ def resolve_video_id(url: str) -> str:
         pass
     # 实在解不开，退回 hash 占位（提取流程会失败，但至少 dedupe 键稳定）
     return extract_douyin_id(url) or "unknown"
+
+
+def _pick_cover_url(aweme: dict) -> str | None:
+    """从 aweme_detail 里取封面图地址(2026-11-26,海报卡用)。
+
+    抖音的封面有多个键,按「清晰度/完整度」优先级取第一个可用的:
+    - ``video.origin_cover``   原始封面(最清晰,优先)
+    - ``video.cover``          静态封面(最常见)
+    - ``video.dynamic_cover``  动态封面(取它的地址当静图也能显示)
+    每种的 ``url_list`` 是候选地址数组(CDN 多活),取第一个 http 地址。
+
+    取不到返回 None —— 封面是锦上添花,不能因为平台改字段就让整个导入失败。
+    """
+    video = aweme.get("video") or {}
+    for key in ("origin_cover", "cover", "dynamic_cover"):
+        node = video.get(key)
+        if not isinstance(node, dict):
+            continue
+        urls = node.get("url_list") or []
+        for url in urls:
+            if isinstance(url, str) and url.startswith("http"):
+                return url
+    return None
+
+
+def _download_cover(cover_url: str) -> str | None:
+    """下载封面 → 存进本项目 media 存储 → 返回内容寻址 key。
+
+    **为什么必须转存而不是直接把抖音 URL 存进 DB**(2026-11-26 实测):
+    抖音封面是签名链(``x-expires=1796914800`` = 2026-12-10),两周后就过期变裂图;
+    而且签名无法续期(要重新走详情接口)。存原 URL 等于给每个导入埋一颗定时炸弹。
+    ``store_media`` 是内容寻址(sha256),永不失效、同图自动去重。
+
+    任何失败都返回 None(封面是锦上添花):网络失败、超 20MB 闸、非图片都不影响导入。
+    """
+    from app.service.media import MediaTooLargeError, store_media
+
+    try:
+        req = urllib.request.Request(
+            cover_url,
+            headers={"User-Agent": _UA, "Referer": "https://www.douyin.com/"},
+        )
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = resp.read()
+        if not data:
+            return None
+        return store_media(data)
+    except MediaTooLargeError:
+        return None
+    except Exception:
+        # 封面下载失败不能拖垮导入:主流程有视频文件就够了
+        return None
 
 
 def _pick_play_url(aweme: dict) -> str:
@@ -102,11 +159,19 @@ def fetch_douyin_video(
     output_dir: Path | None = None,
     max_duration_s: int = 5400,
     progress_cb=None,
+    cover_cb=None,
 ) -> DouyinVideo:
     """打开视频页 → 拦截详情接口 → 下载视频到临时目录。同步（worker 在线程里调）。
 
     max_duration_s：时长上限，**在下载之前检查**（否则 1 小时视频会先白下几百 MB 才报错）。
-    progress_cb：下载阶段回调（"下载视频中"），供前端进度条。"""
+    progress_cb：下载阶段回调（"下载视频中"），供前端进度条。
+    cover_cb：拿到封面 media key 时**立即**回调（2026-11-26）。
+
+    为什么要有 cover_cb 而不是等返回值：封面在下载视频之前就拿到了，但
+    ``extract_video_content`` 还要跑完 whisper 转写 + 帧提取才算返回 —— 40 分钟的视频
+    要等十几分钟。用户粘完链接到导入完成这段时间里，海报卡本可以显示封面，
+    却因为「等返回值」白等一场（实测：转写阶段 video_cover_url 仍是 None）。
+    所以提取到就立刻上报，前端轮询一次就能看到海报。"""
     from playwright.sync_api import sync_playwright
 
     out_dir = output_dir or Path(tempfile.mkdtemp(prefix="douyin_dl_"))
@@ -184,6 +249,14 @@ def fetch_douyin_video(
     title = re.sub(r"\s+", " ", desc.split("#")[0]).strip() or f"抖音视频{video_id}"
 
     play_url = _pick_play_url(aweme)
+    # 封面先处理（几 KB，几乎不耗时）：拿到就立即回调写库，让海报卡尽早出现
+    raw_cover_url = _pick_cover_url(aweme)
+    cover_key = _download_cover(raw_cover_url) if raw_cover_url else None
+    if cover_key and cover_cb is not None:
+        try:
+            cover_cb(cover_key)
+        except Exception:  # noqa: BLE001 —— 回调失败不能影响下载主流程
+            pass
     video_path = out_dir / f"douyin_{video_id}.mp4"
     if progress_cb:
         # 大视频（1 小时课 ≈ 几百 MB）下载要几分钟，给个阶段提示免得像卡死
@@ -197,6 +270,7 @@ def fetch_douyin_video(
         author=author,
         duration_s=duration_s,
         video_path=video_path,
+        cover_key=cover_key,
     )
 
 

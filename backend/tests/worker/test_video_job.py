@@ -138,7 +138,7 @@ def test_extract_video_success_calls_pipeline_with_source_id(
          "frame_images": [{"index": 0}], "frame_candidates": 1},
     )()
 
-    def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None):
+    def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None, cover_cb=None):
         return fake_vc
 
     monkeypatch.setattr(vextract, "extract_video_content", fake_extract)
@@ -247,7 +247,7 @@ def test_extract_video_failure_marks_job_failed(
         monkeypatch.setattr(worker_module, "session_factory", factory)
 
         # fake extraction raises
-        def boom(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None):
+        def boom(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None, cover_cb=None):
             raise RuntimeError("download failed")
 
         monkeypatch.setattr(vextract, "extract_video_content", boom)
@@ -654,7 +654,7 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
     calls: dict[str, Any] = {}
     frame_calls: list[dict] = []
 
-    def fake_fetch(url, *, output_dir=None, max_duration_s=5400, progress_cb=None):
+    def fake_fetch(url, *, output_dir=None, max_duration_s=5400, progress_cb=None, cover_cb=None):
         calls["url"] = url
         return fake_dv
 
@@ -950,7 +950,7 @@ def test_transcript_fix_lands_in_parse_meta(
              "transcript_fix": fix_record},
         )()
 
-        def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None):
+        def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None, cover_cb=None):
             return fake_vc
 
         monkeypatch.setattr(vextract, "extract_video_content", fake_extract)

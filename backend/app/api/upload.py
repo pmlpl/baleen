@@ -250,6 +250,10 @@ class SourceStatus(BaseModel):
     video_est_seconds: int | None = None  # whisper 阶段预计耗时（前端据此插值）
     # 白盒日志：提取+整理全程的阶段性条目（排队→下载→whisper→识别画面→解析完成→AI整理）
     video_log: list[VideoLogEntry] | None = None
+    # 视频封面（2026-11-26）：抖音等不支持内嵌播放的平台，前端拿它渲染海报卡
+    # 代替纯黑占位框。值是**可直接当 img src 用的相对 URL**（/api/media/{key}），
+    # 不是抖音原始地址——那个两周就过期。取不到 = None（退化成提示条）
+    video_cover_url: str | None = None
     note_id: int | None
     created_at: datetime
     job: JobOut | None
@@ -642,6 +646,9 @@ async def get_source_status(
         video_progress=meta.get("video_progress"),
         video_est_seconds=meta.get("video_est_seconds"),
         video_log=meta.get("video_log"),
+        video_cover_url=(
+            f"/api/media/{meta['video_cover_key']}" if meta.get("video_cover_key") else None
+        ),
         note_id=note.id if note else None,
         created_at=source.created_at,
         job=(

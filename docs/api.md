@@ -1,4 +1,4 @@
-# API 契约 v42
+# API 契约 v43
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -116,6 +116,11 @@ B 站 / 抖音视频链接导入。两种模式：
 响应与 `POST /api/sources` 完全一致（`{ source_id, job_id, job_status, deduped }`）。
 轮询 `GET /api/sources/{source_id}` 拿全链路状态。whisper 模式通过 `video_stage`（阶段文案）+ `video_progress`（0-100 进度）+ `video_est_seconds`（转写阶段预计秒数，前端据此插值）三个字段驱动进度条；另有 `video_log`（v27 新增）——提取+整理全程的白盒日志数组，每条 `{ts, stage, pct}`（时间戳/阶段文本/百分比），前端渲染滚动日志区，让用户看到「排队→下载→whisper→转写校正中→识别画面→解析完成→AI 整理」每一步走到哪了。**转写校正中**（v35 新增）：whisper 转写完成后、画面识别前，LLM 盲修疑似错听的专名/术语（spike 实测：零词典、只出修改清单、程序化应用留痕；输入 3 万字符封顶；LLM 失败自动降级用原转写不让导入失败），修正留痕写 `parse_meta.llm_transcript_fix`（`{n_proposed, n_applied, corrections[], n_missed, missed[]}`，失败/跳过记 `error`/`skipped`）。同时 whisper 模型 small→large-v3-turbo、语言参数 zh 强制→None 自动检测（英文视频不再被强解码，8093 专名错字 ≥20 的根源修复）抖音模式**免 cookie**：worker 用系统浏览器（Playwright，channel=msedge）打开视频页拦截详情接口获取元信息和播放地址，用户零配置。
 
+**`video_cover_url`（v43 新增）**：视频封面，值是可直接当 `<img src>` 用的相对 URL（`/api/media/{key}`），null = 没有封面/非抖音/还没提取到。
+抖音不支持网页内嵌播放，前端拿它渲染**海报卡**代替纯黑占位框（主人 2026-11-26 反馈「这是一个黑色的，不好看」——根因是抖音复用了 B 站 iframe 的 16:9 黑底容器）。
+⚠️ 存的是**本项目 media 的内容寻址 key**，不是抖音原始地址：抖音封面是签名链（实测 `x-expires` 两周后过期），存原样会变裂图。
+⚠️ 封面在**下载视频之前**就拿到并立即写库（`cover_cb`），不是等整条提取链结束——否则 40 分钟的视频要让海报卡白等十几分钟。
+
 - `mode="whisper"` 时 API 立即返回 201，不阻塞；worker 后台提取（最多 2 小时，支持 ≤60 分钟视频）。
 - whisper 模式的 source.sha256 是占位值（`"video:{bvid}:whisper"`），真实 sha 存在 `parse_meta.content_sha256`；dedupe 基于 BVID。
 - 400 = URL 无法识别 BV 号 / 视频没有字幕（subtitle 模式）/ 没配 API Key / 视频超过 60 分钟。
@@ -171,6 +176,7 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
   "video_progress": null,
   "video_est_seconds": null,
   "video_log": null,
+  "video_cover_url": null,
   "note_id": 7,
   "created_at": "2026-10-29T01:20:00+08:00",
   "job": { "id": 34, "status": "done", "attempts": 1, "last_error": null },
@@ -699,6 +705,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-26 | v43 | **抖音视频封面（海报卡）**：`GET /api/sources/{id}` 响应加 `video_cover_url`（可直接当 `<img src>` 的相对 URL `/api/media/{key}`；null = 无封面/非抖音/未提取）。抖音不支持网页内嵌播放，前端原先把抖音塞进 B 站 iframe 的 16:9 **黑底容器**，变成一个 850×480 的黑洞里飘两行小字（主人反馈「这是一个黑色的，不好看」）。现在前端两种形态：有封面 → **海报卡**（9:16 竖版封面 + 标题 + 外链；抖音是竖屏平台，实测封面 1080×1920，按 16:9 裁会切掉标题和人物）；无封面/粘贴瞬间 → **一行高提示条**（69px，纸面底色 + 站点名 + `在抖音中打开`）。**封面存 media 内容寻址 key 而不是抖音原 URL**：抖音封面是签名链（实测 `x-expires` 两周过期），存原样会变裂图。**封面在下载视频之前就写库**（新增 `cover_cb` 早回调），否则 40 分钟视频要让海报卡白等十几分钟（实测转写阶段 `video_cover_url` 仍是 null 的坑）。B 站播放器**不动**（iframe 的 16:9 黑框是正确形态） |
 | 2026-11-26 | v42 | **画像页收成一屏**（主人反馈「要拉滚动条才能看到所有内容，用多了数据更多不是一直拉很长的条」）：右栏来源/质量/回答方式**三块并排**、块间距 26→22px、两个清单（死库存/纯自答）改成**默认折叠**的一行标题+数量，点开才展开且列表自带 260px 上限内滚。前端整页改为**两栏等高各自内滚、整页零滚动**（复用 `stage--fill` 高度链，1440/1280/1100 三档实测滚 0px）。清单上限 8→**30 条**（折叠态不占高度，展开时用户真想看）。**`self_answered` 响应形状改 `{total, items}`**（与 `dead_notes` 一致）——原先是裸数组，页面把 len 当总数显示「30」，而真实自答 86 条，数字会骗人；现在 total 走独立 COUNT 查询。§8 同步 |
 | 2026-11-26 | v41 | **「知识库章程」扩成「我的画像」**（主人拍板：左右布局，左边是用户开始用时写的问卷内容，右边是 AI 自统计的偏向统计图；页面/路由不能叫章程）：路由 `/charter`→`/persona`（旧路径重定向），顶栏「知识库章程」→「我的画像」，端点前缀 `/api/charter`→`/api/persona`（内部 `charter` 概念不动，只改对外命名；端点 34→**36**）。**迁移 0021** 补存五项问卷事实（`age_band`/`gender`/`education`/`status`/`why`）——v40 只存了昵称，其余五项喂完 LLM 就丢，左栏没数据源；全部 nullable，老用户留 NULL 不假回填。新增 `GET /api/persona/stats`（八块统计，纯只读现算：规模/来源/质量/**回答方式互斥三分**/Top5 引用/死库存/纯自答问题/周活跃）；新增 `POST /api/persona/topics`（两阶段 LLM 主题打标写回 `notes.tags` 增量 + `?retag=true` 重打）。**口径修正**：`answers` 的 kb/web 早期各自计数会相加超 100%，改互斥口径（`kb` 有笔记引用、`web` 无笔记引用但有网页引用、`self` 两者皆无），三项相加 = total。§8 重写 |
 | 2026-11-26 | v40 | **问卷事实化 + 昵称问答称呼**（主人拍板「问卷填的内容」是主要问题）：旧问卷全是偏好题（「想收什么」「什么算好笔记」），用户面对空库答不出来；新问卷**只问六个事实**——昵称/年龄段/性别/学历/当前状态/为什么用 baleen（全部可空），偏好（收什么/怎么整理/口吻深度）由 LLM 从事实**推导**；「拿不准口径」不再问，固定「宁收低质量」写进生成 prompt（本来就是代码默认值）。**昵称结构化消费**：迁移 0020 `app_settings.nickname`，`GET /api/charter` 响应加 `nickname`，`PUT` 可选连带保存；问答（agent+决策树两路径）system prompt 注入称呼行（`resolve_nickname` 现读热生效，没填不注入）。§8 重写；测试改写 3+新增 1（六事实进 prompt/固定规则入 prompt/旧字段忽略/昵称往返）+ 问答昵称注入断言 1 |
