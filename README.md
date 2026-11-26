@@ -43,12 +43,13 @@ accept / partial / reject  ── reject 可申诉，partial 只抽有价值部�
 - **视频→笔记**：B 站 / 抖音链接导入，faster-whisper 异步转写 + PySceneDetect 场景抽帧 + 视觉逐字转录 + 真嵌图，导入全程白盒进度日志
 - **三道准入闸**：G0 解析 / G1 价值 / G2 归属，便宜的先跑早退
 - **混合检索**：pgvector 向量 + pg_trgm 全文 + RRF 融合重排，small-to-big 喂给 LLM
-- **问答主界面**：SSE 流式回答、引用笔记出处、会话进 URL、`[NO_KB]` 兜底不拒答、斜杠命令、灯箱放大、📎 对话附件（大文件分层分析）、长对话分段摘要（保前缀缓存）、会话按最近活跃排序（每用户只保留最新 50 个）
-- **笔记自编辑**：PUT 改标题/正文（含图笔记可编辑，图片位置标记往返）、DELETE 真删除（DB 级联）
+- **问答主界面（agent 模式）**：SSE 流式回答、引用笔记出处、会话进 URL、`[NO_KB]` 兜底不拒答、灯箱放大、📎 对话附件（大文件分层分析）、长对话分段摘要（保前缀缓存）、会话按最近活跃排序（每用户只保留最新 50 个）、**会话右键菜单**（重命名/导出 Markdown/删除）、问答复用 agent 工具循环（LLM 自主换词再搜/何时转联网，预算与引用校验在代码层）
+- **笔记自编辑**：PUT 改标题/正文（含图笔记可编辑，图片位置标记往返）
+- **纸篓（软删除）**：删除进纸篓（可放回），30 天自动彻底清理，按账号隔离、换浏览器仍在
 - **图片视觉理解**：导入时视觉模型转写进流水线、问答回传原图、SVG 插图沙箱渲染
-- **输出格式**：markdown 表格、嵌套列表、mermaid 思维导图/流程图/统计图（懒加载）、SVG 矢量图、KaTeX 数学公式（行内/块级）
+- **输出格式**：markdown 表格、嵌套列表、**mermaid 流程图/统计图 + markmap 交互式思维导图**（缩放/平移/折叠，懒加载）、SVG 矢量图、KaTeX 数学公式（行内/块级）
 - **多用户隔离**：用户名+密码+JWT，数据按 `owner_id` 隔离，每用户独立 LLM 配置
-- **章程问卷**：6 步向导生成自然语言 charter，驱动 G2 判定
+- **章程问卷（事实化）**：六道事实题（昵称/年龄段/性别/学历/当前状态/为什么用）→ LLM 推导个性化章程驱动导入整理；**昵称注入问答**（AI 用它称呼你）；**「我的画像」页**（事实可原地编辑 + 八块系统统计 + 主题打标）
 - **评测**：G1/G2 真链路评测 + bootstrap 95% CI、检索 R@5 评测、真实导入候选样本自动归档
 
 ## 🛠 技术栈
@@ -58,7 +59,7 @@ accept / partial / reject  ── reject 可申诉，partial 只抽有价值部�
 | 后端 | Python 3.13 / FastAPI / SQLAlchemy 2 async / arq + Redis |
 | 数据库 | PostgreSQL 17 + pgvector（HNSW）+ pg_trgm |
 | 向量 | 本地 `bge-large-zh-v1.5`（1024 维，GPU 加速） |
-| 前端 | Vue 3 + TypeScript / Vite / Pinia / TipTap |
+| 前端 | Vue 3 + TypeScript / Vite / Pinia（渲染：手写 markdown + KaTeX + mermaid + markmap） |
 | LLM | OpenAI 兼容协议（DeepSeek 等），每用户独立配置 |
 | 视频 | faster-whisper（small，GPU）+ PySceneDetect + Playwright（抖音免 cookie / B 站兜底） |
 | 基础设施 | Docker Compose（PostgreSQL + Redis） |
@@ -69,7 +70,7 @@ accept / partial / reject  ── reject 可申诉，partial 只抽有价值部�
 |---|---|
 | `backend/` | Python / FastAPI（API + arq worker） |
 | `frontend/` | Vue 3 + TypeScript |
-| `docs/` | `api.md`（前后端接口契约）+ `adr/`（技术决策记录） |
+| `docs/` | `api.md`（前后端接口契约）+ `adr/`（技术决策记录）+ `glossary.md`（黑话词典） |
 | `eval/` | 评测脚本 + 标注 + 报告（含 bootstrap CI） |
 
 ## 🚀 快速开始
