@@ -472,3 +472,33 @@ class TestEvalCapture:
         assert len(list(cdir.iterdir())) == 1, "文件只归档一份"
         rows = list(csv.DictReader(logp.open(encoding="utf-8")))
         assert len(rows) == 1, "dedupe 命中不再登记(第一次导入已记过)"
+
+
+def test_video_keep_meta_prefix_convention() -> None:
+    """G0 落盘保留键(2026-11-26 C4,白名单退役):video_ 前缀自动保留 + 例外键集合。
+
+    旧 7 键硬编码白名单的问题:worker 阶段写新键要手工加白,忘了就被 G0 静默丢
+    (治本批踩过)。前缀约定从机制上根除——新键带 video_ 前缀即自动保留。
+    """
+    from app.service.imports.pipeline import _VIDEO_KEEP_EXTRA, video_keep_meta
+
+    prev = {
+        "video_url": "u",
+        "video_mode": "whisper",
+        "video_log": [],
+        "video_new_field": 1,  # 新键只需带前缀,无需任何手工登记
+        "content_sha256": "sha",  # 例外键:无前缀但必须保留(去重键)
+        "llm_transcript_fix": {"n": 1},  # 例外键:转写留痕
+        "warnings": ["别的"],  # 无前缀非例外 → G0 重建时由 pr 侧接管,不保留
+    }
+    kept = video_keep_meta(prev)
+    assert set(kept) == {
+        "video_url",
+        "video_mode",
+        "video_log",
+        "video_new_field",
+        "content_sha256",
+        "llm_transcript_fix",
+    }
+    # 例外键集合钉死:新例外必须显式进 _VIDEO_KEEP_EXTRA(写进 pipeline.py 注释)
+    assert _VIDEO_KEEP_EXTRA == {"content_sha256", "llm_transcript_fix"}

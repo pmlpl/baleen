@@ -905,8 +905,8 @@ def test_transcript_fix_lands_in_parse_meta(
     db_scope, tmp_path: Path, monkeypatch
 ) -> None:
     """转写 LLM 自校正留痕（2026-11-22 治本批）：vc.transcript_fix 在 pipeline 前写进
-    parse_meta.llm_transcript_fix，且 fake pipeline 执行时已可读到（video_keep 白名单
-    同步放行该键的配套证明——G0 落盘若不放行该键会被静默丢弃）。"""
+    parse_meta.llm_transcript_fix，且 fake pipeline 执行时已可读到（G0 保留机制的
+    配套前提——该键不在 video_ 前缀内，靠 pipeline 的例外键集合放行）。"""
     import app.service.imports as imports_pkg
     import app.service.video_extractor as vextract
 
@@ -962,7 +962,7 @@ def test_transcript_fix_lands_in_parse_meta(
                 meta = await repos.sources.get_parse_meta(source_id)
             assert meta is not None
             assert meta.get("llm_transcript_fix") == fix_record, (
-                "pipeline 跑起来之前留痕必须已落 parse_meta（video_keep 白名单的配套前提）"
+                "pipeline 跑起来之前留痕必须已落 parse_meta（G0 保留机制的配套前提）"
             )
             return ImportResult(source_id=source_id, note_id=None, parse_status="ok")
 

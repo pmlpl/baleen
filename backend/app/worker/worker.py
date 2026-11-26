@@ -218,9 +218,9 @@ async def _update_video_stage(
 async def _merge_parse_meta_fields(source_id: int, owner_id: int, fields: dict) -> None:
     """把若干键合并进 source.parse_meta（保留其余键），供 worker 阶段写留痕字段。
 
-    独立 DB session（同 _update_video_stage 的模式）。注意：G0 落盘会用
-    video_keep 白名单重建 parse_meta——新键必须同步加进 pipeline.video_keep，
-    否则会在 G0 阶段被静默丢弃。
+    独立 DB session（同 _update_video_stage 的模式）。注意：G0 落盘按 **video_ 前缀
+    约定**保留视频键（pipeline.video_keep_meta，2026-11-26 C4 白名单退役）——
+    往 parse_meta 写新键一律用 video_ 前缀命名即自动保留，忘加白被静默丢的坑已根除。
     """
     async with session_factory() as session:
         repos = Repos(session, owner_id=owner_id)

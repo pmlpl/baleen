@@ -94,7 +94,7 @@ class VideoContent:
     frame_candidates: int = 0
     # 转写 LLM 自校正留痕（2026-11-22 治本批）：{n_proposed, n_applied, corrections[],
     # n_missed, missed[]} 或 {"skipped": 原因} / {"error": 原因}——worker 写进
-    # source.parse_meta.llm_transcript_fix（pipeline video_keep 白名单已放行）。
+    # source.parse_meta.llm_transcript_fix（pipeline video_ 前缀保留机制的例外键）。
     # None = 非 whisper 路径（字幕模式无转写）
     transcript_fix: dict | None = None
 

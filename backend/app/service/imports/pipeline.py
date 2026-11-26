@@ -245,6 +245,30 @@ async def _finish(
     return result
 
 
+# video_ 前缀之外、必须跨 G0 落盘保留的 parse_meta 键(2026-11-26 C4:白名单改前缀约定)。
+# 新增前缀外的保留键才需要动这里;video_* 键自动保留,不用手工维护。
+_VIDEO_KEEP_EXTRA = frozenset(
+    {
+        "content_sha256",  # 上传去重键(名字不带 video_ 但视频导入同样依赖)
+        "llm_transcript_fix",  # 转写 LLM 自校正留痕(2026-11-22 治本批)
+    }
+)
+
+
+def video_keep_meta(prev_meta: dict) -> dict:
+    """worker 阶段写进 parse_meta 的视频键,G0 落盘时保留的部分。
+
+    约定(旧 7 键硬编码白名单退役):worker/转写/清理阶段往 parse_meta 写**新键**
+    一律用 ``video_`` 前缀命名 → 本函数自动放行;忘加白被 G0 静默丢的坑(治本批
+    踩过)从机制上根除。前缀外的保留键列 ``_VIDEO_KEEP_EXTRA``。
+    """
+    return {
+        k: v
+        for k, v in prev_meta.items()
+        if k.startswith("video_") or k in _VIDEO_KEEP_EXTRA
+    }
+
+
 async def run_import_async(
     file_path: str | Path,
     *,
@@ -407,15 +431,7 @@ async def run_import_async(
                 # 视频导入的进度字段在 worker 阶段写进 parse_meta，
                 # G0 落盘时保留它们（否则 video_progress 等会被整体覆写丢失）
                 prev_meta = dict(source.parse_meta or {})
-                video_keep = {
-                    k: prev_meta[k]
-                    for k in (
-                        "video_url", "video_mode", "video_progress",
-                        "video_est_seconds", "content_sha256", "video_log",
-                        "llm_transcript_fix",  # 转写 LLM 自校正留痕（2026-11-22 治本批）
-                    )
-                    if k in prev_meta
-                }
+                video_keep = video_keep_meta(prev_meta)
                 g0_meta = {
                     **video_keep,
                     **(pr.meta or {}),
