@@ -29,9 +29,11 @@ from sqlalchemy import text
 
 from .base import Repo
 
-# 画像页是速览:清单类只回前 N 条 + 总数,完整清单去对应页面看
+# 画像页是概览:清单类默认折叠,展开才拉这么多条(再多的部分只报总数)。
+# 为什么 30 而不是 8:折叠状态下不占高度,展开时用户是真的想看,8 条太少;
+# 为什么不是无限:4000 篇死库存全拉回来既慢又没人会看完,30 条足够看出「哪类是废的」。
 TOP_N = 5
-LIST_LIMIT = 8
+LIST_LIMIT = 30
 ACTIVITY_WEEKS = 8
 
 # ── 输出行类型(仅内部使用,API 层再包 pydantic) ──
@@ -169,7 +171,7 @@ class PersonaRepo(Repo):
     """
 
     async def dead_notes(self, limit: int = LIST_LIMIT) -> dict[str, Any]:
-        """一次都没被引用过的活跃笔记:前 N 条 + 总数。
+        """一次都没被引用过的活跃笔记:前 N 条 + 总数(前端默认折叠,展开才看)。
 
         「库里有但没派上用场」——要么内容不对路,要么检索没命中。两种都值得知道。
         """
@@ -196,16 +198,16 @@ class PersonaRepo(Repo):
 
     # ── 7. 纯自答的问题(该补笔记的地方) ──
 
-    async def self_answered(self, limit: int = LIST_LIMIT) -> list[str]:
-        """库和网都没用上的问题。取同会话内**上一条** user 消息,不跨会话配对。
+    async def self_answered(self, limit: int = LIST_LIMIT) -> dict[str, Any]:
+        """库和网都没用上的问题:前 N 条 + **真实总数**(与死库存同形状)。
 
-        多取 3 倍再过滤:问候语(「hi」「可以」)不是知识缺口,不该出现在这张单子上。
+        取同会话内**上一条** user 消息,不跨会话配对。
+        过滤问候语(「hi」「可以」)与过短消息 —— 那不是知识缺口。
+
+        总数也用同一套过滤在 SQL 里数(不是 len(items)):列表有上限 30,
+        若拿 len 当总数,页面上会永远显示「30」,而真实自答可能有 90 多条。
         """
-        rows = await self._all(
-            """
-            select (select u.content from qa_messages u
-                    where u.session_id = a.session_id and u.role = 'user' and u.id < a.id
-                    order by u.id desc limit 1) as question
+        base = """
             from qa_messages a
             where a.owner_id = :owner and a.role = 'assistant'
               and jsonb_typeof(a.citations) = 'array'
@@ -213,19 +215,45 @@ class PersonaRepo(Repo):
                              where c->>'note_id' is not null)
               and not exists(select 1 from jsonb_array_elements(a.citations) c
                              where c->>'url' is not null)
-            order by a.id desc
+        """
+        # 过滤条件与 _is_real_question 同口径:长度 >= 6、不是纯问候、含字母数字
+        real = (
+            "char_length(trim(q.question)) >= 6"
+            f" and lower(trim(q.question)) not in ({_SMALL_TALK_SQL})"
+            " and q.question ~ '[[:alnum:]]'"
+        )
+        rows = await self._all(
+            f"""
+            with q as (
+              select (select u.content from qa_messages u
+                      where u.session_id = a.session_id and u.role = 'user' and u.id < a.id
+                      order by u.id desc limit 1) as question,
+                     a.id as aid
+              {base}
+            )
+            select question from q where question is not null and {real}
+            order by aid desc
             limit :limit
             """,
-            limit=limit * 3,
+            limit=limit,
         )
-        out: list[str] = []
-        for r in rows:
-            q = (r.get("question") or "").strip()
-            if _is_real_question(q):
-                out.append(q)
-            if len(out) >= limit:
-                break
-        return out
+        total_row = await self._one(
+            f"""
+            with q as (
+              select (select u.content from qa_messages u
+                      where u.session_id = a.session_id and u.role = 'user' and u.id < a.id
+                      order by u.id desc limit 1) as question
+              {base}
+            )
+            select count(*) as total from q where question is not null and {real}
+            """
+        )
+        return {
+            "total": int(total_row.get("total") or 0),
+            "items": [
+                r["question"].strip() for r in rows if _is_real_question(r.get("question") or "")
+            ],
+        }
 
     # ── 8. 活跃度 ──
 
@@ -294,6 +322,9 @@ _SMALL_TALK = frozenset(
         "嗯", "好", "ok", "行", "明白", "懂了", "是的", "对", "不是", "继续", "开始",
     }
 )
+
+# SQL 里判小话用的同口径清单(:的占位符由 SQLAlchemy 自己展开,这里手工拼字面量)
+_SMALL_TALK_SQL = ", ".join(f"'{word}'" for word in sorted(_SMALL_TALK))
 
 
 def _is_real_question(value: str) -> bool:

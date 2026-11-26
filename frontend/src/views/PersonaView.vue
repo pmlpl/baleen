@@ -59,6 +59,12 @@ const generating = ref(false)
 /** 右栏:统计 */
 const stats = ref<PersonaStats | null>(null)
 
+/**
+ * 两个「待办清单」的展开状态。默认折叠 —— 它们跟「扫一眼我是什么样」
+ * 不是同一个时刻,要动手时才看。折叠后每块只占一行,数据涨到上千篇也不变高。
+ */
+const expanded = ref({ dead: false, selfAsked: false })
+
 const ageBands = ['18 岁以下', '18-24', '25-30', '31-40', '40 以上']
 const genders = ['男', '女', '不说']
 const educations = ['高中及以下', '本科在读', '本科', '硕士及以上']
@@ -359,9 +365,12 @@ onMounted(loadAll)
           <div class="col-head col-head--sub">
             <span class="col-kicker">据此推导的章程</span>
           </div>
-          <textarea v-model="charter" class="charter-box" rows="20" spellcheck="false" />
+          <!-- rows=8:左栏是内滚区域,章程框太大会把保存按钮挤到滚动区外
+               (实测 20 行时保存按钮 bottom=915 > 栏底 844,用户得先滚左栏才能存) -->
+          <textarea v-model="charter" class="charter-box" rows="8" spellcheck="false" />
 
-          <div class="actions">
+          <!-- 保存条钉在左栏底部:改完随时能存,不必先滚到栏底 -->
+          <div class="actions actions--docked">
             <button class="btn btn--primary" type="button" :disabled="saving" @click="doSave">
               {{ saving ? '保存中…' : '保存' }}
             </button>
@@ -378,57 +387,61 @@ onMounted(loadAll)
           <span class="col-meta">{{ scaleLine }}</span>
         </div>
 
-        <!-- 来源构成 -->
-        <section v-if="sourceBars.length > 0" class="stat-block">
-          <h3 class="stat-title">来源</h3>
-          <div class="bar-row">
-            <div v-for="b in sourceBars" :key="b.label" class="bar-item">
-              <span class="bar-label">{{ b.label }}</span>
-              <span class="bar-track">
-                <span class="bar-fill bar-fill--source" :style="{ width: `${(b.count / b.total) * 100}%` }" />
-              </span>
-              <span class="bar-count">{{ b.count }}</span>
+        <!-- 三个构成块并排一行:原来竖着堆占 297px,并排只要 100px 左右。
+             它们都是「看一眼比例就走」的信息,不值得各占一整行。 -->
+        <div class="trio">
+          <!-- 来源构成 -->
+          <section v-if="sourceBars.length > 0" class="stat-block stat-block--compact">
+            <h3 class="stat-title">来源</h3>
+            <div class="bar-row">
+              <div v-for="b in sourceBars" :key="b.label" class="bar-item bar-item--compact">
+                <span class="bar-label">{{ b.label }}</span>
+                <span class="bar-track">
+                  <span class="bar-fill bar-fill--source" :style="{ width: `${(b.count / b.total) * 100}%` }" />
+                </span>
+                <span class="bar-count">{{ b.count }}</span>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- 质量构成 -->
-        <section v-if="qualityBars.length > 0" class="stat-block">
-          <h3 class="stat-title">质量</h3>
-          <div class="bar-row">
-            <div v-for="b in qualityBars" :key="b.label" class="bar-item">
-              <span class="bar-label">{{ b.label }}</span>
-              <span class="bar-track">
-                <span class="bar-fill" :class="`bar-fill--${b.tone}`" :style="{ width: `${(b.count / b.total) * 100}%` }" />
-              </span>
-              <span class="bar-count">{{ b.count }}</span>
+          <!-- 质量构成 -->
+          <section v-if="qualityBars.length > 0" class="stat-block stat-block--compact">
+            <h3 class="stat-title">质量</h3>
+            <div class="bar-row">
+              <div v-for="b in qualityBars" :key="b.label" class="bar-item bar-item--compact">
+                <span class="bar-label">{{ b.label }}</span>
+                <span class="bar-track">
+                  <span class="bar-fill" :class="`bar-fill--${b.tone}`" :style="{ width: `${(b.count / b.total) * 100}%` }" />
+                </span>
+                <span class="bar-count">{{ b.count }}</span>
+              </div>
             </div>
-          </div>
-        </section>
+          </section>
 
-        <!-- 回答方式三分 -->
-        <section v-if="answerSegments.length > 0" class="stat-block">
-          <h3 class="stat-title">回答方式</h3>
-          <div class="stack-bar">
-            <span
-              v-for="seg in answerSegments"
-              :key="seg.key"
-              class="stack-seg"
-              :class="`stack-seg--${seg.key}`"
-              :style="{ flexGrow: Math.max(seg.count, 0.0001) }"
-              :title="`${seg.label} ${seg.count} 次`"
-            />
-          </div>
-          <ul class="legend">
-            <li v-for="seg in answerSegments" :key="seg.key" class="legend-item">
-              <span class="legend-dot" :class="`legend-dot--${seg.key}`" />
-              <span class="legend-label">{{ seg.label }}</span>
-              <span class="legend-pct">{{ seg.pct }}%</span>
-            </li>
-          </ul>
-        </section>
+          <!-- 回答方式三分:这栏是「我该补什么」的核心洞察,不折叠 -->
+          <section v-if="answerSegments.length > 0" class="stat-block stat-block--compact">
+            <h3 class="stat-title">回答方式</h3>
+            <div class="stack-bar">
+              <span
+                v-for="seg in answerSegments"
+                :key="seg.key"
+                class="stack-seg"
+                :class="`stack-seg--${seg.key}`"
+                :style="{ flexGrow: Math.max(seg.count, 0.0001) }"
+                :title="`${seg.label} ${seg.count} 次`"
+              />
+            </div>
+            <ul class="legend legend--compact">
+              <li v-for="seg in answerSegments" :key="seg.key" class="legend-item">
+                <span class="legend-dot" :class="`legend-dot--${seg.key}`" />
+                <span class="legend-label">{{ seg.label }}</span>
+                <span class="legend-pct">{{ seg.pct }}%</span>
+              </li>
+            </ul>
+          </section>
+        </div>
 
-        <!-- 主题分布 -->
+        <!-- 主题分布:条数固定 ≤8,不折叠(它是「我的库在讲什么」的主视图) -->
         <section class="stat-block">
           <h3 class="stat-title">
             主题
@@ -452,7 +465,7 @@ onMounted(loadAll)
             </button>
           </h3>
           <div v-if="topicBars.length > 0" class="bar-row">
-            <div v-for="t in topicBars" :key="t.topic" class="bar-item">
+            <div v-for="t in topicBars" :key="t.topic" class="bar-item bar-item--topic">
               <span class="bar-label">{{ t.topic }}</span>
               <span class="bar-track">
                 <span class="bar-fill bar-fill--topic" :style="{ width: `${t.width}%` }" />
@@ -463,7 +476,7 @@ onMounted(loadAll)
           <p v-else class="stat-empty">还没分析过主题。</p>
         </section>
 
-        <!-- 真在用的知识 -->
+        <!-- 真在用的知识:固定 Top5,不折叠(这是「哪些知识真正在产出」的唯一视图) -->
         <section v-if="stats !== null && stats.top_cited.length > 0" class="stat-block">
           <h3 class="stat-title">真在用的知识</h3>
           <ol class="rank-list">
@@ -475,28 +488,58 @@ onMounted(loadAll)
           </ol>
         </section>
 
+        <!-- ── 折叠区:两个「待办清单」。
+             它们跟「扫一眼我是什么样」不是同一个时刻 —— 要动手时才看。
+             默认折成一行(标题 + 数量),点开才占高度。数据涨到上千篇也只折成一行。 -->
+
         <!-- 死库存 -->
-        <section v-if="stats !== null && stats.dead_notes.total > 0" class="stat-block">
-          <h3 class="stat-title">
-            没被用过的笔记
-            <span class="stat-count">{{ stats.dead_notes.total }}</span>
-          </h3>
-          <ul class="plain-list">
+        <section v-if="stats !== null && stats.dead_notes.total > 0" class="fold">
+          <button
+            class="fold-head"
+            type="button"
+            :aria-expanded="expanded.dead"
+            @click="expanded.dead = !expanded.dead"
+          >
+            <span class="fold-caret" :class="{ 'fold-caret--open': expanded.dead }">▸</span>
+            <span class="fold-title">没被用过的笔记</span>
+            <span class="fold-count">{{ stats.dead_notes.total }}</span>
+          </button>
+          <ul v-if="expanded.dead" class="plain-list plain-list--scroll">
             <li v-for="n in stats.dead_notes.items" :key="n.id" class="plain-item">
               <RouterLink class="plain-link" :to="{ name: 'note', params: { id: n.id } }">{{ n.title }}</RouterLink>
+            </li>
+            <li v-if="stats.dead_notes.total > stats.dead_notes.items.length" class="plain-item plain-item--more">
+              还有 {{ stats.dead_notes.total - stats.dead_notes.items.length }} 篇…
             </li>
           </ul>
         </section>
 
         <!-- 纯自答的问题 -->
-        <section v-if="stats !== null && stats.self_answered.length > 0" class="stat-block">
-          <h3 class="stat-title">我也没答上的问题</h3>
-          <ul class="plain-list">
-            <li v-for="(q, i) in stats.self_answered" :key="i" class="plain-item plain-item--quote">{{ q }}</li>
+        <section v-if="stats !== null && stats.self_answered.total > 0" class="fold">
+          <button
+            class="fold-head"
+            type="button"
+            :aria-expanded="expanded.selfAsked"
+            @click="expanded.selfAsked = !expanded.selfAsked"
+          >
+            <span class="fold-caret" :class="{ 'fold-caret--open': expanded.selfAsked }">▸</span>
+            <span class="fold-title">我也没答上的问题</span>
+            <span class="fold-count">{{ stats.self_answered.total }}</span>
+          </button>
+          <ul v-if="expanded.selfAsked" class="plain-list plain-list--scroll">
+            <li v-for="(q, i) in stats.self_answered.items" :key="i" class="plain-item plain-item--quote">
+              {{ q }}
+            </li>
+            <li
+              v-if="stats.self_answered.total > stats.self_answered.items.length"
+              class="plain-item plain-item--more"
+            >
+              还有 {{ stats.self_answered.total - stats.self_answered.items.length }} 条…
+            </li>
           </ul>
         </section>
 
-        <!-- 活跃度 -->
+        <!-- 活跃度:柱数固定 8 根,不折叠 -->
         <section v-if="activityBars.length > 0" class="stat-block">
           <h3 class="stat-title">每周新增</h3>
           <div class="week-chart">
@@ -515,8 +558,14 @@ onMounted(loadAll)
 </template>
 
 <style scoped>
+/* 根节点要参与 stage--fill 的高度链:
+   display:flex + column + flex:1 + min-height:0,让 persona-grid 拿到确定高度。
+   少了这一层,grid 的 height:100% 会退化成 auto。 */
 .persona-page {
-  padding-bottom: 32px;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .persona-loading {
@@ -525,18 +574,26 @@ onMounted(loadAll)
   font-size: 13.5px;
 }
 
-/* 左右两栏:左静态(事实) / 右动态(统计)。窄屏退成单列,不硬挤 */
+/* 两栏高度由 App.vue 的 stage--fill 链传下来(父级给确定高度、子级 flex:1),
+   所以这里用 height:100% 而不是算 100vh —— 减 padding 的活已经由链上游做了。
+   踩过的坑:自己算 calc(100vh - chrome - 26 - 56) 会差 88px,页面还是要滚。 */
 .persona-grid {
   display: grid;
   grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
   gap: 40px;
-  align-items: start;
+  align-items: stretch;
+  flex: 1;
+  height: 100%;
+  min-height: 0;
 }
 
 @media (max-width: 980px) {
   .persona-grid {
     grid-template-columns: minmax(0, 1fr);
     gap: 32px;
+    /* 单列时取消高度限制:两栏叠着放,让页面正常滚 */
+    height: auto;
+    flex: none;
   }
 }
 
@@ -544,20 +601,38 @@ onMounted(loadAll)
   min-width: 0;
 }
 
-/* 左栏跟着滚:右栏很长(七块统计),左栏太短会在下面留一大片空白。
-   窄屏退单列时 sticky 无意义,用媒体查询关掉。 */
-.persona-col--static {
-  position: sticky;
-  top: 0;
-  align-self: start;
+/* 两栏各自内滚,整页不滚。scrollbar-gutter:stable 防滚动条出现时宽度跳
+   (书架页踩过的同一个坑)。 */
+.persona-col--static,
+.persona-col--live {
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+  padding-right: 6px;
 }
 
 @media (max-width: 980px) {
-  .persona-col--static {
-    position: static;
+  .persona-col--static,
+  .persona-col--live {
+    height: auto;
+    overflow-y: visible;
+    padding-right: 0;
   }
 }
 
+/* 左栏跟着滚:右栏更长,左栏太短会在下面留一大片空白。
+
+   踩过的三个坑(都别退回去):
+   1. `top: 0` → 左栏滚到顶栏底下被盖住。必须 `top: var(--chrome-h)`。
+   2. 只设 top 仍会被吃 21px:sticky 不能超出**父容器**边界,左栏(780px)
+      比右栏(888px)矮,滚到底时 sticky 已撞到父容器底边,只能跟着上移。
+   3. 给左栏定高 + 内滚 → 反而更糟(-3px),因为定高后它自己变成滚动容器,
+      sticky 相对它自己算,失去粘滞基准。
+
+   正解:**拉平两栏高度**(grid 默认 stretch 让左栏撑满父容器高),
+   再让左栏内部滚动。这样左栏与父容器等高 → sticky 有完整行程,不会被追上。 */
 /* 两栏顶部同一条基线:左边「我是谁」,右边「我在做什么」 */
 .col-head {
   display: flex;
@@ -715,6 +790,18 @@ onMounted(loadAll)
   margin-top: 14px;
 }
 
+/* 保存条钉在左栏底部:左栏是内滚区域,保存按钮若在滚动区末尾,
+   用户改完章程得先滚到栏底才能存(实测 bottom 915 > 栏底 844)。
+   sticky bottom + 纸色底,滚到哪都能看见。 */
+.actions--docked {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  padding: 12px 0 2px;
+  margin-top: 12px;
+  background: var(--bg);
+}
+
 .saved-hint {
   color: var(--ok);
   font-size: 13px;
@@ -734,8 +821,45 @@ onMounted(loadAll)
 
 /* ---------- 右栏:统计 ---------- */
 
+/* 块间距 22px:7 个块累计 182px 是页面的隐形大头(26px 时占 2 屏里的 1/5)。
+   22px 仍能拉开层次,但把整页压回一屏附近。 */
 .stat-block {
-  margin-bottom: 26px;
+  margin-bottom: 22px;
+}
+
+/* 三块并排:来源/质量/回答方式都是「看一眼比例就走」的轻信息,
+   竖着堆占 297px,并排只要 ~110px。窄屏再退回单列。 */
+.trio {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  margin-bottom: 22px;
+}
+
+@media (max-width: 760px) {
+  .trio {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 18px;
+  }
+}
+
+/* 并排块内部:标签压缩到 3 个字宽,数字列也收窄 */
+.stat-block--compact {
+  margin-bottom: 0;
+  min-width: 0;
+}
+
+.bar-item--compact {
+  grid-template-columns: 44px minmax(0, 1fr) 28px;
+  gap: 8px;
+}
+
+.bar-item--topic {
+  grid-template-columns: 88px minmax(0, 1fr) 34px;
+}
+
+.legend--compact {
+  gap: 10px;
 }
 
 .stat-title {
@@ -968,6 +1092,69 @@ onMounted(loadAll)
 
 .plain-item--quote {
   color: var(--ink-3);
+}
+
+/* ---------- 折叠清单 ---------- */
+
+/* 折叠头:一行高(约 34px),默认状态只占这一行 */
+.fold {
+  margin-bottom: 2px;
+  border-bottom: 1px dashed var(--line);
+}
+
+.fold-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 2px;
+  border: 0;
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 13px;
+  text-align: left;
+  background: transparent;
+  cursor: pointer;
+  transition: color 0.12s ease;
+}
+
+.fold-head:hover {
+  color: var(--ink);
+}
+
+.fold-caret {
+  color: var(--ink-3);
+  font-size: 10px;
+  transition: transform 0.15s ease;
+}
+
+.fold-caret--open {
+  transform: rotate(90deg);
+}
+
+.fold-title {
+  flex: 1;
+}
+
+.fold-count {
+  color: var(--ink-3);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 展开后的清单:给个上限自己滚。30 条全展开约 700px,不设上限会把页面
+   又拖回三屏。max-height 让它最多占 260px,超出部分栏内滚。 */
+.plain-list--scroll {
+  max-height: 260px;
+  padding-bottom: 6px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-gutter: stable;
+}
+
+.plain-item--more {
+  color: var(--ink-3);
+  font-style: italic;
 }
 
 /* 每周柱状:柱高用像素(见 activityBars 注释),槽只负责横向分配与底部对齐 */

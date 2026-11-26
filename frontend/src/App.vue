@@ -359,7 +359,7 @@ watch(basketOpen, (open) => {
         :class="{
           'stage--bleed': route.name === 'qa',
           'stage--clamp': route.name === 'note',
-          'stage--fill': route.name === 'notes',
+          'stage--fill': route.name === 'notes' || route.name === 'persona',
         }"
       >
         <div
@@ -368,7 +368,7 @@ watch(basketOpen, (open) => {
             'stage-inner--wide': isWide,
             'stage-inner--bleed': route.name === 'qa',
             'stage-inner--clamp': route.name === 'note',
-            'stage-inner--fill': route.name === 'notes',
+            'stage-inner--fill': route.name === 'notes' || route.name === 'persona',
           }"
         >
           <RouterView v-slot="{ Component }">

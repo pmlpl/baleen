@@ -54,7 +54,8 @@ export interface PersonaStats {
   answers: { kb: number; web: number; self: number; total: number }
   top_cited: { id: number; title: string; hits: number }[]
   dead_notes: { total: number; items: { id: number; title: string; quality: string }[] }
-  self_answered: string[]
+  /** 纯自答的问题。total 是**真实总数**,items 有 30 条上限(页面折叠,展开才看)。 */
+  self_answered: { total: number; items: string[] }
   activity: { week: string; notes: number }[]
   topics: { topic: string; notes: number }[]
   untagged: number

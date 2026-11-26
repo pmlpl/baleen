@@ -203,6 +203,15 @@ class DeadNotesOut(BaseModel):
     items: list[DeadNoteOut]
 
 
+class SelfAskedOut(BaseModel):
+    """纯自答的问题清单。形状与 dead_notes 一致(total 是**真实总数**,
+    不是 len(items) —— items 有 30 条上限,拿 len 当总数页面会永远显示 30)。
+    """
+
+    total: int
+    items: list[str]
+
+
 class WeekOut(BaseModel):
     week: str
     notes: int
@@ -220,7 +229,7 @@ class PersonaStatsOut(BaseModel):
     answers: AnswerMixOut
     top_cited: list[CitedNoteOut]
     dead_notes: DeadNotesOut
-    self_answered: list[str]
+    self_answered: SelfAskedOut
     activity: list[WeekOut]
     topics: list[TopicOut]  # 空 = 还没打过标,前端显示「分析 N 篇」按钮
     untagged: int  # 还没打标的笔记数
@@ -232,6 +241,7 @@ async def get_stats(session: SessionDep, owner_id: CurrentOwnerDep) -> PersonaSt
     repo = PersonaRepo(session, owner_id)
     answers = await repo.answer_mix()
     dead = await repo.dead_notes()
+    self_asked = await repo.self_answered()
     return PersonaStatsOut(
         size=SizeOut(**await repo.scale()),
         sources=await repo.source_mix(),
@@ -246,7 +256,7 @@ async def get_stats(session: SessionDep, owner_id: CurrentOwnerDep) -> PersonaSt
         dead_notes=DeadNotesOut(
             total=dead["total"], items=[DeadNoteOut(**r) for r in dead["items"]]
         ),
-        self_answered=await repo.self_answered(),
+        self_answered=SelfAskedOut(total=self_asked["total"], items=self_asked["items"]),
         activity=[WeekOut(**r) for r in await repo.activity_by_week()],
         topics=[TopicOut(**r) for r in await repo.topic_mix()],
         untagged=len(await repo.untagged_titles()),

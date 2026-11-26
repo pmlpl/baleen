@@ -307,8 +307,20 @@ def test_stats_shape(env: SimpleNamespace) -> None:
         assert key in body, f"统计缺 {key}"
     assert set(body["size"]) == {"notes", "chunks", "sessions", "asks"}
     assert isinstance(body["top_cited"], list)
-    assert "total" in body["dead_notes"] and isinstance(body["dead_notes"]["items"], list)
     assert isinstance(body["untagged"], int)
+
+    # 两个清单块的形状必须一致:都是 {total, items},且 total 是**真实总数**
+    # 而不是 len(items) —— items 有 30 条上限,拿 len 当总数页面会永远显示 30。
+    for key, item_type in (("dead_notes", dict), ("self_answered", str)):
+        block = body[key]
+        assert set(block) == {"total", "items"}, f"{key} 形状应为 {{total, items}}"
+        assert isinstance(block["total"], int)
+        assert isinstance(block["items"], list)
+        assert block["total"] >= len(block["items"]), (
+            f"{key}: items 不能多于 total({len(block['items'])} > {block['total']})"
+        )
+        for item in block["items"][:3]:
+            assert isinstance(item, item_type), f"{key} 的 item 类型不对:{type(item)}"
 
 
 def test_stats_scoped_to_owner(env: SimpleNamespace) -> None:
@@ -362,3 +374,21 @@ def test_topic_parse_discards_broken_json() -> None:
     assert _parse_reply('["数组不是对象"]', {1}) == {}
     assert _parse_reply("", {1}) == {}
     assert _parse_vocab("不是数组") == []
+
+
+def test_self_answered_total_counts_all_not_page(env: SimpleNamespace) -> None:
+    """自答清单的 total 必须是**真实总数**,不能等于 len(items) 上限。
+
+    真机截图抓出来的 bug:列表上限改 30 后,页面显示「30」而不是真实的 86。
+    页面上同一个数字,一个是真的「我有 86 个问题没答上」,一个是「我这页放了 30 条」——
+    后者会骗人。这条守住「total 走独立 COUNT 查询」而不是 len(items)。
+    """
+    body = env.client.get("/api/persona/stats").json()
+    block = body["self_answered"]
+    # dev 库里自答问题远超一页(实测 86 条 vs 上限 30)。若这条挂掉,
+    # 说明 total 退回了 len(items) —— 先看 repo.self_answered 是否还在 COUNT。
+    assert block["total"] > len(block["items"]), (
+        f"total({block['total']}) 应大于 items 条数({len(block['items'])});"
+        " 若相等,多半是 total 退回了 len(items) 而不是独立 COUNT"
+    )
+    assert len(block["items"]) <= 30, "items 有 30 条上限"
