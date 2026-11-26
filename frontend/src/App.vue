@@ -356,7 +356,11 @@ watch(basketOpen, (open) => {
 
       <main
         class="stage"
-        :class="{ 'stage--bleed': route.name === 'qa', 'stage--clamp': route.name === 'note' }"
+        :class="{
+          'stage--bleed': route.name === 'qa',
+          'stage--clamp': route.name === 'note',
+          'stage--fill': route.name === 'notes',
+        }"
       >
         <div
           class="stage-inner"
@@ -364,6 +368,7 @@ watch(basketOpen, (open) => {
             'stage-inner--wide': isWide,
             'stage-inner--bleed': route.name === 'qa',
             'stage-inner--clamp': route.name === 'note',
+            'stage-inner--fill': route.name === 'notes',
           }"
         >
           <RouterView v-slot="{ Component }">
@@ -534,6 +539,26 @@ watch(basketOpen, (open) => {
 .stage-inner--clamp {
   display: flex;
   flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* 书架页:舞台占满可视高度(减顶栏),子页 flex:1 撑开,
+   翻页才能用 margin-top:auto 钉在页底 —— 否则末页只有 1 本书时翻页会跟着内容上浮。
+   与 clamp 的区别:fill 保留舞台内边距(书架是内容页,不该出血)。
+   注意不能用 min-height:100%:stage 有 82px 上下 padding,百分比按内容盒算,
+   子页会比可视区少 82px,钉底就失效了(已实测踩过)。 */
+.stage--fill {
+  display: flex;
+  height: calc(100vh - var(--chrome-h));
+  min-height: 0;
+  flex-direction: column;
+}
+
+.stage-inner--fill {
+  display: flex;
+  flex: 1;
+  min-width: 0;
   min-height: 0;
   flex-direction: column;
 }

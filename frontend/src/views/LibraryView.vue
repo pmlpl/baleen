@@ -423,7 +423,7 @@ function onShelfDrop(event: DragEvent): void {
 </script>
 
 <template>
-  <section class="page">
+  <section class="page library-page">
     <div class="search-bar">
       <input
         v-model="keyword"
@@ -833,6 +833,22 @@ function onShelfDrop(event: DragEvent): void {
   list-style: none;
 }
 
+/* 笔记本体占满父级(stage-inner--fill 给的高度),把翻页推到页底。
+   flex:1 + min-height:0:内容多时整页滚,内容少时撑满,翻页都在底部。 */
+.library-page {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+/* 书架/列表/空态自己撑开剩余空间 —— 这是 margin-top:auto 能生效的前提 */
+.library-page > .shelf,
+.library-page > .shelf-rows,
+.library-page > .empty {
+  flex: 1 0 auto;
+}
+
 .shelf--dim {
   opacity: 0.55;
   transition: opacity 0.15s ease;
@@ -1169,9 +1185,13 @@ function onShelfDrop(event: DragEvent): void {
 
 /* ---------- 翻页:文字链轻量风 ---------- */
 
+/* 翻页钉在页面底部:内容少时(最后一页可能只有 1 本书)不许跟着上移。
+   靠 .library-page 的纵向 flex + 本行 margin-top:auto 实现 ——
+   不用 position:fixed(会脱离文档流,和侧栏/顶栏滚动打架) */
 .pager {
   display: flex;
-  margin-top: 26px;
+  margin-top: auto;
+  padding-top: 26px;
   align-items: center;
   justify-content: center;
   gap: 14px;

@@ -1043,3 +1043,20 @@ v38 收缩后该页只剩头像条 + 章程按钮，已无独有信息（UI设�
 - 账号身份顶栏常驻用户名，不丢信息；注册时间无展示位不再提供（死信息）；`/profile` 旧 URL 走 catch-all 回 `/qa`。
 
 验证：`vue-tsc --noEmit` 0 错误；Playwright 8 项全过（顶栏有章程无个人中心/用户名在/书立无「我的」/章程可入/`/profile` 重定向回 `/qa`/零 pageerror）。
+
+## 2026-11-26 · 书架翻页钉在页底（主人截图反馈）
+
+**问题**：最后一页只有 1 本书时，书架高度缩到一行，翻页跟着内容上浮到页面中部（截图可见，第 6/6 页翻页漂在 475px 处）。
+
+**根因**：翻页是「紧跟在内容后面」的流式布局（`margin-top: 26px`），内容多高它就落在多高之后。
+
+**修法**：给书架页单独一个 `stage--fill` 高度形态，让翻页用 `margin-top: auto` 钉在页底。
+
+| 文件 | 改动 |
+|---|---|
+| `src/App.vue` | 新增 `.stage--fill` / `.stage-inner--fill`（`notes` 路由生效）：舞台占满可视高度（`calc(100vh - var(--chrome-h))`），保留内边距（书架是内容页，不该像问答页那样出血） |
+| `src/views/LibraryView.vue` | `<section>` 加 `.library-page`（`display:flex; flex:1; min-height:0; flex-direction:column`）；书架/列表/空态 `flex: 1 0 auto` 撑开剩余空间；`.pager` 的 `margin-top: 26px` → `margin-top: auto; padding-top: 26px` |
+
+**踩过的坑（记录）**：第一版用 `.library-page { min-height: 100% }`，实测无效——`.stage` 有 `padding: 26px 30px 56px`（上下共 82px），百分比高度按**父内容盒**算，子页只有 756px 而非可视高度 847px，`margin-top:auto` 没有多余空间可用，末页翻页仍漂在 475px。改成「父级 `stage--fill` 给确定高度 + 子页 `flex:1`」才对。
+
+**怎么验的**：Playwright 实测首页与末页的翻页 `getBoundingClientRect().bottom` —— **首页 844px、末页 844px、位移 0px**（修前漂移 334px）；两页 `pageScroll` 均为 0。已把「末页翻页钉在页底（位移 ≤2px）」写成 `verify_dedup.py` 的常驻断言，全套 22 项全绿。`vue-tsc` 0 错误。
