@@ -9,10 +9,11 @@
 - [系统状态速览 STATUS](STATUS.md) — 模块表 / 测试基线 / 已知限制 / 未决（★ 迷路先读这个）
 - [AGENTS](AGENTS.md) — AI 代理约定，开工必读
 - [HANDOFF](HANDOFF.md) — 线间交接台（多 agent 协调）
+- [黑话词典](docs/glossary.md) — 项目术语速查（G0/organizer/父块/基线/交付块……看不懂的词先查这里）
 
 ## 契约与决策
 
-- [API 契约 v34](docs/api.md) — 前后端接口（版本以「变更记录」为准）
+- [API 契约 v42](docs/api.md) — 前后端接口（版本以「变更记录」为准）
 - ADR（技术决策，答辩素材）：
   - [0001 架构基线](docs/adr/0001-architecture-baseline.md)
   - [0002 解析栈](docs/adr/0002-parsing-stack.md)
