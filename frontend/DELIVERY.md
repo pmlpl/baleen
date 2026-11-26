@@ -1033,3 +1033,13 @@ grid-template-columns: repeat(6, minmax(0, 1fr));   /* 原:repeat(auto-fill, min
 - 文件头注释写明去向：配置 → `settings.ts`，完整章程 → `charter.ts`。
 
 验证：`vue-tsc --noEmit` 0 错误；浏览器实测个人中心正常渲染、零 JS 报错。
+
+### 追加：个人中心整页下线（api.md v39，主人拍板「先把个人中心裁了」）
+
+v38 收缩后该页只剩头像条 + 章程按钮，已无独有信息（UI设计总监按铁律推演的余波，主人拍板执行）。
+
+- 删 `/profile` 路由与 ProfileView 视图、书立「我的」按钮、NoteView 的 `case 'profile'` 返回文案；`api/profile.ts` 整文件删除。
+- 工作台顶栏「个人中心」链接改为「**知识库章程**」——`/charter` 在工作台态的唯一入口原本就在个人中心里，入口平移顶栏（引导态顶栏本有此链接，两形态同款）。
+- 账号身份顶栏常驻用户名，不丢信息；注册时间无展示位不再提供（死信息）；`/profile` 旧 URL 走 catch-all 回 `/qa`。
+
+验证：`vue-tsc --noEmit` 0 错误；Playwright 8 项全过（顶栏有章程无个人中心/用户名在/书立无「我的」/章程可入/`/profile` 重定向回 `/qa`/零 pageerror）。

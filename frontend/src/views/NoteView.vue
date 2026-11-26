@@ -46,8 +46,6 @@ const backLabel = computed<string>(() => {
       return '返回视频'
     case 'settings':
       return '返回设置'
-    case 'profile':
-      return '返回个人中心'
     case 'charter':
       return '返回章程'
     default:

@@ -171,8 +171,8 @@ watch(basketOpen, (open) => {
       <div class="topbar-inner topbar-inner--wb">
         <RouterLink class="brand" :to="{ name: 'qa' }">baleen</RouterLink>
         <span class="user-box user-box--wb">
-          <RouterLink class="nav-link" :to="{ name: 'profile' }" active-class="nav-link--active">
-            个人中心
+          <RouterLink class="nav-link" :to="{ name: 'charter' }" active-class="nav-link--active">
+            知识库章程
           </RouterLink>
           <span class="user-name">{{ auth.username }}</span>
           <a class="logout" @click="logout">退出</a>
@@ -351,27 +351,6 @@ watch(basketOpen, (open) => {
             <span>{{ basketError }}</span>
             <button type="button" aria-label="关闭提示" @click="basketError = ''">×</button>
           </p>
-          <RouterLink
-            class="rail-item"
-            :to="{ name: 'profile' }"
-            active-class="rail-item--active"
-            title="个人中心"
-          >
-            <svg
-              class="rail-ico"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-              aria-hidden="true"
-            >
-              <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-              <circle cx="12" cy="7" r="4" />
-            </svg>
-            <span class="rail-label">我的</span>
-          </RouterLink>
         </div>
       </aside>
 

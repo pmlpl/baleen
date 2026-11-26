@@ -97,7 +97,6 @@ def test_protected_endpoints_require_auth(env: SimpleNamespace) -> None:
         "/api/qa/sessions",
         "/api/settings",
         "/api/charter",
-        "/api/profile",
     ]:
         resp = env.client.get(path)
         assert resp.status_code == 401, f"{path} 未拦截:{resp.status_code}"
