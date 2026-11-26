@@ -12,41 +12,31 @@
  * 数据全部来自 API(会话/消息已落库),本地 ref 不用 store,不引第三方库。
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import type { ComponentPublicInstance, Directive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
-import { getToken } from '../auth/token'
 import { ApiError, describeApiError } from '../api/http'
 import { listNotes } from '../api/notes'
 import type { NoteListItem } from '../api/notes'
 import { parseAttachment } from '../api/parse'
-import { confirmDialog } from '../utils/confirm'
 import {
-  SESSION_TITLE_MAX,
-  deleteSession,
   getSession,
   listSessions,
   planSessionNote,
-  renameSession,
   saveSessionNote,
-  streamChat,
   type ChatAttachment,
   type ChatImageAttachment,
 } from '../api/qa'
 
-import type {
-  NotePlanResponse,
-  QaMessage,
-  QaSessionItem,
-  SaveNoteRequest,
-} from '../api/qa'
+import type { NotePlanResponse, QaSessionItem, SaveNoteRequest } from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
 import { renderMermaidIn } from '../utils/mermaid'
 import { renderMindmapsIn } from '../utils/mindmap'
 import { renderSvgsIn } from '../utils/svg'
 
 import NotePicker from '../components/NotePicker.vue'
+import SessionSidebar from '../components/SessionSidebar.vue'
 import SlashMenu from '../components/SlashMenu.vue'
+import { useChatSend, type ChatMessage } from '../composables/useChatSend'
 
 const TOP_K = 5
 
@@ -59,15 +49,7 @@ const currentSessionId = ref<number | null>(null)
 // v37 起纸篓是后端软删除(status='archived'),而**所有检索查询本来就过滤
 // status='active'** —— 纸篓里的笔记不可能被命中,所以原先那个「篓」标已无意义,删除。
 
-/** 本地展示:这条消息发出时带走的引用/附件/图片(仅当轮显示,不落库 → 重开会话不回放) */
-interface SentExtras {
-  notes: { id: number; title: string }[]
-  files: string[]
-  images: { name: string; data_url: string }[]
-}
 
-/** 本地消息 = 后端消息 + 检索词(当轮响应才有,不落库 → 重开历史会话不回放) */
-type ChatMessage = QaMessage & { search_query?: string; sent_extras?: SentExtras }
 const messages = ref<ChatMessage[]>([])
 const input = ref('')
 const sending = ref(false)
@@ -625,25 +607,6 @@ async function refreshSessions(): Promise<void> {
   }
 }
 
-/** 会话搜索:按标题过滤侧栏列表(会话多了能定位,不引入额外复杂度) */
-const sessionQuery = ref('')
-const filteredSessions = computed<QaSessionItem[]>(() => {
-  const q = sessionQuery.value.trim().toLowerCase()
-  if (q === '') return sessions.value
-  return sessions.value.filter((s) => s.title.toLowerCase().includes(q))
-})
-
-/**
- * 会话行右侧的日期:M-D。会话的「最近活跃时间」后端没在列表里透出
- * (契约只有 created_at,改它属于 api.md 变更),所以先用创建日做区分。
- * 解析不出来就不显示 —— 宁可少一项,不显示 Invalid Date。
- */
-function shortDate(iso: string): string {
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return ''
-  return `${d.getMonth() + 1}/${d.getDate()}`
-}
-
 onBeforeUnmount(() => {
   stopThinkingTimer()
 })
@@ -714,382 +677,59 @@ async function openSession(id: number): Promise<void> {
   }
 }
 
+// ---------------- 侧栏事件(组件 emit 回来,父组件同步自己持有的数据) ----------------
+
 /**
- * 导出会话为 Markdown。
- * 不能用 <a download>(浏览器无法给导航请求加 Authorization 头),改成 fetch + blob。
+ * 重命名成功:只改本地那一行。后端刻意不刷 updated_at(位次不动),
+ * 所以无需重拉列表 —— 这也是侧栏把它作为事件回传而非直接改 prop 的原因。
  */
-async function exportSession(sessionId: number): Promise<void> {
-  try {
-    const token = getToken()
-    const resp = await fetch(`/api/qa/sessions/${sessionId}/export`, {
-      headers: token === null ? {} : { Authorization: `Bearer ${token}` },
-    })
-    if (!resp.ok) {
-      errorText.value = resp.status === 401 ? '登录已过期,请重新登录' : `导出失败(${resp.status})`
-      return
-    }
-    const text = await resp.text()
-    const url = URL.createObjectURL(new Blob([text], { type: 'text/markdown;charset=utf-8' }))
-    const link = document.createElement('a')
-    link.href = url
-    link.download = `session-${sessionId}.md`
-    link.click()
-    URL.revokeObjectURL(url)
-  } catch {
-    errorText.value = '导出失败:连不上后端'
-  }
+function onSessionRenamed(id: number, title: string): void {
+  const row = sessions.value.find((s) => s.id === id)
+  if (row !== undefined) row.title = title
 }
 
-async function removeSession(id: number): Promise<void> {
-  const ok = await confirmDialog({
-    title: '删除这个会话',
-    body: '会话里的全部消息会一并删除,不可恢复。',
-    confirmText: '删除',
-    danger: true,
-  })
-  if (!ok) return
-  try {
-    await deleteSession(id)
-    if (currentSessionId.value === id) startNew()
-    await refreshSessions()
-  } catch (error) {
-    errorText.value = describeApiError(error)
-  }
+/** 会话已删除:若删的是当前会话则回到新对话,然后重拉列表让位次补齐 */
+async function onSessionDeleted(id: number): Promise<void> {
+  if (currentSessionId.value === id) startNew()
+  await refreshSessions()
 }
-
-// ---------------- 会话行右键菜单 + 行内重命名 ----------------
 
 /**
- * 菜单只由右键唤起(主人拍板「只允许右键触发」),所以不需要 hover 显形的
- * 「⋯」钮 —— 行内除了标题和日期,不再有任何常驻控件。
+ * 发送一问:乐观上屏 → SSE 流式增量 → 结束/失败收尾。
  *
- * 位置用 fixed + 视口坐标:侧栏是 overflow-y:auto 的滚动容器,
- * 绝对定位会被裁掉;菜单挂到 body 上就不受容器裁剪。
+ * 逻辑整体住在 ``composables/useChatSend.ts``(2026-11-26 拆出):
+ * 它读写 16 个本页状态,拆组件会变成 16 个 prop 的管道,所以用 composable
+ * 共享同一份 ref。这里只留装配 —— 传入本页的 ref 与局部回调,
+ * 模板里的 ``@submit.prevent="send()"`` 保持不变。
  */
-interface RowMenuState {
-  open: boolean
-  sessionId: number
-  x: number
-  y: number
-}
-const rowMenu = ref<RowMenuState>({ open: false, sessionId: 0, x: 0, y: 0 })
-const rowMenuEl = ref<HTMLElement | null>(null)
-
-/** 菜单尺寸(用于边界翻转);实际值在打开后量,这里给保守初值 */
-const MENU_W = 168
-const MENU_H = 132
-
-function openRowMenu(event: MouseEvent, sessionId: number): void {
-  event.preventDefault()
-  // 正在回答时不许改会话元数据:删除/重命名都可能让当前流落到一个不存在的会话上
-  if (sending.value) return
-  const vw = window.innerWidth
-  const vh = window.innerHeight
-  // 贴光标弹出;右/下越界就翻到光标另一侧
-  const x = event.clientX + MENU_W > vw ? event.clientX - MENU_W : event.clientX
-  const y = event.clientY + MENU_H > vh ? event.clientY - MENU_H : event.clientY
-  rowMenu.value = { open: true, sessionId, x: Math.max(8, x), y: Math.max(8, y) }
-}
-
-function closeRowMenu(): void {
-  rowMenu.value = { ...rowMenu.value, open: false }
-}
-
-/** 行内重命名:null = 未在编辑 */
-interface RenameState {
-  sessionId: number
-  value: string
-}
-const renaming = ref<RenameState | null>(null)
-/**
- * 重命名输入框:它在 v-for 里,所以用函数式 ref 存元素 ——
- * 字符串 ref 在 v-for 内会被 Vue 收成数组,nextTick 拿到的不是元素。
- */
-let renameInputEl: HTMLInputElement | null = null
-function bindRenameInput(el: Element | ComponentPublicInstance | null): void {
-  renameInputEl = el instanceof HTMLInputElement ? el : null
-}
-const renameError = ref('')
-
-/** 超长即时标记:输入时就地反馈,不靠 toast 弹一句「太长了」 */
-const renameTooLong = computed(
-  () => renaming.value !== null && renaming.value.value.trim().length > SESSION_TITLE_MAX,
-)
-
-function startRename(s: QaSessionItem): void {
-  closeRowMenu()
-  renaming.value = { sessionId: s.id, value: s.title }
-  renameError.value = ''
-  void nextTick(() => {
-    renameInputEl?.focus()
-    renameInputEl?.select() // 全选:常见操作是整体换一个名字
-  })
-}
-
-/** 双击标题进编辑(经典习语)。只在标题文字上生效,不抢日期区 */
-function onTitleDblClick(s: QaSessionItem): void {
-  if (sending.value) return
-  startRename(s)
-}
-
-function cancelRename(): void {
-  renaming.value = null
-  renameError.value = ''
-}
-
-/** 确认重命名:成功就只改本地那一条(后端刻意不刷 updated_at,位次不动,无需重拉列表) */
-async function commitRename(): Promise<void> {
-  const state = renaming.value
-  if (state === null) return
-  const title = state.value.trim()
-  if (title === '') {
-    cancelRename() // 清空等于放弃,不发请求
-    return
-  }
-  if (title.length > SESSION_TITLE_MAX) return // 超长:边框已红,不提交
-  const target = sessions.value.find((s) => s.id === state.sessionId)
-  if (target !== undefined && target.title === title) {
-    cancelRename() // 没改就不发请求
-    return
-  }
-  try {
-    const updated = await renameSession(state.sessionId, title)
-    const row = sessions.value.find((s) => s.id === updated.id)
-    if (row !== undefined) row.title = updated.title
-    cancelRename()
-  } catch (error) {
-    renameError.value = describeApiError(error)
-  }
-}
-
-function onRenameKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Enter') {
-    event.preventDefault()
-    void commitRename()
-  } else if (event.key === 'Escape') {
-    event.preventDefault()
-    cancelRename()
-  }
-}
-
-/** 点菜单外部 / 按 Esc 关菜单(菜单项自己 stop 冒泡) */
-function onDocPointerDown(event: PointerEvent): void {
-  if (!rowMenu.value.open) return
-  const menu = rowMenuEl.value
-  if (menu !== null && event.target instanceof Node && menu.contains(event.target)) return
-  closeRowMenu()
-}
-
-function onDocKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Escape' && rowMenu.value.open) closeRowMenu()
-}
-
-watch(
-  () => rowMenu.value.open,
-  (open) => {
-    if (open) {
-      document.addEventListener('pointerdown', onDocPointerDown, true)
-      document.addEventListener('keydown', onDocKeydown)
-    } else {
-      document.removeEventListener('pointerdown', onDocPointerDown, true)
-      document.removeEventListener('keydown', onDocKeydown)
-    }
+const { send: sendChat } = useChatSend(
+  {
+    input,
+    sending,
+    slashOpen,
+    errorText,
+    messages,
+    currentSessionId,
+    pendingModel,
+    streamingStarted,
+    agentStatus,
+    sentHistory,
+    historyIndex,
+    referencedNotes,
+    attachments,
+    imageAttachments,
+    msgListEl,
+    startThinkingTimer,
+    stopThinkingTimer,
+    scrollBottom,
+    syncSessionUrl,
+    startNew,
+    refreshSessions,
   },
 )
 
-/**
- * 会话标题悬停滚动:超宽时向左匀速滑到末尾再回位,方便看全名。
- * 与书架题签同一套做法(量出溢出像素写进 CSS 变量),只是这里挂在会话行上。
- */
-function checkSessionTitleOverflow(el: HTMLElement): void {
-  const overflowPx = el.scrollWidth - el.clientWidth
-  const tracked = el.classList.contains('session-title--overflow')
-  if (overflowPx > 2) {
-    if (!tracked) el.classList.add('session-title--overflow')
-    el.style.setProperty('--title-shift', `${-overflowPx}px`)
-    // 约 50px/s(会话名比书封短,稍快一点才不至于等太久),最少 2.5s
-    el.style.setProperty('--title-scroll-dur', `${Math.max(2.5, Math.round(el.scrollWidth / 50))}s`)
-  } else if (tracked) {
-    el.classList.remove('session-title--overflow')
-  }
-}
-
-/** 本地指令:逐个标题量宽,只有真溢出的才允许滑动 */
-const vSessionTitleScroll: Directive<HTMLElement> = {
-  mounted: checkSessionTitleOverflow,
-  updated: checkSessionTitleOverflow,
-}
-
-// ---- 菜单三项:菜单只记 sessionId,按 id 找行再分发(菜单自己不持有整个会话对象) ----
-
-function startRenameById(sessionId: number): void {
-  const target = sessions.value.find((s) => s.id === sessionId)
-  if (target !== undefined) startRename(target)
-}
-
-function exportById(sessionId: number): void {
-  closeRowMenu()
-  void exportSession(sessionId)
-}
-
-function deleteById(sessionId: number): void {
-  closeRowMenu()
-  void removeSession(sessionId)
-}
-
-async function send(): Promise<void> {
-  if (sending.value || slashOpen.value) return
-  const text = input.value.trim()
-  if (text === '') {
-    errorText.value = '请输入要问的问题'
-    return
-  }
-  // 记进输入历史(相邻去重),↑ 可召回
-  if (sentHistory.value[sentHistory.value.length - 1] !== text) {
-    sentHistory.value.push(text)
-  }
-  historyIndex.value = -1
-  draftBeforeRecall = ''
-  sending.value = true
-  errorText.value = ''
-  streamingStarted.value = false
-  agentStatus.value = ''
-  startThinkingTimer()
-  // 引用/附件随问题一起出发:捕获进当轮消息(随气泡上屏)、输入框立刻清空,不等 AI 回完。
-  // 流没建立起来时(catch 分支)再原样还回来。
-  const sentExtras: SentExtras = {
-    notes: referencedNotes.value.map((r) => ({ id: r.id, title: r.title })),
-    files: attachments.value.map((a) => a.name),
-    images: imageAttachments.value.map((i) => ({ name: i.name, data_url: i.data_url })),
-  }
-  const refNoteIds = referencedNotes.value.map((r) => r.id)
-  const attachmentsPayload = attachments.value.map((a) => ({ name: a.name, text: a.text }))
-  const imagesPayload = imageAttachments.value.map((i) => ({
-    name: i.name,
-    mime: i.mime,
-    data_url: i.data_url,
-  }))
-  referencedNotes.value = [] // 引用随问题消耗掉
-  attachments.value = [] // 附件随问题消耗掉
-  imageAttachments.value = [] // 图片附件随问题消耗掉
-  // 乐观显示:你的消息立刻上屏;回答经 SSE 流式增量打进一条助手气泡(打字机效果)
-  const tempId = -Date.now()
-  messages.value.push({
-    id: tempId,
-    role: 'user',
-    content: text,
-    citations: [],
-    model: null,
-    cost_tokens: 0,
-    cache_hit_rate: null,
-    cache_hit_tokens: 0,
-    cache_miss_tokens: 0,
-    sent_extras: sentExtras,
-  })
-  input.value = ''
-  scrollBottom()
-  let streamingIdx: number | null = null
-  let usedSearchQuery = ''
-  pendingModel.value = null
-  try {
-    await streamChat(
-      currentSessionId.value,
-      text,
-      {
-        onMeta: (meta) => {
-          usedSearchQuery = meta.search_query
-          pendingModel.value = meta.model ?? null
-          if (currentSessionId.value !== meta.session_id) {
-            currentSessionId.value = meta.session_id
-            syncSessionUrl(meta.session_id)
-          }
-          const idx = messages.value.findIndex((m) => m.id === tempId)
-          // 后端的 user_message 没有 chips 信息,把本地捕获的带上,气泡里继续显示
-          if (idx !== -1)
-            messages.value.splice(idx, 1, { ...meta.user_message, sent_extras: sentExtras })
-          messages.value.push({
-            id: -1,
-            role: 'assistant',
-            content: '',
-            citations: [],
-            model: null,
-            cost_tokens: 0,
-            cache_hit_rate: null,
-            cache_hit_tokens: 0,
-            cache_miss_tokens: 0,
-            search_query: meta.search_query,
-          })
-          streamingIdx = messages.value.length - 1
-          scrollBottom()
-        },
-        onDelta: (t) => {
-          if (!streamingStarted.value) {
-            streamingStarted.value = true // 正文开始,不再显示「思考中」
-            agentStatus.value = ''
-            stopThinkingTimer()
-          }
-          if (streamingIdx !== null && messages.value[streamingIdx] !== undefined) {
-            messages.value[streamingIdx].content += t
-            scrollBottom()
-          }
-        },
-        onStatus: (t) => {
-          // agent 工具轮进度:替换上一条(同一时刻只有一步在跑)
-          agentStatus.value = t
-        },
-        onDone: (d) => {
-          stopThinkingTimer()
-          if (streamingIdx !== null && messages.value[streamingIdx] !== undefined) {
-            messages.value[streamingIdx] = {
-              ...d.assistant_message,
-              search_query: usedSearchQuery,
-            }
-          }
-          // 流式结束才渲染图表(mermaid/SVG 同一纪律):中途渲染会随增量重画抖动
-          // (mermaid 当年实测的教训);两个渲染器都幂等,历史/多轮场景重复调用安全
-          void nextTick(() => {
-            if (msgListEl.value !== null) {
-              void renderMermaidIn(msgListEl.value)
-              void renderMindmapsIn(msgListEl.value)
-              void renderSvgsIn(msgListEl.value)
-            }
-          })
-          void refreshSessions()
-        },
-        onError: (detail) => {
-          stopThinkingTimer()
-          errorText.value = detail
-        },
-      },
-      TOP_K,
-      undefined,
-      refNoteIds,
-      attachmentsPayload,
-      imagesPayload,
-    )
-  } catch (error) {
-    // 流没建立起来(网络/后端未起):撤下乐观消息与空气泡,还原文输入和 chips
-    const idx = messages.value.findIndex((m) => m.id === tempId)
-    if (idx !== -1) messages.value.splice(idx, 1)
-    if (streamingIdx !== null && messages.value[streamingIdx]?.content === '') {
-      messages.value.splice(streamingIdx, 1)
-    }
-    const desc = describeApiError(error)
-    // 发问的会话已被保留策略清理(旧标签页里的闲置会话会被顶掉):开新对话承接,
-    // 提问与引用/附件原样还回输入框,重发即可
-    const sessionGone = error instanceof Error && desc.includes('会话不存在')
-    if (sessionGone) startNew()
-    input.value = text
-    referencedNotes.value = sentExtras.notes.map((n) => ({ ...n }))
-    attachments.value = attachmentsPayload.map((a) => ({ ...a }))
-    imageAttachments.value = imagesPayload.map((im) => ({ ...im }))
-    errorText.value = sessionGone
-      ? '这个会话已被清理(系统只保留最近 50 个),已开新对话;提问还在输入框,重发即可。'
-      : desc
-  } finally {
-    stopThinkingTimer()
-    sending.value = false
-  }
+function send(): void {
+  void sendChat(TOP_K)
 }
 
 function openNote(noteId: number): void {
@@ -1194,69 +834,19 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
 <template>
   <section class="page qa-page">
     <div class="qa-layout manuscript">
-      <aside class="session-side">
-        <div class="session-side-inner">
-          <button class="btn btn--primary new-btn" type="button" @click="startNew">+ 新对话</button>
-          <input
-            v-model="sessionQuery"
-            class="input session-search"
-            type="text"
-            placeholder="搜索会话…"
-            aria-label="搜索会话"
-          />
-          <ul v-if="filteredSessions.length > 0" class="session-list">
-            <li
-              v-for="s in filteredSessions"
-              :key="s.id"
-              class="session-item"
-              :data-session-id="s.id"
-              :class="{
-                'session-item--active': s.id === currentSessionId,
-                'session-item--renaming': renaming?.sessionId === s.id,
-              }"
-              @contextmenu="openRowMenu($event, s.id)"
-            >
-              <!-- 重命名:标题位原地变输入框 -->
-              <input
-                v-if="renaming?.sessionId === s.id"
-                :ref="bindRenameInput"
-                v-model="renaming.value"
-                class="session-rename-input"
-                :class="{ 'session-rename-input--over': renameTooLong }"
-                type="text"
-                :maxlength="SESSION_TITLE_MAX + 20"
-                :aria-label="`重命名会话,最多 ${SESSION_TITLE_MAX} 字`"
-                @keydown="onRenameKeydown"
-                @blur="commitRename"
-                @contextmenu.stop
-              />
-              <button
-                v-else
-                class="session-open"
-                type="button"
-                :title="s.title"
-                @click="openSession(s.id)"
-                @dblclick.prevent="onTitleDblClick(s)"
-              >
-                <!-- 外筒负责裁切与宽度,内层负责滑动(与书架题签同一套 v-title-scroll 做法) -->
-                <span v-session-title-scroll class="session-title">
-                  <span class="session-title-text">{{ s.title }}</span>
-                </span>
-                <!-- 日期:同名会话(实测 44 条里 11 条同名)靠它区分;只到日,不占宽度 -->
-                <span class="session-date">{{ shortDate(s.created_at) }}</span>
-              </button>
-            </li>
-          </ul>
-          <p v-else class="muted side-empty">
-            {{ sessions.length === 0 ? '还没有历史会话' : '没有匹配的会话' }}
-          </p>
-          <!-- 重命名失败提示:必须放在 v-if/v-else 整组之外 ——
-               夹在两者之间会把它们拆成两个独立条件,列表和空态就会同时渲染 -->
-          <p v-if="renameError !== ''" class="note note--error session-rename-error">
-            {{ renameError }}
-          </p>
-        </div>
-      </aside>
+      <!-- 侧栏(会话列表/搜索/右键菜单/重命名)已拆成组件:
+           它只操作列表自身,与聊天主流程仅通过「打开哪条会话」相连 -->
+      <SessionSidebar
+        :sessions="sessions"
+        :current-session-id="currentSessionId"
+        :sending="sending"
+        @new="startNew"
+        @open="openSession"
+        @renamed="onSessionRenamed"
+        @deleted="onSessionDeleted"
+        @error="errorText = $event"
+      />
+
 
       <div class="chat-main" @dragover.prevent @drop.prevent="onChatDrop">
         <!-- 新对话空态:只留一句「问什么」。操作入口不进这里 ——
@@ -1574,41 +1164,6 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
       </div>
 
     </div>
-
-    <!-- 会话行右键菜单:fixed 定位(侧栏是滚动容器,绝对定位会被裁)。
-         三项:重命名 / 导出 Markdown / 删除,删除单独一组靠分隔线隔开 -->
-    <div
-      v-if="rowMenu.open"
-      ref="rowMenuEl"
-      class="row-menu card"
-      role="menu"
-      :style="{ left: `${rowMenu.x}px`, top: `${rowMenu.y}px` }"
-      @contextmenu.prevent
-    >
-      <button class="row-menu-item" type="button" role="menuitem" @click="startRenameById(rowMenu.sessionId)">
-        <span class="row-menu-ico" aria-hidden="true">✎</span>
-        重命名
-      </button>
-      <button
-        class="row-menu-item"
-        type="button"
-        role="menuitem"
-        @click="exportById(rowMenu.sessionId)"
-      >
-        <span class="row-menu-ico" aria-hidden="true">↓</span>
-        导出 Markdown
-      </button>
-      <div class="row-menu-sep" aria-hidden="true"></div>
-      <button
-        class="row-menu-item row-menu-item--danger"
-        type="button"
-        role="menuitem"
-        @click="deleteById(rowMenu.sessionId)"
-      >
-        <span class="row-menu-ico" aria-hidden="true">×</span>
-        删除
-      </button>
-    </div>
   </section>
 </template>
 
@@ -1643,137 +1198,30 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
    宽度 176→248:实测 176 下 44 条会话有 38 条被截断(86%)。
    配合导出/删除改绝对定位(不再占宽),标题可用宽度 99→189px,
    常见长度的标题能完整显示;问答页已是 1440 宽档,这一栏不挤对话列。 */
-.session-side {
-  position: relative;
-  flex-shrink: 0;
-  width: 248px;
-}
 
-.session-side-inner {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-}
 
 /* 新对话:浅黛青(不用全局墨底主钮——纸面上大面积黑太刺眼) */
-.new-btn {
-  width: 100%;
-  margin-bottom: 10px;
-  border-color: rgba(61, 90, 115, 0.4);
-  background: var(--accent-soft);
-  color: var(--accent-ink);
-}
 
-.new-btn:hover:not(:disabled) {
-  border-color: var(--accent);
-  background: rgba(61, 90, 115, 0.14);
-}
 
-.side-empty {
-  font-size: 13px;
-}
 
 /* 会话列表 = 书签绳:左侧一道竖虚线作绳,每条会话是挂在其上的签,
    签结小圆点,当前会话系朱砂结;不再是卡片列表 */
-.session-list {
-  display: flex;
-  list-style: none;
-  flex-direction: column;
-  gap: 2px;
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 2px 0 6px 14px;
-  border-left: 1px dashed var(--line-strong);
-  /* 细墨滚动条:换掉 Windows 原生粗轨道(带 ▲▼ 箭头,像把内容遮了一截) */
-  scrollbar-width: thin;
-  scrollbar-color: var(--line-strong) transparent;
-}
 
-.session-list::-webkit-scrollbar {
-  width: 6px;
-}
 
-.session-list::-webkit-scrollbar-track {
-  background: transparent;
-}
 
-.session-list::-webkit-scrollbar-thumb {
-  border-radius: 3px;
-  background: var(--line-strong);
-}
 
-.session-item {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
 
 /* 签结 */
-.session-item::before {
-  content: '';
-  position: absolute;
-  left: -17.5px;
-  top: 50%;
-  width: 7px;
-  height: 7px;
-  border: 1.5px solid var(--line-strong);
-  border-radius: 50%;
-  background: var(--panel);
-  transform: translateY(-50%);
-}
 
 /* 当前会话:朱砂结 + 提字 */
-.session-item--active::before {
-  border-color: var(--seal);
-  background: var(--seal);
-}
 
-.session-item--active .session-open {
-  color: var(--ink);
-  font-weight: 600;
-}
 
-.session-open {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  align-items: baseline;
-  gap: 6px;
-  overflow: hidden;
-  padding: 6px 4px 6px 6px;
-  border: none;
-  background: none;
-  color: var(--ink-2);
-  cursor: pointer;
-  font-size: 13px;
-  text-align: left;
-}
 
 /* 标题:外筒裁切,内层滑动。
    超宽时悬停向左匀速滑到末尾再回位,方便看全名(与书架题签同一套指令做法);
    只有真溢出的行才会被加上 --overflow 类,短标题不会乱动。 */
-.session-title {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  /* 右缘 10px 渐隐:提示「后面还有字」,比省略号更安静 */
-  mask-image: linear-gradient(90deg, #000 calc(100% - 10px), transparent);
-  -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 10px), transparent);
-}
 
-.session-title-text {
-  display: inline-block;
-  padding-right: 1.2em; /* 滑到尽头时末字不贴边 */
-  white-space: nowrap;
-}
 
-.session-title--overflow:hover .session-title-text {
-  animation: session-title-scroll var(--title-scroll-dur, 4s) linear infinite;
-}
 
 @keyframes session-title-scroll {
   0%,
@@ -1787,56 +1235,16 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
   }
 }
 
-.session-date {
-  flex-shrink: 0;
-  color: var(--ink-3);
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
 
-.session-open:hover {
-  color: var(--accent-ink);
-}
 
 /* ---------- 行内重命名 ---------- */
 
-.session-rename-input {
-  width: 100%;
-  min-width: 0;
-  padding: 4px 8px;
-  border: 1px solid var(--accent);
-  border-radius: 6px;
-  background: var(--panel);
-  color: var(--ink);
-  font-family: inherit;
-  font-size: 13px;
-  outline: none;
-  box-shadow: 0 0 0 3px rgba(61, 90, 115, 0.12);
-}
 
 /* 超长:边框转朱砂 —— 就地反馈,不弹 toast 说「太长了」 */
-.session-rename-input--over {
-  border-color: var(--seal);
-  box-shadow: 0 0 0 3px rgba(176, 58, 46, 0.14);
-}
 
-.session-rename-error {
-  margin-top: 6px;
-  font-size: 12px;
-}
 
 /* ---------- 右键菜单:一枚贴在书签上的便签 ---------- */
 
-.row-menu {
-  position: fixed;
-  /* 层级:顶栏 10 / 灯箱 1000 / 纸篓 1100 / 飞纸 1200 / 确认框 1300。
-     菜单要压过页面内容与顶栏,但低于灯箱/纸篓这类真正的模态层 */
-  z-index: 900;
-  min-width: 168px;
-  padding: 5px;
-  box-shadow: var(--shadow-lift);
-  animation: row-menu-in 0.12s ease;
-}
 
 @keyframes row-menu-in {
   from {
@@ -1850,59 +1258,15 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
   }
 }
 
-.row-menu-item {
-  display: flex;
-  width: 100%;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 10px;
-  border: none;
-  border-radius: 7px;
-  background: none;
-  color: var(--ink);
-  cursor: pointer;
-  font-family: inherit;
-  font-size: 13px;
-  text-align: left;
-}
 
-.row-menu-item:hover {
-  background: var(--bg-soft);
-}
 
 /* 图标固定 14px 宽,中英混排时三项文字左边对齐 */
-.row-menu-ico {
-  display: inline-flex;
-  width: 14px;
-  flex-shrink: 0;
-  justify-content: center;
-  color: var(--ink-3);
-  font-size: 13px;
-}
 
-.row-menu-item:hover .row-menu-ico {
-  color: var(--accent-ink);
-}
 
-.row-menu-sep {
-  height: 1px;
-  margin: 4px 8px;
-  background: var(--line);
-}
 
 /* 删除:平时朱砂字,hover 才铺底 —— 危险但在菜单里不必一直喊 */
-.row-menu-item--danger {
-  color: var(--seal);
-}
 
-.row-menu-item--danger .row-menu-ico {
-  color: var(--seal);
-  font-size: 15px;
-}
 
-.row-menu-item--danger:hover {
-  background: var(--seal-soft);
-}
 
 /* ---- 新对话空态(高度随纸面自适应) ---- */
 .qa-empty {
@@ -1940,11 +1304,6 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
 }
 
 /* 会话搜索框:压在「+ 新对话」和书签绳之间,占位小、不抢戏 */
-.session-search {
-  margin-bottom: 10px;
-  padding: 6px 10px;
-  font-size: 13px;
-}
 
 /* 单列对话流:问答同列按时间垂直下行,通栏放宽、两侧只留 24px 呼吸边距;
    高度吃满纸面剩余并内部滚动,输入栏钉在视口底部 */
