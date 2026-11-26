@@ -1,4 +1,4 @@
-# API 契约 v37
+# API 契约 v38
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -637,6 +637,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-26 | v38 | **`GET /api/profile` 收缩到两项**（主人 2026-11-25 铁律「不重叠功能和内容」）：删 `settings`（与 `GET /api/settings` 六字段完全同口径——原测试直接断言两者相等，自证重复）、`stats`（前端使用统计区块已删，无人消费）、`charter.preview`（截断不可读，真源在 `GET /api/charter`）。只留 `user`（注册时间无处可查，本端点独有）与 `charter.has_charter`（前端据此决定按钮文案）。响应从四块变两块，密钥相关内容完全不出此端点。无迁移、无新端点；前端 `api/profile.ts` 类型同步收缩 |
 | 2026-11-25 | v37 | **笔记纸篓（软删除）**：§3 `DELETE /api/notes/{id}` 从真删除改为**移入纸篓**（`status='archived'` + `archived_at`），依据 ADR 0003 §3⑤ 原设计（软删+检索过滤+定时清理，字段与过滤早已就位但从未接上）。新增 `GET /api/notes/trash`（清单带 `archived_at`/`expires_at`/`days_left`，`retention_days=30` 随响应下发，`days_left` 后端向上取整）、`POST /api/notes/{id}/restore`（放回，零成本）、`DELETE /api/notes/{id}/purge`（彻底删除，只认 archived 防绕过）。保留期 **30 天**，从 `archived_at`（移入那一刻）起算，arq cron 每日 03:10 清理（`purge_expired_trash`；⚠️ 依赖 worker 存活）。迁移 **0019** `notes.archived_at` + 局部索引（`WHERE status='archived'`）。连带：`_reset_stale_done_job` 改三分类判据（无 active 但有 archived → 重导必须重跑，否则「删了再导入」被静默去重）。前端退役 localStorage 纸篓（旧方案换浏览器即空、不同账号共用同一 key），改查后端；「篓」引用标随之下线（检索已不命中 archived）。**背景（主人 2026-11-25 三条诉求）**：纸篓应 30 天自动删除、不同用户不互通、换浏览器纸篓还在 |
 | 2026-11-25 | v36 | **会话重命名**：§5 会话管理新增 `PATCH /api/qa/sessions/{id}`——body `{"title"}`（1–30 字，剥首尾空白；长度与首问标题同口径 `TITLE_CHARS=30`），返回 `{id,title,created_at}`；不存在/非本人会话 404，空白 422。**不刷 `updated_at`**——「最近活跃」只认落消息，重命名不算活跃，列表位次不动。**CORS `allow_methods` 补 `PATCH`**（B5 显式清单的首个 PATCH 路由，分域部署时预检会拒，开发态 vite 同源看不出；`test_cors.py` 同步——清单外拒绝例改 TRACE）。配套前端（UI 设计阶段）：侧栏会话行右键菜单（删除/导出/重命名）+ 行内编辑重命名 |
 | 2026-11-22 | v35 | **转写治本三件套**（spike 实测拍板，eval/runs/transcribe_spike_2026-11-22.md）：①whisper 模型 small→**large-v3-turbo**（专名原生准确率接近 large-v3、速度等同 small、显存 Δ2.3GB）+**language=None 自动检测**（zh 强制对英文视频是灾难放大器——8093 专名错字 ≥20 的根源）；模型文件预置在仓库根之外的 models/ 目录（.env `WHISPER_MODEL_DIR` 指路，生产禁运行时在线下载——spike 在线 load 63min 教训；未配置退回 hub 名）。②worker 管线转写后、organizer 前插 **LLM 自校正 pass**：盲修疑似错听的专名/术语（零词典宁缺毋滥，只出修改清单程序化应用），修正留痕写 `parse_meta.llm_transcript_fix`；LLM 失败降级用原转写（凡失败必留痕），输入 3 万字符封顶，max_tokens 16000（推理网关 8000 全烧 reasoning 教训）；client 可注入可 mock。③`video_log` 新 stage「转写校正中…」；pipeline video_keep 白名单放行新键。测试 +7（turbo/None 参数断言、校正应用/降级/skipped/封顶、留痕 merge）；真链路验证留给下一批喂料 |
@@ -717,24 +718,27 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 ---
 
-## 10. 个人中心（**已实现**,2026-11-14 v26）
+## 10. 个人中心（**已实现**,2026-11-14 v26；**v38 收缩**）
 
-`GET /api/profile` —— 一次聚合个人中心一屏所需的数据:用户信息、使用统计、章程预览、配置掩码视图。纯读端点,复用现有数据访问,无新表无迁移;编辑动作仍走原有端点(章程 → §8,配置 → §6)。
+`GET /api/profile` —— **只回两项**:账号身份 + 是否已填章程。纯读端点,无新表无迁移。
 
 ```json
 {
   "user": { "id": 1, "username": "alice", "created_at": "2026-10-30T12:57:59+08:00" },
-  "stats": { "notes": 15, "sources": 20, "qa_sessions": 8, "qa_messages": 96 },
-  "charter": { "has_charter": true, "preview": "## 这是谁的库\n我是一名……(超长截断加「…」)" },
-  "settings": {
-    "llm_base_url": "http://…", "llm_model": "deepseek-flash",
-    "api_key_set": true, "api_key_tail": "abcd",
-    "tavily_set": false, "tavily_tail": ""
-  }
+  "charter": { "has_charter": true }
 }
 ```
 
-- `stats.notes` 只数 `active` 笔记(口径同 `GET /api/notes` 的 total,archived 不数);`sources` 是导入来源总数;统计全部按 `owner_id` 隔离
-- `charter.preview` 是章程**前 300 字**(超长截断加「…」);完整章程走 `GET /api/charter`,编辑走问卷/`PUT /api/charter`
-- `settings` 六字段与 `GET /api/settings` 完全同口径:掩码视图,密钥只回「是否已设置 + 末 4 位」,**永不回显全文**
-- 需要token,401 行为同 §9;响应固定四块 `user / stats / charter / settings`,不夹带其他字段
+**v38 为什么砍掉三块**（主人 2026-11-25 铁律「不重叠功能和内容」）：
+
+| 原字段 | 为何删除 | 现在去哪儿 |
+|---|---|---|
+| `settings`（网关/模型/密钥掩码六字段） | 与 `GET /api/settings` **完全同口径**（原测试直接断言两者相等，等于自证重复） | `GET /api/settings`（§6，唯一真源） |
+| `stats`（notes/sources/qa_sessions/qa_messages） | 前端使用统计区块已按主人意见删除，无人消费 | 各处列表端点自己的 `total` |
+| `charter.preview`（章程前 300 字） | 截断后不可读，完整真源在别处 | `GET /api/charter`（§8） |
+
+- 保留 `user`：顶栏只有用户名，注册时间无处可查，是本端点独有信息
+- 保留 `charter.has_charter`：前端据此决定按钮文案「知识库章程」还是「填写章程问卷」。用 `GET /api/charter` 也能判，但那要拉全文，只为取一个布尔值不值得
+- **密钥相关内容完全不出这个端点** —— 从根上消除「同一份掩码两处返回」的风险
+- 需要 token，401 行为同 §9；响应固定两块 `user / charter`，**不夹带其他字段**（测试守门）
+

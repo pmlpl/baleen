@@ -1,7 +1,12 @@
 /**
- * 个人中心接口封装。GET /api/profile —— 一次聚合:用户信息 + 使用统计 + 章程预览 + 配置掩码。
- * 纯读;编辑动作走原有端点(章程 → charter.ts,配置 → settings.ts)。
- * settings 块与 GET /api/settings 同口径:密钥只回「是否已设置 + 末 4 位」。
+ * 个人中心接口封装。GET /api/profile —— 只回两项:账号身份 + 是否已填章程。
+ *
+ * **v38 收缩**：原四块聚合里的 `settings`(密钥掩码)、`stats`(使用计数)、
+ * `charter.preview`(章程前 300 字)都是别处数据的第二份拷贝,按主人
+ * 2026-11-25「不重叠功能和内容」铁律全部删除。
+ *
+ * 要配置 → `GET /api/settings`(settings.ts)
+ * 要完整章程 → `GET /api/charter`(charter.ts)
  */
 import { http } from './http'
 
@@ -12,35 +17,14 @@ export interface ProfileUser {
   created_at: string
 }
 
-export interface ProfileStats {
-  /** active 笔记数(口径同 GET /api/notes 的 total) */
-  notes: number
-  /** 导入来源总数 */
-  sources: number
-  qa_sessions: number
-  qa_messages: number
-}
-
 export interface ProfileCharter {
+  /** 只回「填没填」;完整内容走 GET /api/charter */
   has_charter: boolean
-  /** 章程前 300 字(超长带「…」);完整内容走 GET /api/charter */
-  preview: string | null
-}
-
-export interface ProfileSettings {
-  llm_base_url: string
-  llm_model: string
-  api_key_set: boolean
-  api_key_tail: string
-  tavily_set: boolean
-  tavily_tail: string
 }
 
 export interface Profile {
   user: ProfileUser
-  stats: ProfileStats
   charter: ProfileCharter
-  settings: ProfileSettings
 }
 
 export function getProfile(): Promise<Profile> {

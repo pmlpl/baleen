@@ -1023,3 +1023,13 @@ grid-template-columns: repeat(6, minmax(0, 1fr));   /* 原:repeat(auto-fill, min
 验证：`verify_dedup.py` 追加两条断言——「模型配置」文字不出现、`.links-card .btn` 计数 == 1；全套 21 项全绿；`vue-tsc` 0 错误。
 
 **注意**：后端 `GET /api/profile` 仍返回 `settings` 块（llm_base_url/model/密钥掩码），前端已不再使用。删除它属于 `api.md` 契约变更（v38），本批未动 —— 如要一并清理需单独裁决。
+
+### 追加：`api/profile.ts` 类型收缩（配后端 v38）
+
+后端 `GET /api/profile` 从四块聚合收缩到两项（`user` + `charter.has_charter`），删掉 `settings` / `stats` / `charter.preview` 三个前端已不消费的死块。
+
+- 删 `ProfileStats`、`ProfileSettings` 两个 interface；`ProfileCharter` 只留 `has_charter`（删 `preview`）。
+- `ProfileView.vue` **无需改动**——它本来就只用 `user.{id,username,created_at}` 与 `charter.has_charter`（grep 验证过），这也是判定那三块是死数据的依据。
+- 文件头注释写明去向：配置 → `settings.ts`，完整章程 → `charter.ts`。
+
+验证：`vue-tsc --noEmit` 0 错误；浏览器实测个人中心正常渲染、零 JS 报错。
