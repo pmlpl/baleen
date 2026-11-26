@@ -1022,7 +1022,7 @@ grid-template-columns: repeat(6, minmax(0, 1fr));   /* 原:repeat(auto-fill, min
 
 验证：`verify_dedup.py` 追加两条断言——「模型配置」文字不出现、`.links-card .btn` 计数 == 1；全套 21 项全绿；`vue-tsc` 0 错误。
 
-**注意**：后端 `GET /api/profile` 仍返回 `settings` 块（llm_base_url/model/密钥掩码），前端已不再使用。删除它属于 `api.md` 契约变更（v38），本批未动 —— 如要一并清理需单独裁决。
+**注意**：后端 `GET /api/profile` 当时仍返回 `settings` 块（llm_base_url/model/密钥掩码），前端已不再使用。**该冗余已在同日下一批清理完毕**（api.md v38，见下方「追加」），此段仅记录当时状态。
 
 ### 追加：`api/profile.ts` 类型收缩（配后端 v38）
 
