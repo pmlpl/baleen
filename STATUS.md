@@ -14,6 +14,7 @@
 
 | 日期 | 批次 | 一句话 | pytest |
 |---|---|---|---|
+| 2026-11-27 | 挂账③slash 弹层样式副本归一 | SlashMenu/NotePicker/QaView 三处逐字相同的 scoped 副本归一到全局 styles.css（slash 五族 + np-cancel）；删 `.slash-menu--picker` 死类（z-index 与全局逐字重复）；真机等价网 11/11 PASS（计算样式逐项一致） | 725 |
 | 2026-11-27 | 挂账②used_web 时点语义收口 | SSE meta 事件移除 used_web（agent 模式下 meta 时点真值结构性未知恒 False、决策树模式是预检时点值——同一字段两种语义且前端零消费）；唯一真源=终值（非流式 ChatResponse.used_web 照旧，流式看 done 的 citations 带 url）；api.md v44；补流式「agent 回落+联网」API 级测试（原批欠账） | 725 |
 | 2026-11-27 | 挂账①HTML附件 text="" 修复 | 三个根因坐实并修：未闭合 `<head>`（skip 卡死吞正文）+ 正文裹 `<template>` → **首轮空结果自动回退粗提取**（skip 集去 head/template/title 重喂+警告留痕）；UTF-16LE+BOM（Word 另存常见）在 utf-8/gb18030 下不报错只出 NUL 乱码 → `_decode` 先认 BOM。已知限制：未闭合 `<style>` 中段的部分丢失仍存在（粗提取保留 style 防 CSS 混正文） | 724 |
 | 2026-11-27 | ruff 清债 + CI 第五道门 | 存量 144 错全修（含 F821 隐性雷：summarizer 用 LLMClient 没 import）+ 63 文件 format 重排 + CI/pre-commit 装 ruff 闸；**prompt 字节等价用 AST 探针证明**（66 文件 vs HEAD 非 docstring 字符串常量全等，唯二差异是 UP012/UP037 自动修）；organizer.py E501 单文件豁免（prompt 三引号内中文超宽，折行=改 prompt 字节） | 720 |

@@ -39,7 +39,7 @@ const emit = defineEmits<{
   <!-- /检索 的笔记选择器:输入文字按标题筛,点击引用;
        全屏遮罩兜底「点外部也能退出」,菜单本体盖在遮罩之上 -->
   <div v-if="open" class="picker-mask" aria-hidden="true" @click="emit('close')"></div>
-  <div v-if="open" class="slash-menu card slash-menu--picker">
+  <div v-if="open" class="slash-menu card">
     <div class="picker-head">
       <span class="picker-title muted">选择要引用的笔记</span>
       <button class="np-cancel" type="button" @click="emit('close')">取消</button>
@@ -60,30 +60,15 @@ const emit = defineEmits<{
   </div>
 </template>
 
+<!-- slash-* 弹层与 .np-cancel 基础样式在全局 styles.css(挂账③收口,不再各带副本);
+     这里只留选择器私有的遮罩/头部布局 -->
 <style scoped>
-/* 从 QaView 原样搬来;SlashMenu 的命令菜单用同名类,样式同源(那边有自己的副本) */
-.slash-menu {
-  position: absolute;
-  bottom: calc(100% + 8px);
-  left: 0;
-  right: 0;
-  z-index: 30;
-  max-height: 280px;
-  padding: 6px;
-  overflow-y: auto;
-  box-shadow: var(--shadow);
-}
-
 /* 全屏遮罩兜底「点外部退出」,菜单本体盖在遮罩上 */
 .picker-mask {
   position: fixed;
   inset: 0;
   z-index: 29;
   background: rgba(20, 24, 33, 0.18);
-}
-
-.slash-menu--picker {
-  z-index: 30;
 }
 
 .picker-head {
@@ -97,54 +82,7 @@ const emit = defineEmits<{
   font-size: 12.5px;
 }
 
-/* 取消按钮:与 QaView 存笔记选项卡的 .np-cancel 同名同源,这边带一份自己的副本 */
-.np-cancel {
-  margin-top: 10px;
-  border: none;
-  background: none;
-  color: var(--ink-3);
-  cursor: pointer;
-  font-size: 12.5px;
-}
-
-.np-cancel:hover:not(:disabled) {
-  color: var(--accent);
-}
-
 .picker-head .np-cancel {
   margin-top: 0;
-}
-
-.slash-item {
-  display: flex;
-  width: 100%;
-  align-items: baseline;
-  gap: 10px;
-  padding: 8px 10px;
-  border: none;
-  border-radius: 7px;
-  background: none;
-  cursor: pointer;
-  text-align: left;
-}
-
-.slash-name {
-  color: var(--accent-ink);
-  font-size: 13px;
-  font-weight: 600;
-  white-space: nowrap;
-}
-
-.slash-desc {
-  overflow: hidden;
-  color: var(--ink-2);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.slash-empty {
-  padding: 10px;
-  font-size: 12.5px;
 }
 </style>

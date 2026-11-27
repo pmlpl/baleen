@@ -1757,20 +1757,8 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
   gap: 8px;
 }
 
-.np-cancel {
-  margin-top: 10px;
-  border: none;
-  background: none;
-  color: var(--ink-3);
-  cursor: pointer;
-  font-size: 12.5px;
-}
-
-.np-cancel:hover:not(:disabled) {
-  color: var(--accent);
-}
-
-/* ---- 斜杠命令菜单 / 笔记选择器:弹层样式已随 UI 拆进 components/SlashMenu.vue 与 NotePicker.vue ---- */
+/* ---- 斜杠命令菜单 / 笔记选择器:弹层与 .np-cancel 样式已归一到全局 styles.css
+     (2026-11-27 挂账③收口,原先 SlashMenu/NotePicker/QaView 各带一份副本) ---- */
 .chat-input--anchor {
   position: relative;
 }

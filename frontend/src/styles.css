@@ -910,3 +910,68 @@ a.sec-link {
   background: var(--spine, var(--ink-3));
   opacity: 0.9;
 }
+
+/* ---- slash 命令弹层 + 笔记选择器(2026-11-27 挂账③收口:原先 SlashMenu/NotePicker 各带一份
+   byte 相同的 scoped 副本,现归一到这里;两处模板类名不变,仅去重) ---- */
+.slash-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 30;
+  max-height: 280px;
+  padding: 6px;
+  overflow-y: auto;
+  box-shadow: var(--shadow);
+}
+
+.slash-item {
+  display: flex;
+  width: 100%;
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.slash-item--active {
+  background: var(--accent-soft);
+}
+
+.slash-name {
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.slash-desc {
+  overflow: hidden;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.slash-empty {
+  padding: 10px;
+  font-size: 12.5px;
+}
+
+/* 弹层「取消」小字按钮(存笔记选项卡/笔记选择器共用;各处的局部差异自行覆盖) */
+.np-cancel {
+  margin-top: 10px;
+  border: none;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.np-cancel:hover:not(:disabled) {
+  color: var(--accent);
+}
