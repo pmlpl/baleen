@@ -534,8 +534,20 @@ textarea:focus-visible {
 /* Graphviz 渲染的流程图(utils/viz.ts)。
    svg 自带 px 固有尺寸(由 pt 换算),这里只做「宽容器不放大、窄容器等比缩小」:
    **绝不能用 width:100%** —— 那会把 335px 宽的图拉到容器宽度,字随之放大到 2 倍
-   (主人 2026-11-27 现场:图占满整屏)。max-width:100% 只会缩小、不会放大。 */
+   (主人 2026-11-27 现场:图占满整屏)。max-width:100% 只会缩小、不会放大。
+
+   **盒子要跟着图收缩**:`.mermaid-figure` 是块级/撑满的,图窄的时候右侧会留出
+   一大片空白边框(实测图 519px、盒子 1090px,空了 571px),看着还是「占满宽度」。
+   所以这里改成 inline-flex + 宽度由内容决定,再用 margin auto 居中。 */
 .mermaid-figure--graphviz {
+  /* 收缩到内容宽度:图窄时盒子不再铺满,否则右侧一大片空白边框看着还是「占满」。
+     保持块级(flex)+ width:fit-content,margin auto 才能生效靠中;
+     用 inline-flex 的话是行内级,auto 边距不居中。 */
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
   justify-content: center;
   /* 缩放/平移后内容会超出,必须裁掉(否则溢出到正文上) */
   overflow: hidden;
