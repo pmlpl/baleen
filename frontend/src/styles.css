@@ -532,17 +532,31 @@ textarea:focus-visible {
 }
 
 /* Graphviz 渲染的流程图(utils/viz.ts)。
-   Graphviz 按 pt 输出,**字号回到正文大小时图会很高**(实测 1064×1154,占两屏),
-   所以这里反向收紧:限高 + 让 svg 按容器宽度自适应(宽度 100% 时高度等比缩)。
-   同时把 Graphviz 的纯黑描边换成墨色、圆角方框,和纸墨主题一致。 */
+   svg 自带 px 固有尺寸(由 pt 换算),这里只做「宽容器不放大、窄容器等比缩小」:
+   **绝不能用 width:100%** —— 那会把 335px 宽的图拉到容器宽度,字随之放大到 2 倍
+   (主人 2026-11-27 现场:图占满整屏)。max-width:100% 只会缩小、不会放大。 */
 .mermaid-figure--graphviz {
   justify-content: center;
+  /* 缩放/平移后内容会超出,必须裁掉(否则溢出到正文上) */
+  overflow: hidden;
+  padding: 8px;
 }
 
 .mermaid-figure--graphviz svg {
-  width: 100%;
-  max-width: 760px;
+  max-width: 100%;
   height: auto;
+  /* 竖向长流程图会很高,限高后等比缩,避免一张图占两屏 */
+  max-height: 560px;
+  cursor: grab;
+}
+
+.mermaid-figure--graphviz svg:active {
+  cursor: grabbing;
+}
+
+/* 放大过/拖过之后才需要抓手光标 */
+.mermaid-figure--graphviz.is-panning svg {
+  cursor: grabbing;
 }
 
 .mermaid-figure--graphviz .node polygon,

@@ -170,7 +170,15 @@ function openLightbox(svg: SVGSVGElement): void {
     </div>`
 
   const canvas = lightboxEl.querySelector('.mermaid-lightbox-canvas')
-  canvas?.appendChild(svg.cloneNode(true))
+  // cloneNode 会把内联 transform 一起复制 —— 如果图在页面里被拖动/缩放过,
+  // 灯箱里就会接着那个状态显示(图跑到视野外 = 「放大后看不见图」)。
+  // 灯箱应该是干净的原始视图,所以显式清掉 transform。
+  const clone = svg.cloneNode(true) as SVGSVGElement
+  clone.style.transform = ''
+  clone.style.transformOrigin = ''
+  clone.style.maxWidth = 'none'
+  clone.style.maxHeight = 'none'
+  canvas?.appendChild(clone)
 
   // 滚轮缩放:以鼠标位置为锚点(放大时光标下的那一点不动)
   const bodyEl = lightboxEl.querySelector<HTMLElement>('.mermaid-lightbox-body')
@@ -232,6 +240,20 @@ function openLightbox(svg: SVGSVGElement): void {
 
 /** 全局只挂一次的点击委托:点任何 .mermaid-figure 开灯箱 */
 let clickBound = false
+/** 拖拽刚结束 / 双击已处理时置位,让紧随其后的 click 不要开灯箱 */
+let suppressFigureClick = false
+/** 待开的灯箱定时器:双击复位要能取消它 */
+let pendingLightboxTimer: number | null = null
+
+/** 双击判定的时间窗(ms)。在这个窗口内的第二次落点算双击 */
+const DOUBLE_TAP_MS = 340
+
+function cancelPendingLightbox(): void {
+  if (pendingLightboxTimer !== null) {
+    window.clearTimeout(pendingLightboxTimer)
+    pendingLightboxTimer = null
+  }
+}
 
 function bindFigureClick(): void {
   if (clickBound) return
@@ -240,12 +262,138 @@ function bindFigureClick(): void {
     const target = event.target as HTMLElement
     const figure = target.closest<HTMLElement>('.mermaid-figure')
     if (figure === null || lightboxEl !== null) return
-    const svg = figure.querySelector('svg')
-    if (svg !== null) {
-      event.preventDefault()
-      openLightbox(svg)
+    if (suppressFigureClick) {
+      suppressFigureClick = false
+      return
     }
+    const svg = figure.querySelector('svg')
+    if (svg === null) return
+
+    event.preventDefault()
+    // **延迟开灯箱**:如果立刻开,双击的第二次点击会落到灯箱上而不是图上,
+    // 于是「双击复位」永远收不到第二次点击(实测:第一次点击就把灯箱打开了)。
+    // 留一个等于双击时间窗的延迟,双击时由 pointerup 取消这次开灯箱。
+    cancelPendingLightbox()
+    pendingLightboxTimer = window.setTimeout(() => {
+      pendingLightboxTimer = null
+      if (lightboxEl === null) openLightbox(svg)
+    }, DOUBLE_TAP_MS)
   })
+}
+
+/**
+ * Graphviz 出的静态 SVG 补上「抓拖 + 滚轮缩放」——和思维导图同样的手感。
+ *
+ * 为什么必须补(主人 2026-11-27 反馈):「思维导图就有点击交互,问什么这个就没有?」
+ * markmap 自带 fold/zoom/pan,而 Graphviz 只吐一张静态 SVG,不给任何手势。
+ * 流程图的字号被限高约束后会变小,没有缩放就等于看不全,所以这里补最小可用的一套:
+ * - 滚轮缩放(以光标为锚点,和灯箱同一套换算)
+ * - 按住拖动平移
+ * - 双击复位
+ * 单击仍走全局委托开灯箱看大图;拖动后松手的那次 click 会被抑制,不会误开。
+ */
+function enableZoomPan(figure: HTMLElement, svg: SVGSVGElement): void {
+  let scale = 1
+  let tx = 0
+  let ty = 0
+  const MIN_SCALE = 0.5
+  const MAX_SCALE = 4
+
+  const apply = (): void => {
+    svg.style.transformOrigin = '0 0'
+    svg.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`
+    figure.classList.toggle('is-zoomed', scale !== 1 || tx !== 0 || ty !== 0)
+  }
+
+  const reset = (): void => {
+    scale = 1
+    tx = 0
+    ty = 0
+    apply()
+  }
+
+  figure.addEventListener(
+    'wheel',
+    (event: WheelEvent) => {
+      if (!event.ctrlKey && Math.abs(event.deltaY) < 1) return
+      event.preventDefault()
+      const rect = figure.getBoundingClientRect()
+      const cx = event.clientX - rect.left - tx
+      const cy = event.clientY - rect.top - ty
+      const next = Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale - event.deltaY * 0.0018))
+      if (next === scale) return
+      const ratio = next / scale
+      // 以光标为锚点:光标下那一点保持不动
+      tx -= cx * (ratio - 1)
+      ty -= cy * (ratio - 1)
+      scale = next
+      apply()
+    },
+    { passive: false },
+  )
+
+  let drag: { id: number; x: number; y: number; tx: number; ty: number; moved: number } | null =
+    null
+  /** 上一次「按下未拖动」的时刻,用来手判双击 */
+  let lastTapAt = 0
+
+  figure.addEventListener('pointerdown', (event: PointerEvent) => {
+    if (event.button !== 0) return
+    // 第二次按下(双击的第二次)不重新开始拖拽 —— 否则会把 dblclick 吃掉
+    if (event.detail >= 2) return
+    drag = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      tx,
+      ty,
+      moved: 0,
+    }
+    figure.setPointerCapture?.(event.pointerId)
+  })
+
+  figure.addEventListener('pointermove', (event: PointerEvent) => {
+    if (drag === null || event.pointerId !== drag.id) return
+    const dx = event.clientX - drag.x
+    const dy = event.clientY - drag.y
+    drag.moved = Math.max(drag.moved, Math.hypot(dx, dy))
+    if (drag.moved < 4) return // 抖动不算拖拽
+    tx = drag.tx + dx
+    ty = drag.ty + dy
+    figure.classList.add('is-panning')
+    apply()
+  })
+
+  const endDrag = (event: PointerEvent): void => {
+    if (drag === null || event.pointerId !== drag.id) return
+    const wasDrag = drag.moved >= 4
+    figure.releasePointerCapture?.(event.pointerId)
+    figure.classList.remove('is-panning')
+    drag = null
+    // 真拖动过 → 抑制随后那次 click(否则一拖就弹灯箱)
+    if (wasDrag) {
+      suppressFigureClick = true
+      return
+    }
+
+    // 双击复位:**在 pointerup 里自己数间隔**。
+    //
+    // 为什么不用原生 dblclick / click 事件:pointerdown 里调了 setPointerCapture,
+    // 实测这两个事件都会被吞掉(Playwright 的 dblclick 根本收不到,
+    // 手动派发 click 也不到)。pointerup 一定到,所以在这里计时最稳。
+    const now = performance.now()
+    if (now - lastTapAt < DOUBLE_TAP_MS) {
+      reset()
+      lastTapAt = 0
+      suppressFigureClick = true // 双击的第二次不再开灯箱
+      cancelPendingLightbox() // 第一次点击排的那次开灯箱也要取消
+      return
+    }
+    lastTapAt = now
+  }
+  figure.addEventListener('pointerup', endDrag)
+  figure.addEventListener('pointercancel', endDrag)
+
 }
 
 /** 判断一段代码是不是 mermaid 图(排除普通代码块被误渲染) */
@@ -445,7 +593,7 @@ async function tryRenderViaGraphviz(pre: HTMLPreElement, source: string): Promis
   }
   const figure = document.createElement('div')
   figure.className = 'mermaid-figure mermaid-figure--graphviz'
-  figure.title = '点击放大查看'
+  figure.title = '滚轮缩放 / 拖动平移 / 双击复位 / 单击看大图'
   figure.innerHTML = svg
   pre.replaceWith(figure)
   await nextFrame()
@@ -454,6 +602,7 @@ async function tryRenderViaGraphviz(pre: HTMLPreElement, source: string): Promis
   const svgEl = figure.querySelector('svg')
   if (svgEl !== null && judgeMermaidSvg(svgEl) !== 'bad') {
     bindFigureClick()
+    enableZoomPan(figure, svgEl) // 静态 SVG 补手势,和思维导图手感一致
     return true
   }
   figure.replaceWith(pre)

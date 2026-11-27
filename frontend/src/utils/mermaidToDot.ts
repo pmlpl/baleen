@@ -28,9 +28,16 @@ const RANKDIR: Record<string, string> = {
   BT: 'BT',
 }
 
-/** 节点字号(pt)与边标签字号 —— 与前端正文比例一致 */
-const NODE_FONT = 14
-const EDGE_FONT = 12
+/**
+ * 节点/边标签字号,**单位是 pt**(Graphviz 的 fontsize 是 pt 口径)。
+ *
+ * 为什么要从 14 降到 11(主人 2026-11-27 反馈「很大」):
+ * 14pt 换算成 px 是 18.7px,字形实际高约 25px,而站点正文字号是 15-16px
+ * (字形高约 20px)—— 图里的字比正文还大,一眼就显得突兀。
+ * 11pt ≈ 14.7px、字形高约 20px,和正文观感齐平。
+ */
+const NODE_FONT = 11
+const EDGE_FONT = 9.5
 
 /** Graphviz 的 margin="0.2,…" 两侧合计 28.8pt */
 const MARGIN_PT = 28.8

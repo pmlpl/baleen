@@ -35,9 +35,25 @@ function normalizeSvg(raw: string): string {
   // 背景 polygon 是白底:纸墨主题下要透明,否则深色/宣纸底上出现一块白方块
   svg = svg.replace(/<polygon fill="white"[^>]*\/>/i, '')
 
-  // 宽度用的是 pt;换成无单位的像素口径,交给 CSS 控制显示宽度
-  svg = svg.replace(/(<svg[^>]*?)\swidth="([\d.]+)pt"/, '$1')
-  svg = svg.replace(/(<svg[^>]*?)\sheight="([\d.]+)pt"/, '$1')
+  // pt → px(**不能把宽高直接删掉**,那是踩过的坑):
+  //
+  // 删掉 width/height 后 svg 失去固有尺寸,容器 CSS 的 `width:100%` 会把 viewBox
+  // (335pt 宽)拉伸到容器宽度(760px)= **放大 2.27 倍**,14pt 的字渲染成 32px,
+  // 图直接占满整屏(主人 2026-11-27 现场)。
+  //
+  // 正确做法是换算成 px 并**保留**固有尺寸:1pt = 4/3 px(Graphviz 按 72dpi 排版,
+  // 浏览器 96dpi)。这样字号回到设计大小,CSS 再用 max-width:100% 在窄容器里等比缩小。
+  const PT_TO_PX = 4 / 3
+  const toPx = (ptText: string): string => String(Math.round(Number(ptText) * PT_TO_PX))
+
+  svg = svg.replace(
+    /(<svg[^>]*?)\swidth="([\d.]+)pt"/,
+    (_m, head: string, w: string) => `${head} width="${toPx(w)}"`,
+  )
+  svg = svg.replace(
+    /(<svg[^>]*?)\sheight="([\d.]+)pt"/,
+    (_m, head: string, h: string) => `${head} height="${toPx(h)}"`,
+  )
   return svg
 }
 

@@ -14,6 +14,7 @@
 
 | 日期 | 批次 | 一句话 | pytest |
 |---|---|---|---|
+| 2026-11-27 | Graphviz 图三处体验收口 | 主人换引擎后第一眼三问题：①图占满屏 —— `normalizeSvg` 把 `width="335pt"` 删了导致 viewBox 被 `width:100%` 放大 2.27 倍 → 改 pt→px 保固有尺寸(1pt=4/3px)+只用 max-width；字号 14pt→11pt(字形高 25→20px，与正文齐平)；②灯箱看不见图 —— `cloneNode` 带走内联 transform → clone 后清掉；③无交互 —— markmap 自带 zoom/pan 而 Graphviz 是静态 SVG → 补滚轮缩放/拖动平移/双击复位；**双击踩两坑**：setPointerCapture 后原生 dblclick 收不到(改 pointerup 自计时)、click 立刻开灯箱导致第二次点击落灯箱上(改延迟 340ms 开灯箱)；fix3_probe 10/10 | 725 |
 | 2026-11-27 | flowchart 改道 Graphviz WASM | mermaid 三修不成（同内容在主人机器坏、我这一直正常；30 次冷启动/流式原文/并发/DPR/视口/htmlLabels/elk+dagre 全复现不出）→ **换引擎**：`@viz-js/viz` 布局在 WASM 内算、不读浏览器测量，实测连渲 5 次尺寸完全一致（gzip 468KB 懒加载）；代价=WASM 无中文字体度量表，中英混排算窄 18% → 自估字宽写入节点 width 后零溢出；mermaid 保留为回退（时序图/饼图等照旧）。**顺手修 db31916 真退化**：判据只认 `.node` 致时序图/饼图 100% 误降级，且「最宽 ≥36px」门槛差 2px 全量误伤 → 选择器覆盖各图型 + 只留高度阈值 | 725 |
 | 2026-11-27 | 思维导图只画根+分支 | 主人现场:42 行 CI 导图网页只画 9 个节点(VSCode 正常)。**根因坐实**:`@markmap/parse` 自动套一层空壳根,`foldLevel: 2` 实际只展开到分支层,33 个叶子全藏。改为不设 foldLevel(全展开)+ 高度自适应 `getBBox` 钳 [320,720](420px 固定高会把 15px 字压到 10px)+ prompt 补「节点文字照常写中文标点」;探针 10/10,灵敏度=加回 foldLevel 即四项转红 | 725 |
 | 2026-11-27 | mermaid 塌图·第二版（旧判据被打穿） | 主人第一批后又两次看到空白框 → 第一版判据（bbox/画布面积）**漏判**：viewBox 撑大 12 倍时节点已 48→4px，比例仍算 0.94 判 ok（用户坐标比例骗人）。改「**屏幕像素**口径」（节点渲染高 <12px 即坏，正常 45-48px 塌陷 ~4px）+ **按内容重新声明画布** `fitSvgToContent`（viewBox/width/height 一律拉回内容 bbox，内容永远填满框，正常图近似恒等）+ 三态判定 ok/bad/unknown（视图被 keep-alive 藏着时量不到像素，放行并等可见再判）。final_probe 4/4（撑大→救回 48px 不降级）、sanity_probe 12/12、真实会话无降级 | 725 |
