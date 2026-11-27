@@ -342,3 +342,95 @@ class TestSwitchOn:
         assert done["citations"][0]["n"] == 2
         assert done["citations"][0]["note_id"] == 10
         assert done["cost_tokens"] == 130  # 流式 usage 块进计数
+
+
+def _tool_stream_group(query: str) -> list[str]:
+    """一次流式工具调用轮的 SSE 行组(工具名分片 + 参数分片 + DONE)。"""
+    return [
+        "data: "
+        + json.dumps(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_0",
+                                    "type": "function",
+                                    "function": {"name": "search_kb", "arguments": ""},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        "data: "
+        + json.dumps(
+            {
+                "choices": [
+                    {
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "function": {"arguments": json.dumps({"query": query})},
+                                }
+                            ]
+                        }
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        "data: [DONE]",
+    ]
+
+
+def test_stream_agent_fallback_web_round(env, agent_setup, monkeypatch: pytest.MonkeyPatch) -> None:
+    """挂账②补测(原批欠账):流式侧「agent 回落 + 联网」整链 API 级测试。
+
+    agent 步数耗尽 → gen 内现算决策树前置:库内零命中 → 预检联网 → web 分支
+    回答。流式的联网信号 = done 的 citations 带 url(meta 已不带 used_web,
+    done 本就不带——同 2026-11-27 挂账②收口口径)。
+    """
+    from app.service.qa.agent import AGENT_MAX_STEPS
+
+    env.client.put("/api/settings", json={"agent_enabled": True})
+    agent_setup.hits.clear()  # 库内零命中 → 预检判「不相关」→ 联网
+
+    async def fake_tavily_key(_session, _owner_id):  # noqa: ANN001
+        return "tvly-fb"
+
+    monkeypatch.setattr(qa_module, "resolve_tavily_key", fake_tavily_key)
+    searches: list[str] = []
+
+    def fake_search(query: str, *, api_key: str, **_kw: Any):
+        searches.append(query)
+        return [
+            {"title": "闭包本质详解", "url": "https://closure.example", "content": "闭包的本质…"}
+        ]
+
+    monkeypatch.setattr(qa_module, "search_web", fake_search)
+
+    # agent loop:AGENT_MAX_STEPS 轮全部要工具 → 步数耗尽 → run_agent_iter 无 result → 回落
+    agent_setup.stream_groups.extend(
+        _tool_stream_group(f"第{i}次换词") for i in range(AGENT_MAX_STEPS)
+    )
+    # 回落决策树走 web 分支(answer_web 非流式,request 队列)
+    agent_setup.responses.append((200, _chat("根据网络搜索:闭包是作用域引用机制。(来源见 [W1])")))
+
+    with env.client.stream("POST", "/api/qa/chat/stream", json={"question": "闭包是什么"}) as resp:
+        text = "".join(resp.iter_text())
+    events = _parse_sse(text)
+
+    assert "根据网络搜索" in events["delta_text"], "回落路径必须照常出答案"
+    cites = events["done"]["assistant_message"]["citations"]
+    assert cites and cites[0]["url"] == "https://closure.example", "联网轮引用带 url"
+    assert "used_web" not in events["meta"], "挂账②收口:meta 不再带时点 used_web"
+    assert searches, "回落路径必须真的搜了网(不是只走了流程)"
+    assert (
+        len(agent_setup.transports[-1].calls) == AGENT_MAX_STEPS + 1
+    )  # 6 轮 agent + 1 轮 answer_web

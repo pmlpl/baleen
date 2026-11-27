@@ -1,4 +1,4 @@
-# API 契约 v43
+# API 契约 v44
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -467,7 +467,7 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 
 响应 `text/event-stream`，事件序：`meta` → `delta`* → `done`；LLM 失败 → `error`（用户消息已落库）。
 
-- `meta`：`{session_id, session_title, search_query, used_web, agent, images_attached, model, prepare_ms, user_message}`（`agent` = 本轮是否按 agent 模式跑（默认开；agent 模式下 `used_web` 真值随 done 的 citations，meta 时点尚未发生））
+- `meta`：`{session_id, session_title, search_query, agent, images_attached, model, prepare_ms, user_message}`（`agent` = 本轮是否按 agent 模式跑（默认开）。**v44 起 meta 不再带 `used_web`**——agent 模式下该时点真值结构性未知，只能瞎报；是否联网看 `done` 的 `assistant_message.citations`（任何带 `url` 的出处即联网轮），与非流式 `ChatResponse.used_web` 同源于终值）
 - `status`：`{text}`（**v34**，agent 工具轮进度——「正在换词检索笔记库:…」/「正在联网搜索:…」，带检索词；旧前端忽略该事件）
 - `delta`：`{text}`（正文增量；推理模型的思考过程不下发；**agent 最终答案逐段放行（v34）**——多帧增量流式，与库内路径同款；联网兜底（决策树路径）仍为整帧）
 - `done`：`{assistant_message, took_ms}`（完整消息含出处、cache_hit_rate 与 agent_trace，已落库）
@@ -705,6 +705,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-27 | v44 | **SSE `meta` 事件移除 `used_web` 字段**（挂账②收口：C1 批时点语义刻意未统一——agent 模式下 meta 时点真值结构性未知、恒 False，决策树模式下是预检时点值，同一字段两种语义且前端零消费）。移除后唯一真源 = 终值：非流式 `ChatResponse.used_web` 照旧，流式看 `done` 的 `assistant_message.citations`（带 url 即联网轮），口径天然一致。等价性测试同步改写（原「契约差异各自钉住」注释随之作废）+ 补流式侧「agent 回落+联网」API 级测试（原批欠账） |
 | 2026-11-26 | v43 | **抖音视频封面（海报卡）**：`GET /api/sources/{id}` 响应加 `video_cover_url`（可直接当 `<img src>` 的相对 URL `/api/media/{key}`；null = 无封面/非抖音/未提取）。抖音不支持网页内嵌播放，前端原先把抖音塞进 B 站 iframe 的 16:9 **黑底容器**，变成一个 850×480 的黑洞里飘两行小字（主人反馈「这是一个黑色的，不好看」）。现在前端两种形态：有封面 → **海报卡**（9:16 竖版封面 + 标题 + 外链；抖音是竖屏平台，实测封面 1080×1920，按 16:9 裁会切掉标题和人物）；无封面/粘贴瞬间 → **一行高提示条**（69px，纸面底色 + 站点名 + `在抖音中打开`）。**封面存 media 内容寻址 key 而不是抖音原 URL**：抖音封面是签名链（实测 `x-expires` 两周过期），存原样会变裂图。**封面在下载视频之前就写库**（新增 `cover_cb` 早回调），否则 40 分钟视频要让海报卡白等十几分钟（实测转写阶段 `video_cover_url` 仍是 null 的坑）。B 站播放器**不动**（iframe 的 16:9 黑框是正确形态） |
 | 2026-11-26 | v42 | **画像页收成一屏**（主人反馈「要拉滚动条才能看到所有内容，用多了数据更多不是一直拉很长的条」）：右栏来源/质量/回答方式**三块并排**、块间距 26→22px、两个清单（死库存/纯自答）改成**默认折叠**的一行标题+数量，点开才展开且列表自带 260px 上限内滚。前端整页改为**两栏等高各自内滚、整页零滚动**（复用 `stage--fill` 高度链，1440/1280/1100 三档实测滚 0px）。清单上限 8→**30 条**（折叠态不占高度，展开时用户真想看）。**`self_answered` 响应形状改 `{total, items}`**（与 `dead_notes` 一致）——原先是裸数组，页面把 len 当总数显示「30」，而真实自答 86 条，数字会骗人；现在 total 走独立 COUNT 查询。§8 同步 |
 | 2026-11-26 | v41 | **「知识库章程」扩成「我的画像」**（主人拍板：左右布局，左边是用户开始用时写的问卷内容，右边是 AI 自统计的偏向统计图；页面/路由不能叫章程）：路由 `/charter`→`/persona`（旧路径重定向），顶栏「知识库章程」→「我的画像」，端点前缀 `/api/charter`→`/api/persona`（内部 `charter` 概念不动，只改对外命名；端点 34→**36**）。**迁移 0021** 补存五项问卷事实（`age_band`/`gender`/`education`/`status`/`why`）——v40 只存了昵称，其余五项喂完 LLM 就丢，左栏没数据源；全部 nullable，老用户留 NULL 不假回填。新增 `GET /api/persona/stats`（八块统计，纯只读现算：规模/来源/质量/**回答方式互斥三分**/Top5 引用/死库存/纯自答问题/周活跃）；新增 `POST /api/persona/topics`（两阶段 LLM 主题打标写回 `notes.tags` 增量 + `?retag=true` 重打）。**口径修正**：`answers` 的 kb/web 早期各自计数会相加超 100%，改互斥口径（`kb` 有笔记引用、`web` 无笔记引用但有网页引用、`self` 两者皆无），三项相加 = total。§8 重写 |

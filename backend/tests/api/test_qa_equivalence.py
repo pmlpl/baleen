@@ -5,10 +5,9 @@
 (meta → status* → delta* → done)。先于重构写、跑绿——重构后必须原样绿,
 这是「抽共享实现、对外行为零变化」的基线闸。
 
-已知的契约差异(非重复、不统一,各自钉住当前值):
-- 流式 meta 事件的 used_web 是**时点值**(agent 开时恒 False;[NO_KB] 二段联网
-  发生在 meta 之后,翻转不可见)——非流式 ChatResponse.used_web 是终值。
-  代码里注释明说「真值随 done 的 citations」,本文件按此钉住。
+已知的契约差异已于 2026-11-27 挂账②收口:meta 事件不再带 used_web(agent 模式
+下 meta 时点真值结构性未知,只能瞎报;前端零消费)。两端点的 used_web 都只出自
+终值(done 事件 / ChatResponse),口径天然一致。
 
 LLM 双通道:非流式端点(agent/answer/answer_web)走 request 队列;流式端点的
 联网回答也走 request 队列(answer_web 非流式),只有流式步(agent loop /
@@ -212,11 +211,10 @@ class TestDecisionTreeEquivalence:
         stream_queries = _slice_calls(equiv_setup.queries, q1)
         _assert_event_contract(events)
 
-        meta = _get(events, "meta")
         done = _get(events, "done")
         assert chat["assistant_message"]["content"] == done["assistant_message"]["content"]
         assert chat["assistant_message"]["citations"] == done["assistant_message"]["citations"]
-        assert chat["used_web"] is False and meta["used_web"] is False
+        assert chat["used_web"] is False
         assert chat_queries == stream_queries == [QUESTION]
         assert equiv_setup.search_calls == chat_searches == []  # 两端都没联网
 
@@ -243,12 +241,10 @@ class TestDecisionTreeEquivalence:
         stream_queries = _slice_calls(equiv_setup.queries, q1)
         _assert_event_contract(events)
 
-        meta = _get(events, "meta")
         done = _get(events, "done")
         assert chat["assistant_message"]["content"] == done["assistant_message"]["content"]
         assert chat["assistant_message"]["citations"] == done["assistant_message"]["citations"]
-        # 预检在 meta 之前完成 → 流式 meta 的 used_web 也是终值,两端一致
-        assert chat["used_web"] is True and meta["used_web"] is True
+        assert chat["used_web"] is True
         assert chat_queries == stream_queries == [QUESTION]
         assert chat_searches == [QUESTION] and equiv_setup.search_calls[len(chat_searches) :] == [
             QUESTION
@@ -257,7 +253,7 @@ class TestDecisionTreeEquivalence:
     def test_no_kb_web_second_stage_equivalence(
         self, env: SimpleNamespace, equiv_setup: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """[NO_KB] 二段联网:最终答案/引用一致;used_web 契约差异各自钉住(见模块头)。"""
+        """[NO_KB] 二段联网:最终答案/引用一致;meta 不带 used_web(见模块头)。"""
         no_kb = "[NO_KB]\n闭包的本质是作用域引用机制。"
 
         async def fake_tavily_key(_session, _owner_id):  # noqa: ANN001
@@ -286,8 +282,8 @@ class TestDecisionTreeEquivalence:
         assert chat["assistant_message"]["citations"] == done["assistant_message"]["citations"]
         assert "[NO_KB]" not in done["assistant_message"]["content"]  # 标记不外泄(两端同)
         assert chat["used_web"] is True
-        # 已知契约差异:meta 是时点值(二段联网发生在 meta 之后),终值看 done 的 citations
-        assert meta["used_web"] is False
+        # 挂账②收口:meta 不再带 used_web(时点真值结构性未知),唯一真源 = done 的 citations
+        assert "used_web" not in meta
         assert done["assistant_message"]["citations"][0]["url"] == WEB_RESULT["url"]
         assert chat_queries == stream_queries == [QUESTION]
         assert chat_searches == [QUESTION] and equiv_setup.search_calls[len(chat_searches) :] == [
@@ -318,7 +314,6 @@ class TestDecisionTreeEquivalence:
         stream_queries = _slice_calls(equiv_setup.queries, q1)
         _assert_event_contract(events)
 
-        meta = _get(events, "meta")
         done = _get(events, "done")
         assert chat["assistant_message"]["content"] == done["assistant_message"]["content"]
         assert "AI 自身的知识回答" in done["assistant_message"]["content"]
@@ -326,7 +321,7 @@ class TestDecisionTreeEquivalence:
         assert (
             chat["assistant_message"]["citations"] == done["assistant_message"]["citations"] == []
         )
-        assert chat["used_web"] is False and meta["used_web"] is False
+        assert chat["used_web"] is False
         assert chat_queries == stream_queries == [QUESTION]
         assert equiv_setup.search_calls == []
 
@@ -349,11 +344,10 @@ class TestAgentEquivalence:
         events = _run_stream(env)
         _assert_event_contract(events)
 
-        meta = _get(events, "meta")
         done = _get(events, "done")
         assert chat["assistant_message"]["content"] == done["assistant_message"]["content"]
         assert chat["assistant_message"]["citations"] == done["assistant_message"]["citations"]
-        assert chat["used_web"] is False and meta["used_web"] is False
+        assert chat["used_web"] is False
         # agent 步骤留痕两端都有(非流式走 run_agent、流式走 run_agent_iter,同一实现)
         assert chat["assistant_message"]["agent_trace"] is not None
         assert done["assistant_message"]["agent_trace"] is not None

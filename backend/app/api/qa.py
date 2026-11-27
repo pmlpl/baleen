@@ -693,8 +693,8 @@ async def _decision_tree_answer(
     必有且唯一)。流式端点把事件映射成 SSE;非流式端点丢弃 status/delta(无流可发),
     只取 result——两端对外行为零变化。
 
-    ``web_results``:调用方已算好的前置联网结果(流式在流开始前算好——meta 事件要
-    报 used_web;非流式在存 user 消息前算好;agent 回落时由流式端点在流内现算)。
+    ``web_results``:调用方已算好的前置联网结果(流式在流开始前算好;非流式在存
+    user 消息前算好;agent 回落时由流式端点在流内现算)。
     ``kb_answer``:库内回答机制(非流式 _kb_answer_full / 流式 _stream_kb_answer),
     产出 delta 增量事件 + 终事件 kb_done(marker/body/计费字段)。
     """
@@ -906,18 +906,17 @@ async def chat_stream_endpoint(
         payload, retrieve=retrieve, llm=llm, session=session, owner_id=owner_id
     )
 
-    # 决策树前置(agent 关时):流开始**前**算好 used_web/hit_images/附图——meta 事件要报。
-    # agent 开时:命中图预加载(meta 计数 + 回落时 attach 复用),meta 时点 used_web
-    # 未知(真值随 done 的 citations;与 marker 翻转同款已存行为)。
+    # 决策树前置(agent 关时):流开始**前**算好联网预检/命中图/附图——决策树段要消费。
+    # agent 开时:命中图预加载(meta 计数 + 回落时 attach 复用)。
+    # used_web 不进 meta 事件(2026-11-27 挂账②收口):meta 时点 agent 模式真值未知,
+    # 结构性只能瞎报;前端也零消费。唯一真源 = done 事件的 citations(any url)。
     web_results: list[dict[str, str]] = []
     if rnd.agent_enabled:
         hit_images = await _load_hit_images(session, owner_id, rnd.kb_hits)
-        used_web = False
     else:
         web_results = await _web_precheck(rnd)
-        used_web = bool(web_results)
         # 命中图片笔记 → 回传原图给视觉模型(联网路径不附图);须在 gen() 闭包捕获 messages 前完成
-        hit_images = [] if used_web else await _load_hit_images(session, owner_id, rnd.kb_hits)
+        hit_images = [] if web_results else await _load_hit_images(session, owner_id, rnd.kb_hits)
         attach_images(rnd.messages, rnd.user_images + hit_images)
 
     user_msg = await rnd.repo.add_message(
@@ -935,9 +934,8 @@ async def chat_stream_endpoint(
                     "session_id": rnd.qa_session.id,
                     "session_title": rnd.qa_session.title,
                     "search_query": rnd.search_query,
-                    "used_web": used_web,
-                    # 本轮意图是否 agent loop(ADR 0010;agent 模式下真值随 done 事件,
-                    # meta 时点尚未发生——used_web/出处以 done 的 citations 为准)
+                    # 本轮意图是否 agent loop(ADR 0010)。used_web 不在此事件:
+                    # 唯一真源是 done 的 citations(任何带 url 的出处即联网轮)
                     "agent": rnd.agent_enabled,
                     "images_attached": len(hit_images) + len(rnd.user_images),  # 命中图+附件图
                     "model": llm.model,  # 本次回答用的模型,前端状态行显示
