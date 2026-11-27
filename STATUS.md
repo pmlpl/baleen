@@ -10,10 +10,11 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-27（ruff 清债 + CI/pre-commit 第五道门；此前同日：alembic check 第四道门 + 夹具自带数据闭环）
+**最后更新**：2026-11-27（mermaid 塌图防护；此前同日：ruff 清债 + CI/pre-commit 第五道门、alembic check 第四道门 + 夹具自带数据闭环）
 
 | 日期 | 批次 | 一句话 | pytest |
 |---|---|---|---|
+| 2026-11-27 | mermaid 图塌成小点 | 主人现场：flowchart 渲染成 1746×883 空白大框、内容缩成 22×7 小点。**根因未坐实**（30 次冷启动 + 流式原文全绿，抓不到触发）→ 改打「坏图不许上屏」：自洽校验（内容 bbox/画布面积 ≥0.05，实测正常 0.94、塌陷 <0.01）+ 渲染前等字体就绪（≤2.5s）+ 坏图重试一次 + 仍坏降级回代码块带角标；探针 10/10 含灵敏度（画布放大 10 倍必须转红） | 725 |
 | 2026-11-27 | 挂账③slash 弹层样式副本归一 | SlashMenu/NotePicker/QaView 三处逐字相同的 scoped 副本归一到全局 styles.css（slash 五族 + np-cancel）；删 `.slash-menu--picker` 死类（z-index 与全局逐字重复）；真机等价网 11/11 PASS（计算样式逐项一致） | 725 |
 | 2026-11-27 | 挂账②used_web 时点语义收口 | SSE meta 事件移除 used_web（agent 模式下 meta 时点真值结构性未知恒 False、决策树模式是预检时点值——同一字段两种语义且前端零消费）；唯一真源=终值（非流式 ChatResponse.used_web 照旧，流式看 done 的 citations 带 url）；api.md v44；补流式「agent 回落+联网」API 级测试（原批欠账） | 725 |
 | 2026-11-27 | 挂账①HTML附件 text="" 修复 | 三个根因坐实并修：未闭合 `<head>`（skip 卡死吞正文）+ 正文裹 `<template>` → **首轮空结果自动回退粗提取**（skip 集去 head/template/title 重喂+警告留痕）；UTF-16LE+BOM（Word 另存常见）在 utf-8/gb18030 下不报错只出 NUL 乱码 → `_decode` 先认 BOM。已知限制：未闭合 `<style>` 中段的部分丢失仍存在（粗提取保留 style 防 CSS 混正文） | 724 |

@@ -248,8 +248,108 @@ function looksLikeMermaid(code: string): boolean {
   )
 }
 
+/**
+ * 等字体就绪再量图。
+ *
+ * mermaid 靠 `getBBox`/文本度量定节点宽度,字体没落地时量到的是回退字体的尺寸,
+ * 图会按错的尺寸排好并且**不会自己重排**。字体来自 jsdelivr CDN,主人日常关代理,
+ * 这个窗口是常态而不是异常情况。
+ *
+ * 必须设上限:CDN 完全不可达时 `fonts.ready` 可能长期不 resolve,
+ * 不能为了一张图把整段答案的渲染卡死。
+ */
+let fontsWaited = false
+async function waitFontsOnce(timeoutMs = 2500): Promise<void> {
+  if (fontsWaited || typeof document === 'undefined' || !('fonts' in document)) return
+  fontsWaited = true
+  await Promise.race([
+    document.fonts.ready.then(() => undefined),
+    new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+  ])
+}
+
+/** 等两帧:让浏览器完成一次布局,重试前必须先把上一张坏图从 DOM 摘掉 */
+function nextFrame(): Promise<void> {
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()))
+  })
+}
+
+/**
+ * 一张渲染出来的图是否「自洽」——内容是画出来了,还是画布大得离谱而内容缩成一点。
+ *
+ * **存在理由(2026-11-27 主人现场)**:一条 flowchart 渲染成 1746×883 的空白框,
+ * 整张图的内容缩成 22×7 的小点(截图取证:框内只有一处 17×2 的墨迹)。凭截图无法
+ * 判定是测量错还是样式错,而且**无头环境 30 次冷启动 + 流式原文全量复跑都全绿**,
+ * 抓不到根因。但失败形态是可判定的:svg 声明画布远大于内容实际 bbox。
+ *
+ * 与其把这种「大片空白」摆到用户面前,不如按渲染失败处理:重试一次,仍坏就退回
+ * 原始代码块 + 角标 —— 用户至少还能看到 `flowchart TD ...` 原文。
+ *
+ * 阈值 0.05 的依据:正常图的内容几乎填满 mermaid 自己给的画布(实测 fill ≈ 0.9,
+ * 画布只比内容多一圈 padding),塌陷时 fill < 0.01,两者差两个数量级。
+ */
+export function isSaneMermaidSvg(svg: SVGSVGElement): boolean {
+  const w = Number.parseFloat(svg.getAttribute('width') ?? '')
+  const h = Number.parseFloat(svg.getAttribute('height') ?? '')
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return false
+  // 一块图总得有节点/连线/文字之一;全空说明布局没跑起来
+  if (svg.querySelector('.node, .edgePath, path.flowchart-link, text') === null) return false
+  let box: DOMRect
+  try {
+    box = svg.getBBox() // 未挂载或零尺寸时浏览器会抛,直接按坏图算
+  } catch {
+    return false
+  }
+  if (!(box.width > 0) || !(box.height > 0)) return false
+  return (box.width * box.height) / (w * h) >= 0.05
+}
+
 let renderSeq = 0
 let blockSeq = 0
+
+/** 只用得到 render 一个方法:收窄成结构化类型,探针能注入假渲染器验证降级,不必碰真 mermaid */
+export interface MermaidRenderer {
+  render(
+    id: string,
+    source: string,
+    container: HTMLElement,
+  ): Promise<{ svg: string }>
+}
+
+/** 单块渲染:成功→figure 已替换进 DOM;坏图/异常→pre 留在原位并带角标 */
+export async function renderMermaidBlock(
+  pre: HTMLPreElement,
+  source: string,
+  mermaid: MermaidRenderer,
+  seq: number,
+  offscreen: HTMLElement,
+): Promise<void> {
+  // 两次机会:第一次可能撞上字体未就绪/容器尚未布局,重试通常就好了
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    blockSeq += 1
+    const { svg } = await mermaid.render(`mmd-${seq}-${blockSeq}`, source, offscreen)
+    const figure = document.createElement('div')
+    figure.className = 'mermaid-figure'
+    figure.title = '点击放大查看'
+    figure.innerHTML = svg // mermaid strict 模式输出已消毒的 SVG
+
+    // 必须先入 DOM 再量:游离节点的 getBBox 恒为 0,会把好图误判成坏图
+    pre.replaceWith(figure)
+    const svgEl = figure.querySelector('svg')
+    if (svgEl !== null && isSaneMermaidSvg(svgEl)) return
+
+    figure.replaceWith(pre) // 坏图退回代码块,准备重试
+    if (attempt === 0) await nextFrame()
+  }
+  pre.classList.add('mermaid-error')
+  if (pre.querySelector('.mermaid-error-badge') === null) {
+    const badge = document.createElement('span')
+    badge.className = 'mermaid-error-badge'
+    badge.textContent = '图表渲染异常,按代码显示'
+    pre.prepend(badge)
+  }
+}
 
 /**
  * 渲染 root 下所有 mermaid 代码块。
@@ -257,7 +357,7 @@ let blockSeq = 0
  * 目标节点:QaView / NoteView 渲染 markdown 后产生的
  * `<pre><code>graph TD ...</code></pre>`(渲染器对 ``` 围栏的产物)。
  * 成功 → 用 `<div class="mermaid-figure">SVG</div>` 替换整个 pre(点击可放大);
- * 失败 → pre 原样保留,加一个「图表语法有误」角标。
+ * 失败 → pre 原样保留,加一个角标(语法错 / 渲染异常)。
  *
  * 幂等:已是 figure 的节点跳过,可安全重复调用。
  */
@@ -270,6 +370,10 @@ export async function renderMermaidIn(root: HTMLElement): Promise<void> {
   })
   if (targets.length === 0) return
 
+  // 标记先落,再 await:并发调用(流式结束 + 切回会话各触发一次)不能重复渲染同一块
+  for (const pre of targets) pre.dataset.mermaidDone = '1'
+
+  await waitFontsOnce()
   const mermaid = await loadMermaid()
   renderSeq += 1
   const seq = renderSeq
@@ -280,28 +384,23 @@ export async function renderMermaidIn(root: HTMLElement): Promise<void> {
   offscreen.style.cssText = 'position:absolute;left:-99999px;top:0;width:1600px;'
   document.body.appendChild(offscreen)
 
-  for (const pre of targets) {
-    const codeEl = pre.querySelector('code')
-    const source = codeEl?.textContent ?? ''
-    pre.dataset.mermaidDone = '1'
-    try {
-      blockSeq += 1
-      const { svg } = await mermaid.render(`mmd-${seq}-${blockSeq}`, source, offscreen)
-      const figure = document.createElement('div')
-      figure.className = 'mermaid-figure'
-      figure.title = '点击放大查看'
-      figure.innerHTML = svg // mermaid strict 模式输出已消毒的 SVG
-      pre.replaceWith(figure)
-    } catch {
-      pre.classList.add('mermaid-error')
-      if (pre.querySelector('.mermaid-error-badge') === null) {
-        const badge = document.createElement('span')
-        badge.className = 'mermaid-error-badge'
-        badge.textContent = '图表语法有误,按代码显示'
-        pre.prepend(badge)
+  try {
+    for (const pre of targets) {
+      const source = pre.querySelector('code')?.textContent ?? ''
+      try {
+        await renderMermaidBlock(pre, source, mermaid, seq, offscreen)
+      } catch {
+        pre.classList.add('mermaid-error')
+        if (pre.querySelector('.mermaid-error-badge') === null) {
+          const badge = document.createElement('span')
+          badge.className = 'mermaid-error-badge'
+          badge.textContent = '图表语法有误,按代码显示'
+          pre.prepend(badge)
+        }
       }
     }
+  } finally {
+    offscreen.remove()
   }
-  offscreen.remove()
   bindFigureClick()
 }
