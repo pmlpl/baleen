@@ -14,6 +14,7 @@
 
 | 日期 | 批次 | 一句话 | pytest |
 |---|---|---|---|
+| 2026-11-27 | 模型↔迁移漂移修复 + CI 第四道门 | `alembic check` 对活库查出两处漂移（`jobs_dedupe_uq` 模型停在 0008 之前的老定义 → 下条 autogenerate 会把多用户互相去重装回来；迁移 0019 裸 SQL 建的 `notes_archived_at_idx` 没进模型 → 会被顺手 drop）→ 对齐两处模型 + CI 装 `alembic check` 闸（upgrade head 只证明迁移能执行，证明不了 schema 与模型一致） | 720 |
 | 2026-11-27 | CI 两次实跑闭环 | 首跑挂 cwd（`working-directory: backend`）；二跑挂 36 个「靠开发库残留数据才绿」（真 api_key / 未推进的 identity 序列 / 86 条自答记录）→ 夹具自带假 key + 自造 31 组消息 + `setval` 修序列；**空库全量 = CI 同口径，成了硬规矩**（AGENTS §7.1） | 720 |
 | 2026-11-26 | C4 前缀约定+CI 落地+黑话词典 | video_keep 白名单改 `video_` 前缀自动保留（忘加白被 G0 静默丢从机制根除）；GitHub Actions 三道门（pytest+doc_lint+vue-tsc，基线 grep 强制）；docs/glossary.md 入库 | 715 |
 | 2026-11-26 | 抖音预览去黑块（v43） | 抖音不再复用 B站 iframe 的 16:9 黑底容器：无封面→69px 纸面提示条、有封面→9:16 竖版海报卡；封面转存 media 内容寻址（抖音签名链两周过期）；`cover_cb` 早于视频下载回调 | 720 |

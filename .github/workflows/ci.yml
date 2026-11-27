@@ -2,6 +2,7 @@ name: CI
 
 # 2026-11-26 落地（WorkBuddy 复评报告 P1.3，主人拍板选 GitHub Actions）：
 # pytest + doc_lint + vue-tsc 三道门，基线从「本地纪律 + pre-commit」升级为远端强制门。
+# 2026-11-27 补第四道门：alembic check（模型↔迁移一致性，防 schema 静默回退）。
 #
 # ⚠️ pytest 摘要门（下面 grep 的 720）与 STATUS 基线同数——动了测试的批次
 #    必须同步升这里和 STATUS（同一条「基线只增不降」纪律）。
@@ -63,6 +64,17 @@ jobs:
       - name: 迁移到 head（CI 是空库，API/worker 测试依赖 schema）
         working-directory: backend
         run: uv run alembic upgrade head
+
+      - name: alembic check（模型↔迁移一致性，有漂移即失败）
+        # 这道闸补的是「upgrade head 证明不了的那件事」：upgrade head 只证明迁移能执行，
+        # 证明不了 schema 与 ORM 模型一致。模型改了忘写迁移、或迁移用裸 SQL 建了索引
+        # 没在模型里声明，两种漂移在这里都会变红。
+        # 落地图：2026-11-27 审计发现两处历史漂移（jobs_dedupe_uq 被 autogenerate
+        # 回退成全局唯一，会重新引入 0008 修掉的多用户互相去重；notes_archived_at_idx
+        # 会被下一条 autogenerate 顺手 drop 掉），修完同时装上这道闸防复发。
+        # ⚠️ 必须紧跟在 upgrade head 之后：check 需要一个已到 head 的库。
+        working-directory: backend
+        run: uv run alembic check
 
       - name: doc_lint（文档一致性，ERROR 必须为 0）
         run: uv run --project backend python scripts/doc_lint.py

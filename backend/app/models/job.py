@@ -1,4 +1,10 @@
-"""jobs —— 导入状态机(ADR 0003 §2.6)。dedupe_key 幂等;locked_by/locked_at 乐观锁。"""
+"""jobs —— 导入状态机(ADR 0003 §2.6)。dedupe_key 幂等;locked_by/locked_at 乐观锁。
+
+⚠️ dedupe 是**按用户**的:唯一约束是 (owner_id, dedupe_key),不是单独的 dedupe_key。
+   迁移 0008(多用户隔离)专门改过这一条——否则两个用户上传同一个文件会互相去重,
+   后一个用户的导入被静默跳过。这里曾长期停在 0008 之前的老定义(只有 dedupe_key),
+   模型与库不一致;修掉后 alembic check 才是绿的(2026-11-27)。
+"""
 
 from __future__ import annotations
 
@@ -24,7 +30,8 @@ from .base import Base
 class Job(Base):
     __tablename__ = "jobs"
     __table_args__ = (
-        UniqueConstraint("dedupe_key", name="jobs_dedupe_uq"),
+        # 按 owner 去重(迁移 0008):全局唯一会让 A、B 两账号上传同一文件时互相命中
+        UniqueConstraint("owner_id", "dedupe_key", name="jobs_dedupe_uq"),
         CheckConstraint("kind IN ('import','reindex')", name="jobs_kind_chk"),
         CheckConstraint(
             "status IN ('queued','running','done','failed','dead')", name="jobs_status_chk"

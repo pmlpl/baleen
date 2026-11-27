@@ -31,6 +31,15 @@ class Note(Base):
         CheckConstraint("status IN ('active','archived')", name="notes_status_chk"),
         Index("notes_owner_status_idx", "owner_id", "status"),
         Index("notes_source_idx", "source_id"),
+        # 纸篓部分索引(迁移 0019 用裸 SQL 建的,这里补声明):
+        # archived_at 只对 status='archived' 的行有意义,部分索引让 30 天清理只扫归档行。
+        # ⚠️ 迁移用 op.execute 建的索引不会进模型 → autogenerate 看不见它,
+        #   下次生成迁移会「顺手」把它 drop 掉(2026-11-27 补齐)。
+        Index(
+            "notes_archived_at_idx",
+            "archived_at",
+            postgresql_where=text("status = 'archived'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)

@@ -179,7 +179,8 @@ cd backend
 uv sync                              # 装依赖
 uv add <pkg>                         # 加依赖（先说明理由！）
 uv run alembic upgrade head          # 迁移
-uv run alembic revision --autogenerate -m "xxx"
+uv run alembic check                 # 模型↔迁移一致性(有漂移即非零退出);改了模型就必须跑
+uv run alembic revision --autogenerate -m "xxx"   # ⚠️ 生成后必须人工 review:迁移里用 op.execute 裸 SQL 建的索引,模型里没声明就看不见,会被 autogenerate 顺手 drop
 uv run fastapi dev                   # 起开发服务
 
 # ---------- 前端 ----------
@@ -315,3 +316,4 @@ chore: 升级 uv 到 0.13
 | 2026-11-18 | eval/ 目录按职责重组（inputs 标注语料 / queries 题集 / runs 跑批产物 / analysis 分析 / scripts 脚本，顶层 27→9 条目）：samples/candidates/labels/split_meta 迁入 inputs/，report/ci/preds 迁入 runs/，消融与缺陷台账迁入 analysis/；§3/§6/§10 的 eval 路径同步；eval_capture.py 归档路径随迁（532 passed，doc_lint 0/0） |
 
 | 2026-11-27 | §7 新增「测试」命令块 + §7.1「空库同口径必须跑」：CI 首次实跑红了 36 个测试，根因**全是对开发库残留数据的隐式依赖**（35 个靠 owner 1 已有的真 api_key 过上传/视频导入的 key 前置闸、1 个靠 identity 序列已被真实数据推进过、1 个靠开发库那 86 条自答记录），空库上全暴露；夹具改为自带数据（假 key + 自造消息，事务内回滚），并补 `setval` 修正手插 id=1 的序列。理由：本地开发库有真数据 → 本地永远绿，只有空库能复现 CI；这类缺陷不会自己消失。同时 §7 原本**没有** pytest 命令（ci.yml 注释声称「与 AGENTS §7 同口径」是假的），一并补齐 |
+| 2026-11-27 | §7 补 `uv run alembic check` 命令 + `alembic revision --autogenerate` 的裸 SQL 索引警告：审计发现两处**模型↔迁移漂移**（`jobs_dedupe_uq` 模型停在 0008 之前的老定义、迁移 0019 裸 SQL 建的 `notes_archived_at_idx` 没在模型里声明），autogenerate 下一条迁移会把它们**静默改回去**——前者会重新引入 0008 修掉的多用户互相去重。修完把「模型改了必须跑 alembic check」写进常用命令，并让 CI 装上同一道闸（本地与 CI 同口径）。理由：`upgrade head` 只证明迁移能执行，证明不了 schema 与模型一致；这道闸是该类缺陷唯一的机械守卫 |
