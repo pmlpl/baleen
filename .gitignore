@@ -22,6 +22,8 @@ eval/inputs/samples/_inbox/*
 eval/runs/preds.csv
 eval/inputs/candidates.csv
 eval/inputs/candidates_log.csv
+# quality_scan.py 的断点续跑状态(judged 集合)——跑批的临时进度,不是产物本身
+eval/runs/quality_scan_llm_state.json
 # C 路线「使用即积累」:导入的原始文件副本(gitignore,复核选中才挪进 samples 提交)
 eval/inputs/candidates/*
 !eval/inputs/candidates/.gitkeep
