@@ -276,33 +276,55 @@ function nextFrame(): Promise<void> {
 }
 
 /**
- * 一张渲染出来的图是否「自洽」——内容是画出来了,还是画布大得离谱而内容缩成一点。
+ * 一张渲染出来的图是否「自洽」——内容是画出来了,还是整张图被缩成一个点。
  *
  * **存在理由(2026-11-27 主人现场)**:一条 flowchart 渲染成 1746×883 的空白框,
- * 整张图的内容缩成 22×7 的小点(截图取证:框内只有一处 17×2 的墨迹)。凭截图无法
- * 判定是测量错还是样式错,而且**无头环境 30 次冷启动 + 流式原文全量复跑都全绿**,
- * 抓不到根因。但失败形态是可判定的:svg 声明画布远大于内容实际 bbox。
+ * 整张图的内容缩成 22×7 的小点(像素取证:框内只有一处 17×2 的墨迹)。凭截图无法
+ * 判定是测量错还是样式错,而且无头环境 30 次冷启动 + 流式原文全量复跑都全绿,
+ * 抓不到根因。但失败形态是可判定的,所以按「坏图不许上屏」兜底。
  *
- * 与其把这种「大片空白」摆到用户面前,不如按渲染失败处理:重试一次,仍坏就退回
- * 原始代码块 + 角标 —— 用户至少还能看到 `flowchart TD ...` 原文。
+ * **判据必须是「节点在屏幕上的实际渲染尺寸」,不能是 bbox/画布比例**:
+ * 第一版用 `内容 bbox 面积 / 声明画布面积 >= 0.05`,被实测打穿 —— 把 viewBox 放大
+ * 12 倍(内容坐标不变、视觉上正是「大框 + 小点」)后,比例算的是**用户坐标**,仍然
+ * ≈0.94 → 判为正常,而节点渲染高度已从 48px 掉到 4px。用户坐标里的比例骗人,
+ * 屏幕像素不会。
  *
- * 阈值 0.05 的依据:正常图的内容几乎填满 mermaid 自己给的画布(实测 fill ≈ 0.9,
- * 画布只比内容多一圈 padding),塌陷时 fill < 0.01,两者差两个数量级。
+ * 阈值依据(实测):正常图最小节点高 45-48px、宽 ≥150px;塌陷图节点高 ~4px、
+ * 中位宽 ~14px。差一个数量级,取 12px 有足够余量(小字图也不会误伤)。
  */
-export function isSaneMermaidSvg(svg: SVGSVGElement): boolean {
-  const w = Number.parseFloat(svg.getAttribute('width') ?? '')
-  const h = Number.parseFloat(svg.getAttribute('height') ?? '')
-  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return false
-  // 一块图总得有节点/连线/文字之一;全空说明布局没跑起来
-  if (svg.querySelector('.node, .edgePath, path.flowchart-link, text') === null) return false
-  let box: DOMRect
-  try {
-    box = svg.getBBox() // 未挂载或零尺寸时浏览器会抛,直接按坏图算
-  } catch {
-    return false
+const MIN_NODE_PX = 12
+
+/** 'unknown' = 元素还没布局(视图被 keep-alive 藏起来时 getBoundingClientRect 恒为 0),
+ *  这时既不能判好也不能判坏 —— 必须等它可见再判,否则会把好图误降级成代码块。 */
+export type SanityVerdict = 'ok' | 'bad' | 'unknown'
+
+export function judgeMermaidSvg(svg: SVGSVGElement): SanityVerdict {
+  // 一块图总得有节点;全空说明布局没跑起来
+  if (svg.querySelector('.node') === null) return 'bad'
+
+  // 屏幕像素口径:getBoundingClientRect 已含所有祖先 transform,是用户真正看到的大小
+  const rect = svg.getBoundingClientRect()
+  if (!(rect.width > 0) || !(rect.height > 0)) return 'unknown'
+
+  const nodes = Array.from(svg.querySelectorAll<SVGGraphicsElement>('.node'))
+  let visible = 0
+  let maxW = 0
+  for (const node of nodes) {
+    const box = node.getBoundingClientRect()
+    if (box.width <= 0 || box.height <= 0) continue
+    visible += 1
+    maxW = Math.max(maxW, box.width)
+    // 只要有一个节点「读不出来」就判坏:塌缩时所有节点一起缩,不会只缩一个
+    if (box.height < MIN_NODE_PX) return 'bad'
   }
-  if (!(box.width > 0) || !(box.height > 0)) return false
-  return (box.width * box.height) / (w * h) >= 0.05
+  if (visible === 0) return 'bad'
+  // 还要整张图占得住:最宽的节点得有个样子
+  return maxW >= MIN_NODE_PX * 3 ? 'ok' : 'bad'
+}
+
+/** 布尔口径:'unknown' 按「未证明是坏图」处理 */
+export function isSaneMermaidSvg(svg: SVGSVGElement): boolean {
+  return judgeMermaidSvg(svg) !== 'bad'
 }
 
 let renderSeq = 0
@@ -315,6 +337,75 @@ export interface MermaidRenderer {
     source: string,
     container: HTMLElement,
   ): Promise<{ svg: string }>
+}
+
+/** 降级:退回代码块 + 角标(用户至少能看到 `flowchart TD ...` 原文) */
+function degradeToSource(pre: HTMLPreElement, figure: HTMLElement, text: string): void {
+  figure.replaceWith(pre)
+  pre.classList.add('mermaid-error')
+  if (pre.querySelector('.mermaid-error-badge') === null) {
+    const badge = document.createElement('span')
+    badge.className = 'mermaid-error-badge'
+    badge.textContent = text
+    pre.prepend(badge)
+  }
+}
+
+/**
+ * 视图被藏起来时先放行,等它可见再判一次 —— 藏着的图量不到像素,
+ * 直接判坏会把好图降级成代码块(keep-alive 切页时答案还在流式,必然撞上)。
+ */
+function recheckWhenVisible(figure: HTMLElement, pre: HTMLPreElement): void {
+  if (typeof IntersectionObserver === 'undefined') return
+  const io = new IntersectionObserver((entries) => {
+    if (!entries.some((e) => e.isIntersecting)) return
+    io.disconnect()
+    const svgEl = figure.querySelector('svg')
+    if (svgEl !== null && judgeMermaidSvg(svgEl) === 'bad') {
+      degradeToSource(pre, figure, '图表渲染异常,按代码显示')
+    }
+  })
+  io.observe(figure)
+}
+
+/**
+ * 让 svg 的声明画布**恰好等于内容**——从根上消掉「大框 + 小点」这种形态。
+ *
+ * **为什么必须做,而不是只靠 isSane 判坏**(2026-11-27 主人三次现场):
+ * 主人截图里的框是 1536×888,框内内容缩成一个点;而我这边同一段代码渲染出来是
+ * 459×540 的正常图。也就是说 mermaid 有时会给出一个**远大于内容的声明画布**
+ * (viewBox / width / height 三者之一被撑大),内容坐标没错、视觉上却成了一粒沙。
+ * 这个形态我无头复现不出来(30 次冷启动 + 流式原文 + 并发全绿),所以不去赌
+ * 触发条件,而是不管画布被撑成什么样,**一律按内容 bbox 重新声明**:
+ *
+ *   viewBox = 内容 bbox(留 8px 余量),width/height = bbox 尺寸 + 余量
+ *
+ * 内容永远填满自己的框,即使 mermaid 算错了画布也不会露馅。对正常图是近似恒等
+ * 变换(实测 viewBox `4 4 458 540` → `4 4 443 524`,内容一样大,只少了一圈无效留白)。
+ *
+ * 返回 false 表示量不到内容(未布局/空图),由调用方按 unknown/bad 处理。
+ */
+const FIT_PADDING = 8
+
+export function fitSvgToContent(svg: SVGSVGElement): boolean {
+  let box: DOMRect
+  try {
+    box = svg.getBBox() // 含所有子元素的内容实际范围(用户坐标)
+  } catch {
+    return false
+  }
+  if (!(box.width > 0) || !(box.height > 0)) return false
+
+  const x = box.x - FIT_PADDING
+  const y = box.y - FIT_PADDING
+  const w = box.width + FIT_PADDING * 2
+  const h = box.height + FIT_PADDING * 2
+  svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`)
+  svg.setAttribute('width', String(Math.round(w)))
+  svg.setAttribute('height', String(Math.round(h)))
+  // mermaid 有时会挂 max-width(useMaxWidth 分支);不摘掉的话框还是被限死
+  svg.style.maxWidth = 'none'
+  return true
 }
 
 /** 单块渲染:成功→figure 已替换进 DOM;坏图/异常→pre 留在原位并带角标 */
@@ -334,21 +425,30 @@ export async function renderMermaidBlock(
     figure.title = '点击放大查看'
     figure.innerHTML = svg // mermaid strict 模式输出已消毒的 SVG
 
-    // 必须先入 DOM 再量:游离节点的 getBBox 恒为 0,会把好图误判成坏图
+    // 必须先入 DOM 且完成一次布局再量:游离节点的 rect 恒为 0,会把好图误判成坏图
     pre.replaceWith(figure)
+    await nextFrame()
     const svgEl = figure.querySelector('svg')
-    if (svgEl !== null && isSaneMermaidSvg(svgEl)) return
+
+    // 关键一步:**按内容重新声明画布**。mermaid 偶尔给出远大于内容的画布
+    // (主人现场:1536×888 的框里内容缩成一个点),这里一律拉回内容尺寸,
+    // 良性情况下是近似恒等变换。
+    if (svgEl !== null) {
+      fitSvgToContent(svgEl)
+      await nextFrame() // 改完 viewBox 要重新布局才量得准
+    }
+
+    const verdict = svgEl === null ? 'bad' : judgeMermaidSvg(svgEl)
+    if (verdict === 'ok') return
+    if (verdict === 'unknown') {
+      recheckWhenVisible(figure, pre) // 藏着的先留着,可见时再判
+      return
+    }
 
     figure.replaceWith(pre) // 坏图退回代码块,准备重试
     if (attempt === 0) await nextFrame()
   }
-  pre.classList.add('mermaid-error')
-  if (pre.querySelector('.mermaid-error-badge') === null) {
-    const badge = document.createElement('span')
-    badge.className = 'mermaid-error-badge'
-    badge.textContent = '图表渲染异常,按代码显示'
-    pre.prepend(badge)
-  }
+  degradeToSource(pre, pre, '图表渲染异常,按代码显示')
 }
 
 /**
