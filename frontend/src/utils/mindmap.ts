@@ -98,8 +98,17 @@ export async function renderMindmapsIn(root: HTMLElement): Promise<void> {
       pre.replaceWith(figure)
 
       const mm = Markmap.create(svg, tree as MarkmapTree, {
-        // 初始展开两层:根 + 第一圈,再深就自己点开(避免一上来糊成一团)
-        foldLevel: 2,
+        // 默认**全展开**:不设 foldLevel。
+        //
+        // 2026-11-27 主人现场:一条 42 行的 CI 导图在网页上只画出「根 + 8 个分支」,
+        // 33 个叶子全不见了,看着像「大片空白、内容不对」,同一份 markdown 在 VSCode
+        // 里却完整。根因是 @markmap/parse 会**自动在真根外再套一层空壳根**:
+        // 实测树的深度分布是 0:1(空壳) 1:1(中心主题) 2:8(分支) 3:33(叶子),
+        // 所以 `foldLevel: 2` 只展开到「分支」,叶子整整少一层 —— 注释里写的
+        // 「根 + 第一圈」实际少算了一层。改全展开后同一份内容 9 → 42 个节点。
+        //
+        // 为什么不改成 foldLevel: 3:这颗树多深取决于模型写几层,写 4 层就又折一半,
+        // 同一个坑会以另一个深度复发。导图看的就是全貌,折叠留给用户自己点。
         duration: 200,
         pan: true,
         zoom: true,
@@ -108,7 +117,18 @@ export async function renderMindmapsIn(root: HTMLElement): Promise<void> {
         minScale: 0.3,
       })
       instances.set(figure, mm)
-      // 首次 fit 要等容器有尺寸;create 内部会在尺寸就绪时自动 fit
+      // 高度按内容自适应 —— 全展开后固定 420px 会把大图压成半张邮票。
+      //
+      // 实测(2026-11-27,42 节点那张 CI 导图):自然尺寸 749×858,塞进 420px 高的框
+      // → fit 后 scale 0.46、15px 的字只剩约 10px,看得见但读不了。
+      // 取 getBBox(transform 前的局部坐标,就是 scale=1 的自然尺寸)定高,
+      // 钳在 [320, 720]:小的不铺张,大的也不至于占满整屏(超出的仍可自己缩放拖)。
+      const box = svg.querySelector('g')?.getBBox()
+      if (box !== undefined && box.height > 0) {
+        const want = Math.ceil(box.height + 24) // fitPadding 12 上下各一份
+        figure.style.height = `${Math.min(720, Math.max(320, want))}px`
+      }
+      // 高度变了要重新 fit(create 内部那次是按旧高度算的)
       mm.fit()
     } catch {
       pre.classList.add('mindmap-error')
