@@ -58,19 +58,24 @@ def qr_login_bilibili(timeout_s: float = 180.0) -> BiliLoginResult:
     """
     from playwright.sync_api import sync_playwright
 
-    from app.service.bilibili_extractor import _launch_browser, _UA
+    from app.service.bilibili_extractor import _UA, _launch_browser
 
     with sync_playwright() as p:
         browser = _launch_browser(p)
         try:
-            ctx = browser.new_context(user_agent=_UA, viewport={"width": 1280, "height": 800}, locale="zh-CN")
-            ctx.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined})')
+            ctx = browser.new_context(
+                user_agent=_UA, viewport={"width": 1280, "height": 800}, locale="zh-CN"
+            )
+            ctx.add_init_script(
+                'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'
+            )
             page = ctx.new_page()
             page.goto("https://www.bilibili.com", wait_until="domcontentloaded", timeout=30000)
 
             # ① hover 登录入口（hover 型 popover——v3 教训：真鼠标 click 会 toggle 关闭）
             entry = page.locator(
-                ".header-avatar-unlogin-entry, .header-avatar-unlogin-inner, .header-avatar-unlogin-wrap"
+                ".header-avatar-unlogin-entry, .header-avatar-unlogin-inner, "
+                ".header-avatar-unlogin-wrap"
             ).first
             entry.hover(timeout=8000)
 
@@ -130,12 +135,15 @@ def qr_login_bilibili(timeout_s: float = 180.0) -> BiliLoginResult:
                 )
                 if sessdata:
                     uid = next(
-                        (c["value"] for c in cookies if c["name"] == "DedeUserID" and c.get("value")), ""
+                        (
+                            c["value"]
+                            for c in cookies
+                            if c["name"] == "DedeUserID" and c.get("value")
+                        ),
+                        "",
                     )
                     page.wait_for_timeout(1500)  # 让登录后的 cookie 全套落地再关
-                    return BiliLoginResult(
-                        sessdata=sessdata, uid=uid, logged_at=datetime.now(UTC)
-                    )
+                    return BiliLoginResult(sessdata=sessdata, uid=uid, logged_at=datetime.now(UTC))
                 page.wait_for_timeout(poll_ms)
                 waited_ms += poll_ms
             raise BiliLoginTimeout(f"等待扫码超时（{int(timeout_s)} 秒），已放弃本次登录")
@@ -146,7 +154,9 @@ def qr_login_bilibili(timeout_s: float = 180.0) -> BiliLoginResult:
                 pass
 
 
-async def save_bilibili_login(session: AsyncSession, owner_id: int, result: BiliLoginResult) -> None:
+async def save_bilibili_login(
+    session: AsyncSession, owner_id: int, result: BiliLoginResult
+) -> None:
     """扫码结果落 app_settings 三列（只 flush，commit 由调用方负责——Repo 约定）。
 
     落库即热生效：前后端/worker 每次现读（resolve_bilibili_sessdata），无需重启。

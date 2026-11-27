@@ -58,9 +58,7 @@ class QaRepo(Repo):
 
     async def get_session(self, session_id: int) -> QaSession | None:
         return await self.session.scalar(
-            select(QaSession).where(
-                QaSession.owner_id == self.owner_id, QaSession.id == session_id
-            )
+            select(QaSession).where(QaSession.owner_id == self.owner_id, QaSession.id == session_id)
         )
 
     async def rename_session(self, session_id: int, title: str) -> QaSession | None:
@@ -142,9 +140,7 @@ class QaRepo(Repo):
     async def delete_session(self, session_id: int) -> bool:
         """删会话;消息靠 FK ondelete CASCADE 连带删。返回是否真的删了。"""
         result = await self.session.execute(
-            delete(QaSession).where(
-                QaSession.owner_id == self.owner_id, QaSession.id == session_id
-            )
+            delete(QaSession).where(QaSession.owner_id == self.owner_id, QaSession.id == session_id)
         )
         return bool(result.rowcount)
 

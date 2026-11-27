@@ -162,9 +162,7 @@ class TestDefaultOn:
         )
         assert reg.status_code in (200, 201), reg.text
         token = reg.json()["access_token"]
-        resp = env.client.get(
-            "/api/settings", headers={"Authorization": f"Bearer {token}"}
-        )
+        resp = env.client.get("/api/settings", headers={"Authorization": f"Bearer {token}"})
         assert resp.status_code == 200, resp.text
         assert resp.json()["agent_enabled"] is True
 
@@ -304,9 +302,15 @@ class TestSwitchOn:
                 ],
                 # 第二步(流式):最终答案分两段增量 + usage
                 [
-                    "data: " + json.dumps({"choices": [{"delta": {"content": "闭包是函数"}}]}, ensure_ascii=False),
                     "data: "
-                    + json.dumps({"choices": [{"delta": {"content": "+捕获的外层变量。[2]\n"}}]}, ensure_ascii=False),
+                    + json.dumps(
+                        {"choices": [{"delta": {"content": "闭包是函数"}}]}, ensure_ascii=False
+                    ),
+                    "data: "
+                    + json.dumps(
+                        {"choices": [{"delta": {"content": "+捕获的外层变量。[2]\n"}}]},
+                        ensure_ascii=False,
+                    ),
                     "data: "
                     + json.dumps(
                         {

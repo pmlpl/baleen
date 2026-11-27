@@ -322,9 +322,7 @@ async def list_trash_notes(
 
     repos = Repos(session, owner_id)
     total, rows = await repos.notes.list_archived(limit=limit, offset=offset)
-    chunk_counts = await LibraryRepo(session, owner_id).parent_chunk_counts(
-        [n.id for n in rows]
-    )
+    chunk_counts = await LibraryRepo(session, owner_id).parent_chunk_counts([n.id for n in rows])
     now = datetime.now(tz=UTC)
     items: list[TrashItemOut] = []
     for note in rows:

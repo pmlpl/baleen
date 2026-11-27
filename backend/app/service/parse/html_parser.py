@@ -26,10 +26,43 @@ from .types import ParseResult, ParseStatus
 # 块级标签:开始/结束时断行(td/th 拆开让表格单元格各占一行,比拼成一行可读)
 _BREAK_TAGS = frozenset(
     {
-        "address", "article", "aside", "blockquote", "caption", "dd", "div", "dl", "dt",
-        "fieldset", "figure", "figcaption", "footer", "form", "h1", "h2", "h3", "h4", "h5",
-        "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table",
-        "tbody", "td", "tfoot", "th", "thead", "tr", "ul",
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "caption",
+        "dd",
+        "div",
+        "dl",
+        "dt",
+        "fieldset",
+        "figure",
+        "figcaption",
+        "footer",
+        "form",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hr",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "pre",
+        "section",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "ul",
     }
 )
 _HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
@@ -37,7 +70,19 @@ _HEADING_TAGS = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
 # ⚠️ 不含 void 标签(meta/link/br 等):它们没有 endtag,进了这个集合会让 skip_depth
 # 只增不减,把后续 body 全吞掉(实测一份带 2 个 meta 的简历导致正文全空)
 _SKIP_TAGS = frozenset(
-    {"canvas", "embed", "head", "iframe", "noscript", "object", "script", "style", "svg", "template", "title"}
+    {
+        "canvas",
+        "embed",
+        "head",
+        "iframe",
+        "noscript",
+        "object",
+        "script",
+        "style",
+        "svg",
+        "template",
+        "title",
+    }
 )
 # data URI 图片:HTML 简历的头像/照片几乎全是这个形态
 _DATA_URI_RE = re.compile(r"^data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\s]+)\s*$")
@@ -70,7 +115,8 @@ class _Extractor(HTMLParser):
     def __init__(self, sink: Callable[[bytes, str], str] | None) -> None:
         super().__init__(convert_charrefs=True)
         self._sink = sink
-        # 顺序条目:{"kind":"text","level":N,"text":...} | {"kind":"image","index":i,"alt":...,"media":key}
+        # 顺序条目:{"kind":"text","level":N,"text":...}
+        #          | {"kind":"image","index":i,"alt":...,"media":key}
         self.items: list[dict] = []
         self.image_count = 0
         self.dropped_imgs = 0
@@ -140,7 +186,7 @@ class _Extractor(HTMLParser):
         match = _DATA_URI_RE.match(src)
         self._flush_line()  # 图片无论收下与否都打断当前行,保持正文顺序
         if match:
-            mime, b64 = match.group(1), match.group(2)
+            b64 = match.group(2)  # mime(group 1)不消费:存字节内容寻址,后缀由 sink 定
             try:
                 raw = base64.b64decode(re.sub(r"\s+", "", b64))
             except (binascii.Error, ValueError):
@@ -194,9 +240,7 @@ def parse_html(path: Path, *, media_sink: Callable[[bytes, str], str] | None = N
         else:
             content.append(blocks.paragraph_from_text(item["text"]))
     if extractor.oversized_imgs:
-        warnings.append(
-            f"{extractor.oversized_imgs} 张图片超过单张大小上限,未导入(已保留替代文字)"
-        )
+        warnings.append(f"{extractor.oversized_imgs} 张图片超过单张大小上限,未导入(已保留替代文字)")
     if extractor.dropped_imgs - extractor.oversized_imgs:
         warnings.append(
             f"{extractor.dropped_imgs - extractor.oversized_imgs} 张外链/本地图片未导入,"

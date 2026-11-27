@@ -21,9 +21,7 @@ def _noauth(env: SimpleNamespace) -> None:
 def test_register_returns_token_and_user(env: SimpleNamespace) -> None:
     _noauth(env)
     name = _uniq()
-    resp = env.client.post(
-        "/api/auth/register", json={"username": name, "password": "secret12345"}
-    )
+    resp = env.client.post("/api/auth/register", json={"username": name, "password": "secret12345"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["token_type"] == "bearer"
@@ -39,9 +37,7 @@ def test_register_duplicate_username_409(env: SimpleNamespace) -> None:
         "/api/auth/register", json={"username": name, "password": "secret12345"}
     )
     assert first.status_code == 200, first.text
-    dup = env.client.post(
-        "/api/auth/register", json={"username": name, "password": "other12345"}
-    )
+    dup = env.client.post("/api/auth/register", json={"username": name, "password": "other12345"})
     assert dup.status_code == 409
     assert "已被占用" in dup.json()["detail"]
 

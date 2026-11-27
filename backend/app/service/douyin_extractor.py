@@ -185,8 +185,12 @@ def fetch_douyin_video(
     with sync_playwright() as p:
         browser = _launch_browser(p)
         try:
-            ctx = browser.new_context(user_agent=_UA, viewport={"width": 1280, "height": 800}, locale="zh-CN")
-            ctx.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined})')
+            ctx = browser.new_context(
+                user_agent=_UA, viewport={"width": 1280, "height": 800}, locale="zh-CN"
+            )
+            ctx.add_init_script(
+                'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'
+            )
             page = ctx.new_page()
 
             def on_response(resp) -> None:  # noqa: ANN001
@@ -208,7 +212,7 @@ def fetch_douyin_video(
             page.on("response", on_response)
             # 两次机会：抖音偶发返回无 aweme_detail 的页面变体（风控插页/布局变体），
             # reload 一次通常就正常了（2026-11-15 实测 SpaceX 课程链接复现）
-            for attempt in range(2):
+            for _attempt in range(2):
                 page.goto(page_url, wait_until="domcontentloaded", timeout=30000)
                 for _ in range(30):  # 最多等 15s 让页面自己调详情接口
                     if "data" in captured:
@@ -220,7 +224,6 @@ def fetch_douyin_video(
                     page.reload(wait_until="domcontentloaded", timeout=30000)
                 except Exception:  # noqa: BLE001 —— 重载被导航打断也算一次尝试
                     break
-            cookies_note = ctx.cookies()
         finally:
             browser.close()
 
@@ -230,7 +233,10 @@ def fetch_douyin_video(
         )
 
     # 时长检查提前：1 小时的视频先白下几百 MB 才报错，谁也受不了
-    pre_dur = int(((captured["data"].get("aweme_detail") or {}).get("video") or {}).get("duration") or 0) // 1000
+    pre_dur = (
+        int(((captured["data"].get("aweme_detail") or {}).get("video") or {}).get("duration") or 0)
+        // 1000
+    )
     if pre_dur > max_duration_s:
         raise RuntimeError(
             f"视频时长 {pre_dur // 60} 分钟，超过 whisper 模式 {max_duration_s // 60} 分钟上限。"

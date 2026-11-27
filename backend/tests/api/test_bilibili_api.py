@@ -36,9 +36,7 @@ def test_get_login_status_defaults_to_logged_out(env: SimpleNamespace) -> None:
     assert "sessdata" not in body  # SESSDATA 全文永不回显
 
 
-def test_post_login_persists_and_gets_status(
-    env: SimpleNamespace, monkeypatch
-) -> None:
+def test_post_login_persists_and_gets_status(env: SimpleNamespace, monkeypatch) -> None:
     from app.api import bilibili as bili_api
     from app.service.bilibili_login import BiliLoginResult
 
@@ -91,9 +89,7 @@ def test_post_login_window_closed_returns_400(env: SimpleNamespace, monkeypatch)
     assert resp.status_code == 400, resp.text
 
 
-def test_resolve_bilibili_sessdata_db_overrides_env(
-    env: SimpleNamespace, monkeypatch
-) -> None:
+def test_resolve_bilibili_sessdata_db_overrides_env(env: SimpleNamespace, monkeypatch) -> None:
     """DB 行优先；.env 的 BILIBILI_SESSDATA 只是回退（热生效：现读）。"""
     from app.service.llm.resolve import resolve_bilibili_sessdata
 

@@ -92,6 +92,7 @@ def _verify_magic(ext: str, head: bytes, display_name: str) -> None:
             detail=f"文件内容与扩展名不符:{display_name}",
         )
 
+
 router = APIRouter(prefix="/api", tags=["sources"])
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
@@ -99,9 +100,7 @@ SessionDep = Annotated[AsyncSession, Depends(get_session)]
 log = logging.getLogger(__name__)
 
 
-async def _reset_stale_done_job(
-    repos: Repos, job, *, source_created: bool, source_id: int
-) -> bool:
+async def _reset_stale_done_job(repos: Repos, job, *, source_created: bool, source_id: int) -> bool:
     """dedupe 假阳性守卫(2026-11-19 复跑批次实锤的 A 档缺陷;v37 软删后扩充)。
 
     「删笔记 → 重导同一内容」原先被静默跳过:DELETE 级联清了 sources 行
@@ -171,7 +170,9 @@ class UrlImportRequest(BaseModel):
     """POST /api/sources/url 的请求体:B 站视频链接导入。"""
 
     url: str
-    mode: str = "subtitle"  # "subtitle"（秒级，拉B站字幕） | "whisper"（分钟级，下载音频+whisper转写）
+    mode: str = (
+        "subtitle"  # "subtitle"（秒级，拉B站字幕） | "whisper"（分钟级，下载音频+whisper转写）
+    )
 
 
 async def _write_attachments(attachments: list[UploadFile], target_dir: Path) -> None:
@@ -227,6 +228,7 @@ class ReviewRunOut(BaseModel):
 
 class VideoLogEntry(BaseModel):
     """视频导入白盒日志条目：时间戳(epoch 秒)+阶段文本+百分比。"""
+
     ts: int
     stage: str
     pct: int | None = None
@@ -362,9 +364,7 @@ async def upload_source(
         payload={"filename": raw_name, "via": "api"},
     )
     # 删笔记重导同一文件:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
-    await _reset_stale_done_job(
-        repos, job, source_created=source_created, source_id=source.id
-    )
+    await _reset_stale_done_job(repos, job, source_created=source_created, source_id=source.id)
     await session.commit()
 
     # 只有真完成过(done)才算去重;failed/queued 的重试要返回 deduped=False 让前端继续轮询
@@ -410,14 +410,14 @@ async def import_from_url(
     """通过 B 站视频链接导入:两种模式可选。
 
     - ``mode="subtitle"``：拉 B 站 CC/AI 字幕（秒级，同步，但不稳定）
-    - ``mode="whisper"``：异步——立即返回 201，worker 后台下载音频 + whisper 转写 + 帧提取（分钟级，可靠）
+    - ``mode="whisper"``：异步——立即返回 201，worker 后台下载音频 + whisper 转写
+      + 帧提取（分钟级，可靠）
     字幕模式产出 markdown 后走常规 sha256/暂存/blob/enqueue/dedupe；
     whisper 模式创建 stub source + job（占位 sha），入队 ``extract_and_import_video``，
     worker 提取完 markdown 后调 ``run_import_async(source_id=...)`` 入库。
     """
     from app.service.bilibili import BilibiliError, fetch_bilibili, sanitize_filename
     from app.service.imports.pipeline import DEDUPE_PREFIX, _store_blob
-    from app.service.llm.client import LLMClient
     from app.service.llm.resolve import resolve_bilibili_sessdata, resolve_llm_config
 
     # 预检 API Key(没配 key 不允许导入，防止未整理内容污染知识库)
@@ -480,9 +480,7 @@ async def import_from_url(
             kind="import",
         )
         # 删笔记重导同一视频:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
-        await _reset_stale_done_job(
-            repos, job, source_created=source_created, source_id=source.id
-        )
+        await _reset_stale_done_job(repos, job, source_created=source_created, source_id=source.id)
         await session.commit()
 
         # 只有真完成过(done)才算去重;failed/queued 的重试返回 deduped=False 让前端继续轮询
@@ -525,11 +523,11 @@ async def import_from_url(
         result = await asyncio.to_thread(fetch_bilibili, body.url, sessdata=sessdata)
     except BilibiliError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception:
+    except Exception as exc:
         raise HTTPException(
             status_code=502,
             detail="B 站接口请求失败,请稍后重试",
-        )
+        ) from exc
     markdown_content = result.markdown
     video_title = result.info.title
 
@@ -541,9 +539,9 @@ async def import_from_url(
     staging = staging_dir / filename
     try:
         staging.write_text(markdown_content, encoding="utf-8")
-    except OSError:
+    except OSError as exc:
         shutil.rmtree(staging_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail="暂存文件写入失败")
+        raise HTTPException(status_code=500, detail="暂存文件写入失败") from exc
 
     sha = hashlib.sha256(staging.read_bytes()).hexdigest()
     blob = _store_blob(staging.read_bytes(), sha)
@@ -563,9 +561,7 @@ async def import_from_url(
         payload={"filename": filename, "via": "url"},
     )
     # 删笔记重导同一字幕:source 是新建的,旧 done job 行是孤儿 → 重置重跑(2026-11-19)
-    await _reset_stale_done_job(
-        repos, job, source_created=source_created, source_id=source.id
-    )
+    await _reset_stale_done_job(repos, job, source_created=source_created, source_id=source.id)
     await session.commit()
 
     # 只有真完成过(done)才算去重;failed/queued 的重试要返回 deduped=False 让前端继续轮询

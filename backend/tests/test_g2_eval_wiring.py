@@ -52,7 +52,9 @@ def test_predict_one_passes_client_to_parse_file(monkeypatch, tmp_path: Path) ->
         )
 
     def fake_judge_g1(pr):
-        return SimpleNamespace(verdict="reject", quality="junk", action="drop", reasons=["stub"], meta={})
+        return SimpleNamespace(
+            verdict="reject", quality="junk", action="drop", reasons=["stub"], meta={}
+        )
 
     monkeypatch.setattr(G, "parse_file", fake_parse_file)
     monkeypatch.setattr(G, "judge_g1", fake_judge_g1)

@@ -49,16 +49,14 @@ class _FakeResp:
     def read(self) -> bytes:
         return self._payload
 
-    def __enter__(self) -> "_FakeResp":
+    def __enter__(self) -> _FakeResp:
         return self
 
     def __exit__(self, *_exc: object) -> bool:
         return False
 
 
-def _install(
-    monkeypatch: pytest.MonkeyPatch, behaviors: list[bytes | Exception]
-) -> list[dict]:
+def _install(monkeypatch: pytest.MonkeyPatch, behaviors: list[bytes | Exception]) -> list[dict]:
     """替身 urlopen:按序消费 behaviors(异常=抛,bytes=响应体),记录每次请求。"""
     calls: list[dict] = []
     queue = iter(behaviors)
@@ -148,9 +146,7 @@ def test_base_url_normalization(monkeypatch: pytest.MonkeyPatch) -> None:
         ("https://api.deepseek.com/v1/", "https://api.deepseek.com/v1/tools/search"),
     ]:
         calls = _install(monkeypatch, [_http_432(), ds_body])
-        search_web(
-            "查询", api_key="tvly-x", fallback_base_url=base, fallback_api_key=_DS_KEY
-        )
+        search_web("查询", api_key="tvly-x", fallback_base_url=base, fallback_api_key=_DS_KEY)
         assert calls[1]["url"] == expected, base
 
 
@@ -179,9 +175,7 @@ def test_non_deepseek_fallback_unavailable(
     """非 deepseek 网关(base_url 不含 deepseek)→ 兜底不可用,抛 Tavily 原错误。"""
     calls = _install(monkeypatch, [_http_432()])
     with pytest.raises(urllib.error.HTTPError) as ei:
-        search_web(
-            "查询", api_key="tvly-x", fallback_base_url=base_url, fallback_api_key=_DS_KEY
-        )
+        search_web("查询", api_key="tvly-x", fallback_base_url=base_url, fallback_api_key=_DS_KEY)
     assert ei.value.code == 432
     assert len(calls) == 1  # 没碰 DeepSearch
 
@@ -190,9 +184,7 @@ def test_missing_fallback_key_unavailable(monkeypatch: pytest.MonkeyPatch) -> No
     """owner 没配自己的 llm key → 兜底同样不可用(直接抛)。"""
     calls = _install(monkeypatch, [_http_432()])
     with pytest.raises(urllib.error.HTTPError):
-        search_web(
-            "查询", api_key="tvly-x", fallback_base_url=_DS_BASE, fallback_api_key=""
-        )
+        search_web("查询", api_key="tvly-x", fallback_base_url=_DS_BASE, fallback_api_key="")
     assert len(calls) == 1
 
 
@@ -206,7 +198,9 @@ def test_tavily_empty_results_is_success(monkeypatch: pytest.MonkeyPatch) -> Non
     assert len(calls) == 1
 
 
-def test_no_key_leaks_into_logs(monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+def test_no_key_leaks_into_logs(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """留痕纪律:降级日志可看原因,但 api_key 永不进日志。"""
     _install(monkeypatch, [_http_432(), json.dumps({"results": []}).encode("utf-8")])
     with caplog.at_level("WARNING", logger="app.service.qa.websearch"):

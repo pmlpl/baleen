@@ -41,9 +41,7 @@ class BiliLoginOut(BaseModel):
 
 
 @router.post("/login", response_model=BiliLoginOut)
-async def bilibili_login(
-    session: SessionDep, owner_id: CurrentOwnerDep
-) -> BiliLoginOut:
+async def bilibili_login(session: SessionDep, owner_id: CurrentOwnerDep) -> BiliLoginOut:
     """弹真浏览器扫码登录 B 站，抓 SESSDATA 落库。同步阻塞，最长约 3.5 分钟。"""
     try:
         result = await asyncio.to_thread(qr_login_bilibili, QR_TIMEOUT_S)

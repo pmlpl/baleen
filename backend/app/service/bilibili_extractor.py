@@ -79,7 +79,9 @@ def _cdn_download(stream_url: str, target: Path) -> None:
         raise RuntimeError(f"CDN 下载异常（只有 {target.stat().st_size} 字节）")
 
 
-def fetch_bilibili_media(url: str, *, sessdata: str = "", output_dir: Path | None = None) -> BilibiliMedia:
+def fetch_bilibili_media(
+    url: str, *, sessdata: str = "", output_dir: Path | None = None
+) -> BilibiliMedia:
     """打开视频页 → 解析 INITIAL_STATE/playinfo → CDN 下载音频（视频尽力而为）。同步。"""
     if not sessdata:
         raise BilibiliAuthRequired(
@@ -97,8 +99,12 @@ def fetch_bilibili_media(url: str, *, sessdata: str = "", output_dir: Path | Non
     with sync_playwright() as p:
         browser = _launch_browser(p)
         try:
-            ctx = browser.new_context(user_agent=_UA, viewport={"width": 1280, "height": 800}, locale="zh-CN")
-            ctx.add_init_script('Object.defineProperty(navigator, "webdriver", {get: () => undefined})')
+            ctx = browser.new_context(
+                user_agent=_UA, viewport={"width": 1280, "height": 800}, locale="zh-CN"
+            )
+            ctx.add_init_script(
+                'Object.defineProperty(navigator, "webdriver", {get: () => undefined})'
+            )
             ctx.add_cookies(
                 [{"name": "SESSDATA", "value": sessdata, "domain": ".bilibili.com", "path": "/"}]
             )
@@ -113,7 +119,9 @@ def fetch_bilibili_media(url: str, *, sessdata: str = "", output_dir: Path | Non
                         "() => (window.__INITIAL_STATE__ && window.__INITIAL_STATE__.videoData)"
                         " ? JSON.parse(JSON.stringify(window.__INITIAL_STATE__.videoData)) : null"
                     )
-                    playinfo = page.evaluate("() => JSON.parse(JSON.stringify(window.__playinfo__ || null))")
+                    playinfo = page.evaluate(
+                        "() => JSON.parse(JSON.stringify(window.__playinfo__ || null))"
+                    )
                     if video_data and playinfo:
                         break
                 except Exception:  # noqa: BLE001 —— 页面正在跳转（挑战重定向）

@@ -14,9 +14,7 @@ class SourcesRepo(Repo):
         """该用户的导入来源总数(个人中心统计)。"""
         return int(
             await self.session.scalar(
-                select(func.count())
-                .select_from(Source)
-                .where(Source.owner_id == self.owner_id)
+                select(func.count()).select_from(Source).where(Source.owner_id == self.owner_id)
             )
             or 0
         )

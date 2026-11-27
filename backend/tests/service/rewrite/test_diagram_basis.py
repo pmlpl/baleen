@@ -17,7 +17,11 @@ from app.service.rewrite.diagram_basis import (
 
 
 def _heading(text: str, level: int = 2) -> dict:
-    return {"type": "heading", "attrs": {"level": level}, "content": [{"type": "text", "text": text}]}
+    return {
+        "type": "heading",
+        "attrs": {"level": level},
+        "content": [{"type": "text", "text": text}],
+    }
 
 
 def _para(text: str) -> dict:
@@ -57,11 +61,16 @@ def test_list_basis_rejects_deep_content() -> None:
     long_text = "这是一个非常详细的讲解段落。" * 60  # > 600 字
     blocks = _doc(
         _heading("深度解析", 1),
-        _heading("第一原理", 2), _para(long_text),
-        _heading("第二原理", 2), _para(long_text),
-        _heading("第三原理", 2), _para(long_text),
-        _heading("第四原理", 2), _para(long_text),
-        _heading("第五原理", 2), _para(long_text),
+        _heading("第一原理", 2),
+        _para(long_text),
+        _heading("第二原理", 2),
+        _para(long_text),
+        _heading("第三原理", 2),
+        _para(long_text),
+        _heading("第四原理", 2),
+        _para(long_text),
+        _heading("第五原理", 2),
+        _para(long_text),
     )
     basis = detect_diagram_basis(blocks)
     assert basis.kind == "", "长文笔记不是清单,不该被压成结构图"
@@ -71,10 +80,14 @@ def test_list_basis_needs_five_items() -> None:
     """只有 4 个同级标题 → 不触发(图的收益抵不过噪音风险)。"""
     blocks = _doc(
         _heading("总览", 1),
-        _heading("甲", 2), _para("内容。"),
-        _heading("乙", 2), _para("内容。"),
-        _heading("丙", 2), _para("内容。"),
-        _heading("丁", 2), _para("内容。"),
+        _heading("甲", 2),
+        _para("内容。"),
+        _heading("乙", 2),
+        _para("内容。"),
+        _heading("丙", 2),
+        _para("内容。"),
+        _heading("丁", 2),
+        _para("内容。"),
     )
     assert detect_diagram_basis(blocks).kind == ""
 
@@ -130,8 +143,7 @@ def test_validate_accepts_diagram_using_source_nodes() -> None:
     """图里节点全部来自原文标题 → 通过。"""
     basis = DiagramBasis(kind="list", nodes=["模型层", "工具层", "场景层", "概念层", "执行层"])
     code = (
-        "mindmap\n  root((AI 入门地图))\n    模型层\n    工具层\n"
-        "    场景层\n    概念层\n    执行层"
+        "mindmap\n  root((AI 入门地图))\n    模型层\n    工具层\n    场景层\n    概念层\n    执行层"
     )
     ok, why = validate_diagram(code, basis)
     assert ok, why
@@ -140,10 +152,7 @@ def test_validate_accepts_diagram_using_source_nodes() -> None:
 def test_validate_rejects_fabricated_nodes() -> None:
     """图里出现原文没有的概念(模型自己编的)→ 必须拦下。"""
     basis = DiagramBasis(kind="list", nodes=["模型层", "工具层", "场景层"])
-    code = (
-        "mindmap\n  root((AI 全景))\n    量子计算\n    脑机接口\n"
-        "    可控核聚变\n    太空电梯"
-    )
+    code = "mindmap\n  root((AI 全景))\n    量子计算\n    脑机接口\n    可控核聚变\n    太空电梯"
     ok, why = validate_diagram(code, basis)
     assert not ok
     assert "编造" in why
@@ -186,7 +195,9 @@ def test_build_prompt_lists_source_nodes_only() -> None:
 
 
 def test_extract_mermaid_blocks() -> None:
-    md = "文字\n```mermaid\nflowchart TD\n  A --> B\n```\n更多文字\n```mermaid\nmindmap\n  root\n```"
+    md = (
+        "文字\n```mermaid\nflowchart TD\n  A --> B\n```\n更多文字\n```mermaid\nmindmap\n  root\n```"
+    )
     blocks = extract_mermaid_blocks(md)
     assert len(blocks) == 2
     assert "flowchart" in blocks[0]

@@ -101,15 +101,15 @@ async def analyze(text: str, client: LLMClient) -> str:
 
     parts = await asyncio.gather(*(map_one(i, c) for i, c in enumerate(chunks)))
 
-    body = "\n\n".join(
-        f"## 第 {i + 1} 部分\n\n{part}" for i, part in enumerate(parts) if part
-    )
+    body = "\n\n".join(f"## 第 {i + 1} 部分\n\n{part}" for i, part in enumerate(parts) if part)
     if len(body) <= REPORT_MAX_CHARS:
         return body
 
     # 要点总量超限 → reduce 合并一轮;reduce 再失败就硬截(不整体失败)
     try:
-        merged = await asyncio.to_thread(_chat, client, _REDUCE_PROMPT.format(limit=REPORT_MAX_CHARS) + body)
+        merged = await asyncio.to_thread(
+            _chat, client, _REDUCE_PROMPT.format(limit=REPORT_MAX_CHARS) + body
+        )
     except LLMError:
         merged = body
     return merged[:REPORT_MAX_CHARS]

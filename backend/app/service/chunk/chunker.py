@@ -153,9 +153,7 @@ def _block_display_text(block: dict) -> str:
     if t == "listItem":
         return "\n".join(_block_display_text(b) for b in block.get("content") or []).strip()
     if t == "blockquote":
-        inner = "\n".join(
-            _block_display_text(b) for b in block.get("content") or []
-        ).strip()
+        inner = "\n".join(_block_display_text(b) for b in block.get("content") or []).strip()
         return "\n".join(f"> {ln}" if ln else ">" for ln in inner.splitlines())
     return _block_text(block)
 

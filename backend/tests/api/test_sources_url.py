@@ -30,7 +30,9 @@ def _fake_bilibili_result() -> bilibili_module.BilibiliResult:
     )
 
 
-def _post_url(env, url: str = "https://www.bilibili.com/video/BV1GJ411x7h7/", mode: str = "subtitle"):
+def _post_url(
+    env, url: str = "https://www.bilibili.com/video/BV1GJ411x7h7/", mode: str = "subtitle"
+):
     return env.client.post(
         "/api/sources/url",
         json={"url": url, "mode": mode},
@@ -38,7 +40,9 @@ def _post_url(env, url: str = "https://www.bilibili.com/video/BV1GJ411x7h7/", mo
 
 
 def test_url_import_creates_source_and_job(env, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result())
+    monkeypatch.setattr(
+        bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result()
+    )
 
     resp = _post_url(env)
     assert resp.status_code == 201, resp.text
@@ -81,7 +85,9 @@ def test_url_import_creates_source_and_job(env, monkeypatch: pytest.MonkeyPatch)
 
 
 def test_url_import_dedupe(env, monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result())
+    monkeypatch.setattr(
+        bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result()
+    )
 
     first = _post_url(env)
     assert first.status_code == 201
@@ -95,7 +101,9 @@ def test_url_import_dedupe(env, monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_url_import_done_job_dedupes(env, monkeypatch: pytest.MonkeyPatch) -> None:
     """job 真完成过(done)→ 第二次导入 deduped=True,不再入队。"""
-    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result())
+    monkeypatch.setattr(
+        bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result()
+    )
 
     first = _post_url(env)
     assert first.status_code == 201
@@ -126,7 +134,9 @@ def test_url_import_done_job_dedupes(env, monkeypatch: pytest.MonkeyPatch) -> No
 
 def test_url_import_failed_job_retries(env, monkeypatch: pytest.MonkeyPatch) -> None:
     """job 失败过 → 重新导入 = 重试:deduped=False,job 重置回 queued,重新入队。"""
-    monkeypatch.setattr(bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result())
+    monkeypatch.setattr(
+        bilibili_module, "fetch_bilibili", lambda url, *, sessdata="": _fake_bilibili_result()
+    )
 
     first = _post_url(env)
     assert first.status_code == 201
@@ -205,7 +215,8 @@ def test_url_import_no_api_key_rejected(env, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(resolve_module, "resolve_llm_config", fake_resolve)
     called: list[bool] = []
     monkeypatch.setattr(
-        bilibili_module, "fetch_bilibili",
+        bilibili_module,
+        "fetch_bilibili",
         lambda *a, **kw: called.append(True) or _fake_bilibili_result(),
     )
 
@@ -286,7 +297,8 @@ def test_whisper_import_creates_stub_source(env) -> None:
 
 
 def test_whisper_import_dedupe(env) -> None:
-    """whisper 模式：同一 BVID 重复导入 → 同 source + job 复用（job 未完成→deduped=False 继续轮询）。"""
+    """whisper 模式：同一 BVID 重复导入 → 同 source + job 复用
+    （job 未完成→deduped=False 继续轮询）。"""
     first = _post_url(env, mode="whisper")
     assert first.status_code == 201
     second = _post_url(env, mode="whisper")
@@ -342,7 +354,9 @@ def test_whisper_import_failed_job_retries(env) -> None:
             assert source is not None
             job = await repos.jobs.get_by_dedupe_key("import:" + source.sha256)
             assert job is not None
-            await repos.jobs.update_status(job.id, "failed", last_error="抖音拒绝访问（Cookies 无效或过期）")
+            await repos.jobs.update_status(
+                job.id, "failed", last_error="抖音拒绝访问（Cookies 无效或过期）"
+            )
             await session.commit()
 
     env.client.portal.call(mark_failed)
@@ -515,6 +529,7 @@ def test_douyin_full_url_whisper(env) -> None:
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["source_id"] > 0
+
 
 # ==================== dedupe 假阳性回归（2026-11-19 复跑批次实锤） ====================
 

@@ -39,7 +39,9 @@ def test_html_text_and_headings(tmp_path) -> None:
 
 def test_html_data_uri_image_collected_via_sink(tmp_path) -> None:
     b64 = base64.b64encode(PNG_1X1).decode()
-    html = f'<html><body><p>你好</p><img src="data:image/png;base64,{b64}" alt="照片"></body></html>'
+    html = (
+        f'<html><body><p>你好</p><img src="data:image/png;base64,{b64}" alt="照片"></body></html>'
+    )
     collected: list[tuple[bytes, str]] = []
 
     def sink(data: bytes, alt: str) -> str:
@@ -110,7 +112,7 @@ def test_html_meta_link_in_head_do_not_swallow_body(tmp_path) -> None:
     html = (
         '<html><head><meta charset="UTF-8"><meta name="x" content="y">'
         '<link rel="stylesheet" href="a.css"><title>t</title></head>'
-        '<body><h1>正文标题</h1><p>正文内容</p></body></html>'
+        "<body><h1>正文标题</h1><p>正文内容</p></body></html>"
     )
     r = parse_file(_html_file(tmp_path, html))
     text = blocks.flatten_text(r.blocks)

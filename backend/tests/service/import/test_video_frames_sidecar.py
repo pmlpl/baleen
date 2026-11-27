@@ -60,7 +60,9 @@ class _CaptureLLM:
                     "has_video_rules": "视频笔记专属规则" in system,
                     "text": text,
                     "image_count": sum(
-                        1 for p in (user_content if is_multimodal else []) if p.get("type") == "image_url"
+                        1
+                        for p in (user_content if is_multimodal else [])
+                        if p.get("type") == "image_url"
                     ),
                 }
             )
@@ -130,7 +132,13 @@ def test_video_sidecar_restores_image_blocks_and_feeds_organizer(
     md.write_text(md_text, encoding="utf-8")
     manifest = [
         {"index": 0, "media_key": key0, "alt": "讲者", "text_layer": "字幕文字", "timestamp": 40.0},
-        {"index": 1, "media_key": key1, "alt": "白板", "text_layer": "trust 曲线", "timestamp": 106.0},
+        {
+            "index": 1,
+            "media_key": key1,
+            "alt": "白板",
+            "text_layer": "trust 曲线",
+            "timestamp": 106.0,
+        },
     ]
     md.with_name(md.name + VIDEO_FRAMES_SUFFIX).write_text(
         json.dumps(manifest, ensure_ascii=False), encoding="utf-8"
@@ -172,9 +180,7 @@ def test_video_sidecar_restores_image_blocks_and_feeds_organizer(
     asyncio.run(case())
 
 
-def test_plain_md_without_sidecar_unaffected(
-    tmp_path, db_scope, fake_embed, fake_tokens
-) -> None:
+def test_plain_md_without_sidecar_unaffected(tmp_path, db_scope, fake_embed, fake_tokens) -> None:
     """普通 md（无 sidecar）走原路径：organizer 非多模态、无视频规则。"""
     body = "\n\n".join([_PARAGRAPH] * 3)
     md = tmp_path / "plain.md"

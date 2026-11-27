@@ -13,7 +13,7 @@ fake_retrieve 记录每次检索词,供断言「改写后的 query 真的用于�
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -200,18 +200,18 @@ def test_chat_prompt_greets_by_nickname(env: SimpleNamespace, qa_setup: SimpleNa
     env.client.put("/api/persona", json={"charter": "", "nickname": ""})
     qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
     assert env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).status_code == 200
-    system_text = json.loads(qa_setup.transports[-1].calls[0]["body"].decode("utf-8"))[
-        "messages"
-    ][0]["content"]
+    system_text = json.loads(qa_setup.transports[-1].calls[0]["body"].decode("utf-8"))["messages"][
+        0
+    ]["content"]
     assert "名字是" not in system_text
 
     # 填了昵称:system prompt 开头带称呼行
     env.client.put("/api/persona", json={"charter": "", "nickname": "小明"})
     qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
     assert env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).status_code == 200
-    system_text = json.loads(qa_setup.transports[-1].calls[0]["body"].decode("utf-8"))[
-        "messages"
-    ][0]["content"]
+    system_text = json.loads(qa_setup.transports[-1].calls[0]["body"].decode("utf-8"))["messages"][
+        0
+    ]["content"]
     assert "名字是「小明」" in system_text
 
 
@@ -338,9 +338,7 @@ def test_rename_session_keeps_activity_order(
     assert [it["id"] for it in listing["items"][:2]] == [b, a]
 
 
-def test_rename_session_validation_and_404(
-    env: SimpleNamespace, qa_setup: SimpleNamespace
-) -> None:
+def test_rename_session_validation_and_404(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
     # 不存在/空白/超长:404 / 422 / 422(长度与首问标题同口径 TITLE_CHARS=30)
     assert env.client.patch("/api/qa/sessions/999999", json={"title": "x"}).status_code == 404
     qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
@@ -408,7 +406,7 @@ def _seed_sessions(
     async def _seed() -> list[int]:
         async with env.shared["factory"]() as session:
             ids: list[int] = []
-            base = datetime(2026, 1, 1, tzinfo=timezone.utc) - timedelta(days=days_before)
+            base = datetime(2026, 1, 1, tzinfo=UTC) - timedelta(days=days_before)
             for i in range(count):
                 ts = base + timedelta(days=i)
                 cur = await session.execute(
@@ -524,9 +522,7 @@ def test_session_retention_trims_to_50_with_cascade(
     assert env.client.get(f"/api/qa/sessions/{ids[2]}", headers=headers).status_code == 200
 
 
-def test_session_retention_is_owner_scoped(
-    env: SimpleNamespace, qa_setup: SimpleNamespace
-) -> None:
+def test_session_retention_is_owner_scoped(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
     """A 的裁剪只动 A 自己的:B(另一个 owner)的旧会话/消息原样保留,连看都看不见。"""
     b_ids = _seed_sessions(env, BYSTANDER_OWNER, 3, payload_first=3, days_before=400)
     headers = _headers_for(env, TEST_OWNER)
@@ -626,9 +622,7 @@ def test_save_note_writes_file_and_enqueues_import(
     monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path / "staging")
     enqueued: list[dict] = []
 
-    async def fake_enqueue(
-        file_path, *, dedupe_key, no_llm=False, owner_id=1
-    ):  # noqa: ANN001
+    async def fake_enqueue(file_path, *, dedupe_key, no_llm=False, owner_id=1):  # noqa: ANN001
         enqueued.append({"file": file_path, "no_llm": no_llm})
         return dedupe_key
 
@@ -655,9 +649,7 @@ def _make_enqueue_recorder(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> li
     monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path / "staging")
     enqueued: list[dict] = []
 
-    async def fake_enqueue(
-        file_path, *, dedupe_key, no_llm=False, owner_id=1
-    ):  # noqa: ANN001
+    async def fake_enqueue(file_path, *, dedupe_key, no_llm=False, owner_id=1):  # noqa: ANN001
         enqueued.append({"file": file_path, "no_llm": no_llm})
         return dedupe_key
 
@@ -665,9 +657,7 @@ def _make_enqueue_recorder(monkeypatch: pytest.MonkeyPatch, tmp_path: Any) -> li
     return enqueued
 
 
-def test_note_plan_returns_topics(
-    env: SimpleNamespace, qa_setup: SimpleNamespace
-) -> None:
+def test_note_plan_returns_topics(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
     """note-plan:LLM 返回两个主题 → 原样返回,建议 split。"""
     qa_setup.responses.append((200, _chat("闭包是函数+捕获的外层变量。[1]")))
     sid = env.client.post("/api/qa/chat", json={"question": "闭包是什么"}).json()["session_id"]
@@ -741,9 +731,7 @@ def test_save_note_split_generates_one_file_per_topic(
     qa_setup.responses.append((200, _chat("# 数据库索引\n\nB+ 树…")))
     qa_setup.responses.append((200, _chat("# SSD 硬件\n\n选购…")))
 
-    resp = env.client.post(
-        f"/api/qa/sessions/{sid}/save-note", json={"mode": "split"}
-    )
+    resp = env.client.post(f"/api/qa/sessions/{sid}/save-note", json={"mode": "split"})
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert len(body["notes"]) == 2
@@ -869,9 +857,7 @@ def test_chat_with_referenced_note_puts_it_in_prompt(
     note_id = env.client.portal.call(_seed)
 
     qa_setup.responses.append((200, _chat("按你引用的笔记讲讲 [1]")))
-    resp = env.client.post(
-        "/api/qa/chat", json={"question": "闭包是什么", "note_ids": [note_id]}
-    )
+    resp = env.client.post("/api/qa/chat", json={"question": "闭包是什么", "note_ids": [note_id]})
     assert resp.status_code == 200, resp.text
     # 引用笔记正文进了 prompt
     last_body = qa_setup.transports[-1].calls[-1]["body"]
@@ -884,14 +870,10 @@ def test_chat_with_referenced_note_puts_it_in_prompt(
     assert qa_setup.queries == ["闭包是什么"]
 
 
-def test_chat_with_bogus_note_ids_ignored(
-    env: SimpleNamespace, qa_setup: SimpleNamespace
-) -> None:
+def test_chat_with_bogus_note_ids_ignored(env: SimpleNamespace, qa_setup: SimpleNamespace) -> None:
     """非法/别人的 note_id 静默忽略,不影响问答。"""
     qa_setup.responses.append((200, _chat("答 [1]")))
-    resp = env.client.post(
-        "/api/qa/chat", json={"question": "讲讲", "note_ids": [999999, -1]}
-    )
+    resp = env.client.post("/api/qa/chat", json={"question": "讲讲", "note_ids": [999999, -1]})
     assert resp.status_code == 200, resp.text
     last_body = qa_setup.transports[-1].calls[-1]["body"]
     if isinstance(last_body, bytes):
@@ -908,6 +890,7 @@ def test_chat_no_kb_marker_triggers_web_search(
     复现主人实测:「关系型数据库」被发票笔记里的「数据库」字面误判为相关,
     旧版只能拒答;现在靠 LLM 自己判语义,联网给出正面解答。
     """
+
     async def fake_tavily_key(*_a, **_kw):  # noqa: ANN001
         return "tvly-fake"
 
@@ -978,9 +961,10 @@ class TestHasRelevantHit:
         assert qa_module._has_relevant_hit([self._hit("工作流的核心概念")], "ReAct是什么") is False
 
     def test_pure_chinese_2gram_matches(self) -> None:
-        assert qa_module._has_relevant_hit(
-            [self._hit("闭包是函数加捕获的外层变量")], "闭包是什么"
-        ) is True
+        assert (
+            qa_module._has_relevant_hit([self._hit("闭包是函数加捕获的外层变量")], "闭包是什么")
+            is True
+        )
 
     def test_short_letter_run_not_specific(self) -> None:
         """单个字母(如「关于a」)不算英文专有词,走中文滑窗;这里「关于」不在正文→不相关。"""

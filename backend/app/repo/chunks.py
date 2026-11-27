@@ -17,9 +17,7 @@ class ChunksRepo(Repo):
         子块/父块一起删(self-FK CASCADE);embeddings 靠 FK CASCADE 顺带清。
         供标题回填等「整篇重建切块」的场景用。
         """
-        result = await self.session.execute(
-            delete(ChunkRow).where(ChunkRow.note_id == note_id)
-        )
+        result = await self.session.execute(delete(ChunkRow).where(ChunkRow.note_id == note_id))
         return result.rowcount or 0
 
     async def get_by_note(self, note_id: int) -> list[ChunkRow]:

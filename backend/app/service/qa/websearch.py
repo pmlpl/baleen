@@ -92,9 +92,9 @@ def _search_deepseek(
         {
             "title": item.get("title") or "",
             "url": item.get("url") or "",
-            "content": (
-                item.get("summary") or item.get("content") or item.get("snippet") or ""
-            )[:_CONTENT_CHARS],
+            "content": (item.get("summary") or item.get("content") or item.get("snippet") or "")[
+                :_CONTENT_CHARS
+            ],
         }
         for item in (data.get("results") or [])[:max_results]
     ]
@@ -141,7 +141,9 @@ def search_web(
                 timeout=fallback_timeout,
             )
         except Exception as exc2:  # noqa: BLE001 —— 兜底也败,交调用方自答
-            logger.warning("联网搜索两级均失败:Tavily(%s)+ DeepSearch(%s)", _reason(exc), _reason(exc2))
+            logger.warning(
+                "联网搜索两级均失败:Tavily(%s)+ DeepSearch(%s)", _reason(exc), _reason(exc2)
+            )
             raise
         logger.warning("联网搜索降级:%s,成功(%d 条)", note, len(results))
         if meta_out is not None:

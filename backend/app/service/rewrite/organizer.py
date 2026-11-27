@@ -17,7 +17,6 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass, field
-from typing import Any
 
 from app.service.llm import LLMClient, LLMError, estimate_tokens, truncate_to_tokens
 from app.service.parse.blocks import flatten_text
@@ -38,9 +37,12 @@ from app.service.rewrite.outline import CN_NUMBERS, NUMBER_PREFIX
 # 输出:ORGANIZER_DEFAULT_OUTPUT_TOKENS —— 用户没在设置页填 llm_max_output_tokens 时的统一兜底。
 #   非「按模型预设表」:统一值,用户可在设置页填自己模型/厂商的上限覆盖。
 #   131072(128K)对主流大模型(deepseek-flash 输出上限 384K 等)稳妥,够重写几十万字。
-#   不读 env settings.llm_max_output_tokens——它被 vision/extractor/outline 共用,改它会波及单页短任务。
+#   不读 env settings.llm_max_output_tokens——它被 vision/extractor/outline 共用,
+#   改它会波及单页短任务。
 ORGANIZER_DEFAULT_OUTPUT_TOKENS = 131072
-MIN_SAMPLE_TOKENS = 200  # 正文采样挤压后不足此值 → 放弃采样只报 warning(仅在用户填了 context 时生效)
+MIN_SAMPLE_TOKENS = (
+    200  # 正文采样挤压后不足此值 → 放弃采样只报 warning(仅在用户填了 context 时生效)
+)
 
 # 契约规则（从 note-format.md §2/§3/§5 浓缩，嵌入 prompt）
 # 用 raw string：正文含 LaTeX 反例（\times \ge \text{}），普通字符串会触发 escape warning
@@ -129,20 +131,21 @@ _VIDEO_RULES = r"""\
 def _video_rules_text() -> str:
     return _VIDEO_RULES
 
+
 _SYSTEM = (
     "你是个人知识库的笔记编辑助手。你的任务是阅读原始内容（可能是视频字幕、文档导入、"
     "或 AI 对话整理），把它整理成一篇高质量的知识笔记。\n\n"
     "你不是转写工具——不是把原文换个格式抄一遍，而是像一个认真的人做笔记一样："
-    "理解内容、提取知识点、用自己的话重新组织、去掉无关噪音。\n\n"
-    + _CONTRACT_RULES
-    + "\n\n"
+    "理解内容、提取知识点、用自己的话重新组织、去掉无关噪音。\n\n" + _CONTRACT_RULES + "\n\n"
     "【你的任务】\n"
     "1. 阅读内容，判断有没有可整理的知识点\n"
     "2. 如果有：按契约重写成 markdown——\n"
-    "   a. 把口语化/碎片化的内容转成清晰的书面语言（字幕常是一句一句的，要合成长句、段落），但保留信息的完整度\n"
+    "   a. 把口语化/碎片化的内容转成清晰的书面语言（字幕常是一句一句的，要合成长句、段落），"
+    "但保留信息的完整度\n"
     "   b. 按「一个主题一节」组织结构，补上缺失的标题；"
     "并列大主题是否各自成章，遵循下方【单章还是多章】的硬性规则\n"
-    "   c. 谨慎去噪：只去掉明确的营销话术和与任何知识点都无关的纯闲聊，不要因为「不够深」就删除含具体信息的内容\n"
+    "   c. 谨慎去噪：只去掉明确的营销话术和与任何知识点都无关的纯闲聊，"
+    "不要因为「不够深」就删除含具体信息的内容\n"
     "   d. 保留所有技术细节（项目名/代码/命令/参数/版本号/URL）\n"
     "3. 如果全文都是广告/无任何可提取的知识点：标记 organizable=false\n\n"
     "【重要规则】\n"
@@ -257,11 +260,7 @@ def _build_user_message(
         "size_bytes": size_bytes,
     }
 
-    header = (
-        f"文件名: {filename}\n"
-        f"扩展名: {ext or '(无)'}\n"
-        f"字符数: {chars}\n"
-    )
+    header = f"文件名: {filename}\n扩展名: {ext or '(无)'}\n字符数: {chars}\n"
 
     # 视频：给模型一张「图片标记 → 画面内容」对照表（图本身另以多模态 images 附上）
     if video_images:
@@ -305,7 +304,12 @@ def _build_user_message(
             sample = text  # 兜底：不让正文为空
 
     user = f"{header}{instruction}{sample}{footer}{note}"
-    return user, {**meta_info, "truncated": truncated, "original_chars": chars, "kept_chars": len(sample)}
+    return user, {
+        **meta_info,
+        "truncated": truncated,
+        "original_chars": chars,
+        "kept_chars": len(sample),
+    }
 
 
 def _load_video_image_parts(video_images: list[dict], *, max_images: int = 30) -> list[dict]:
@@ -401,7 +405,9 @@ def renumber_headings_in_blocks(doc: dict) -> dict:
     return {"type": "doc", "content": content}
 
 
-def _degraded(reason: str, *, parse_result: ParseResult, cost: int, latency_ms: float, model: str) -> OrganizeResult:
+def _degraded(
+    reason: str, *, parse_result: ParseResult, cost: int, latency_ms: float, model: str
+) -> OrganizeResult:
     """降级：原文直接入库，不整理。"""
     return OrganizeResult(
         organizable=True,
@@ -430,7 +436,7 @@ def _video_image_resolver(video_images: list[dict]):
         if not src.startswith(IMAGE_SCHEME):
             return {"src": src} if src and not src.startswith("data:") else None
         try:
-            index = int(src[len(IMAGE_SCHEME):])
+            index = int(src[len(IMAGE_SCHEME) :])
         except ValueError:
             return None
         img = by_index.get(index)
@@ -518,7 +524,8 @@ def organize_note(
 
     ``client`` 为 None 时用 ``LLMClient.from_settings()``。
     ``prompt_budget``:输入预算(None=不截断整篇喂;int=按值截断)。worker 从 app_settings 注入。
-    ``output_budget``:输出预算(worker 从 app_settings 注入;None=用 ORGANIZER_DEFAULT_OUTPUT_TOKENS)。
+    ``output_budget``:输出预算(worker 从 app_settings 注入;
+    None=用 ORGANIZER_DEFAULT_OUTPUT_TOKENS)。
     ``max_tokens``:测试直接传的输出上限,优先级高于 output_budget。
     ``video_images``:视频关键帧清单([{index, media_key, alt, text_layer, timestamp}]);给了就走
       视频多模态模式(帧图 base64 附进 user 消息 + 视频专用 prompt 约束保留图片标记)。
@@ -686,9 +693,7 @@ def organize_note(
                 diagram_meta["diagrams_dropped"] = len(markdown_diagrams)
                 diagram_meta["dropped_reason"] = bad[:2]
                 doc = _strip_mermaid_blocks(doc)
-                reasons.append(
-                    "结构图已丢弃：" + (bad[0] if bad else "未通过依据校验")
-                )
+                reasons.append("结构图已丢弃：" + (bad[0] if bad else "未通过依据校验"))
         elif basis.kind:
             diagram_meta["note"] = "有结构依据但模型未生成图"
 

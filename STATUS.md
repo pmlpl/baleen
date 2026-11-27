@@ -10,10 +10,11 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-27（CI 两次实跑闭环：cwd 坑 + 36 个测试靠开发库残留数据；夹具自带数据 + AGENTS §7.1「空库同口径必须跑」）
+**最后更新**：2026-11-27（ruff 清债 + CI/pre-commit 第五道门；此前同日：alembic check 第四道门 + 夹具自带数据闭环）
 
 | 日期 | 批次 | 一句话 | pytest |
 |---|---|---|---|
+| 2026-11-27 | ruff 清债 + CI 第五道门 | 存量 144 错全修（含 F821 隐性雷：summarizer 用 LLMClient 没 import）+ 63 文件 format 重排 + CI/pre-commit 装 ruff 闸；**prompt 字节等价用 AST 探针证明**（66 文件 vs HEAD 非 docstring 字符串常量全等，唯二差异是 UP012/UP037 自动修）；organizer.py E501 单文件豁免（prompt 三引号内中文超宽，折行=改 prompt 字节） | 720 |
 | 2026-11-27 | 模型↔迁移漂移修复 + CI 第四道门 | `alembic check` 对活库查出两处漂移（`jobs_dedupe_uq` 模型停在 0008 之前的老定义 → 下条 autogenerate 会把多用户互相去重装回来；迁移 0019 裸 SQL 建的 `notes_archived_at_idx` 没进模型 → 会被顺手 drop）→ 对齐两处模型 + CI 装 `alembic check` 闸（upgrade head 只证明迁移能执行，证明不了 schema 与模型一致） | 720 |
 | 2026-11-27 | CI 两次实跑闭环 | 首跑挂 cwd（`working-directory: backend`）；二跑挂 36 个「靠开发库残留数据才绿」（真 api_key / 未推进的 identity 序列 / 86 条自答记录）→ 夹具自带假 key + 自造 31 组消息 + `setval` 修序列；**空库全量 = CI 同口径，成了硬规矩**（AGENTS §7.1） | 720 |
 | 2026-11-26 | C4 前缀约定+CI 落地+黑话词典 | video_keep 白名单改 `video_` 前缀自动保留（忘加白被 G0 静默丢从机制根除）；GitHub Actions 三道门（pytest+doc_lint+vue-tsc，基线 grep 强制）；docs/glossary.md 入库 | 715 |

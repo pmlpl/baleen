@@ -49,9 +49,9 @@ def test_drop_uses_tight_tolerance() -> None:
     假红 4 张。这条测试钉住「drop 必须用紧容差」。
     """
     exp = F.Expectation(note=1, label="坏帧", expect="drop", category="x", ts=33.9)
-    assert F._matches(exp, _hit(33.9)) is True       # 正好命中
-    assert F._matches(exp, _hit(35.5)) is True       # ±3s 内
-    assert F._matches(exp, _hit(44.8)) is False      # 20s 内但超出 3s → 不算
+    assert F._matches(exp, _hit(33.9)) is True  # 正好命中
+    assert F._matches(exp, _hit(35.5)) is True  # ±3s 内
+    assert F._matches(exp, _hit(44.8)) is False  # 20s 内但超出 3s → 不算
     assert F._matches(exp, _hit(18.9)) is False
 
 
@@ -59,8 +59,8 @@ def test_keep_uses_wide_tolerance() -> None:
     """keep 条目 ±20s：三候选采样会把同场景时间点从 189.5 漂到 205 左右，仍算命中。"""
     exp = F.Expectation(note=1, label="豆包帧", expect="keep", category="x", ts=189.5)
     assert F._matches(exp, _hit(189.5)) is True
-    assert F._matches(exp, _hit(205.0)) is True      # 漂 15.5s 仍算
-    assert F._matches(exp, _hit(230.0)) is False     # 漂太远
+    assert F._matches(exp, _hit(205.0)) is True  # 漂 15.5s 仍算
+    assert F._matches(exp, _hit(230.0)) is False  # 漂太远
 
 
 def test_alt_keyword_fallback() -> None:
@@ -75,9 +75,7 @@ def test_alt_keyword_fallback() -> None:
 
 def test_min_frames_without_kw_ignores_content() -> None:
     """「至少 N 帧」类条目只看张数，不要求任何特定画面。"""
-    exp = F.Expectation(
-        note=1, label="基线", expect="keep", category="x", min_frames_without_kw=5
-    )
+    exp = F.Expectation(note=1, label="基线", expect="keep", category="x", min_frames_without_kw=5)
     frames = {1: [_hit(float(i), "任意描述") for i in range(5)]}
     results = F.evaluate(frames, [exp])
     assert len(results) == 1 and results[0].ok is True
@@ -93,8 +91,9 @@ def test_min_frames_without_kw_ignores_content() -> None:
 def test_zero_frames_flagged() -> None:
     """6014 类：keep 条目一张都没命中 → 该笔记进零帧名单。"""
     exps = [
-        F.Expectation(note=6014, label="动画帧", expect="keep", category="零帧",
-                      min_frames_without_kw=1),
+        F.Expectation(
+            note=6014, label="动画帧", expect="keep", category="零帧", min_frames_without_kw=1
+        ),
     ]
     frames = {6014: []}
     results = F.evaluate(frames, exps)
@@ -105,8 +104,9 @@ def test_zero_frames_flagged() -> None:
 def test_missing_note_counts_as_zero_frames() -> None:
     """笔记不在库里(doc 为空)也按零帧算——不能因为读不到就当作通过。"""
     exps = [
-        F.Expectation(note=9999, label="x", expect="keep", category="零帧",
-                      min_frames_without_kw=1),
+        F.Expectation(
+            note=9999, label="x", expect="keep", category="零帧", min_frames_without_kw=1
+        ),
     ]
     results = F.evaluate({9999: []}, exps)
     assert results[0].ok is False

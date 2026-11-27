@@ -17,9 +17,7 @@ from app.models.setting import AppSettings
 
 
 async def _row(session: AsyncSession, owner_id: int) -> AppSettings | None:
-    return await session.scalar(
-        select(AppSettings).where(AppSettings.owner_id == owner_id)
-    )
+    return await session.scalar(select(AppSettings).where(AppSettings.owner_id == owner_id))
 
 
 async def resolve_llm_config(session: AsyncSession, owner_id: int) -> tuple[str, str, str]:
@@ -66,11 +64,7 @@ async def resolve_llm_budgets(
     """
     row = await _row(session, owner_id)
     ctx = row.llm_context_tokens if (row is not None and row.llm_context_tokens) else None
-    out = (
-        row.llm_max_output_tokens
-        if (row is not None and row.llm_max_output_tokens)
-        else None
-    )
+    out = row.llm_max_output_tokens if (row is not None and row.llm_max_output_tokens) else None
     return ctx, out
 
 

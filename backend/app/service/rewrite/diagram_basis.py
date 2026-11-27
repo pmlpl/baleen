@@ -70,9 +70,20 @@ def _heading_level(block: dict) -> int:
 
 # 顺序词:命中 ≥ MIN_FLOW_STEPS 个不同的才认流程
 _FLOW_MARKERS = (
-    "第一步", "第二步", "第三步", "第四步", "最后一步",
-    "首先", "其次", "然后", "接着", "最后",
-    "先", "再", "之后", "随后",
+    "第一步",
+    "第二步",
+    "第三步",
+    "第四步",
+    "最后一步",
+    "首先",
+    "其次",
+    "然后",
+    "接着",
+    "最后",
+    "先",
+    "再",
+    "之后",
+    "随后",
 )
 
 
@@ -90,7 +101,9 @@ def _detect_flow(blocks: list[dict], full_text: str) -> DiagramBasis | None:
     return DiagramBasis(
         kind="flow",
         nodes=nodes[:8],
-        evidence=f"正文有 {len(hits)} 种顺序表述({'/'.join(hits[:5])}),标题含 {len(nodes)} 个阶段名",
+        evidence=(
+            f"正文有 {len(hits)} 种顺序表述({'/'.join(hits[:5])}),标题含 {len(nodes)} 个阶段名"
+        ),
     )
 
 
@@ -120,7 +133,7 @@ def _detect_list(blocks: list[dict]) -> DiagramBasis | None:
             by_level[s["level"]].append(s)
 
     best: list[dict] | None = None
-    for level, group in by_level.items():
+    for _level, group in by_level.items():  # 同级里挑短项最多的一组(哪一级无所谓)
         short = [s for s in group if s["chars"] <= MAX_ITEM_CHARS]
         if len(short) >= MIN_LIST_ITEMS and (best is None or len(short) > len(best)):
             best = short
@@ -144,9 +157,7 @@ def detect_diagram_basis(blocks: list) -> DiagramBasis:
     判定顺序:清单优先(信息量更大),再流程。
     """
     flat = _walk_blocks(blocks)
-    full_text = "".join(
-        _text_of(b) for b in flat if b.get("type") in ("paragraph", "heading")
-    )
+    full_text = "".join(_text_of(b) for b in flat if b.get("type") in ("paragraph", "heading"))
 
     list_basis = _detect_list(flat)
     if list_basis is not None:
@@ -173,8 +184,18 @@ def _extract_diagram_labels(code: str) -> list[str]:
     抽取后去掉编号前缀/箭头/引号，去重保序。
     """
     skip_prefixes = (
-        "graph", "flowchart", "mindmap", "subgraph", "end", "style", "classDef",
-        "class ", "direction", "%%", "click ", "linkStyle",
+        "graph",
+        "flowchart",
+        "mindmap",
+        "subgraph",
+        "end",
+        "style",
+        "classDef",
+        "class ",
+        "direction",
+        "%%",
+        "click ",
+        "linkStyle",
     )
     arrow = re.compile(r"-->|--->|==>|-\.->|---|->>|-->>|~~~")
 
@@ -240,10 +261,7 @@ def validate_diagram(code: str, basis: DiagramBasis) -> tuple[bool, str]:
     hit = sum(1 for label in labels if covered(label))
     ratio = hit / len(labels)
     if ratio < 0.5:
-        return False, (
-            f"只有 {hit}/{len(labels)} 个节点有原文依据(需 ≥50%),"
-            "说明模型在编造结构"
-        )
+        return False, (f"只有 {hit}/{len(labels)} 个节点有原文依据(需 ≥50%),说明模型在编造结构")
     return True, f"{hit}/{len(labels)} 个节点有原文依据"
 
 
@@ -251,7 +269,11 @@ def build_diagram_prompt(basis: DiagramBasis) -> str:
     """把依据写成 prompt 片段。只在 basis.kind 非空时调用。"""
     kind_word = "并列清单" if basis.kind == "list" else "流程阶段"
     node_lines = "\n".join(f"  - {n}" for n in basis.nodes)
-    graph_kind = "mindmap 或 flowchart LR(按主题分组)" if basis.kind == "list" else "flowchart TD(按先后顺序)"
+    graph_kind = (
+        "mindmap 或 flowchart LR(按主题分组)"
+        if basis.kind == "list"
+        else "flowchart TD(按先后顺序)"
+    )
     return f"""
 
 【结构图任务】（本篇**已确诊**为{kind_word}结构，必须画且只画 1 张）

@@ -198,10 +198,12 @@ class TestAttachments:
 
     def test_answer_image_rejected_degrades_without_image(self) -> None:
         """模型拒图(LLMResponseError)→ 去图重试,答案前置降级说明,不抛异常。"""
-        client, transport = _client([
-            LLMResponseError("请求被拒绝(HTTP 400)", status_code=400),
-            (200, _chat("按文本回答。")),
-        ])
+        client, transport = _client(
+            [
+                LLMResponseError("请求被拒绝(HTTP 400)", status_code=400),
+                (200, _chat("按文本回答。")),
+            ]
+        )
         result = answer(
             "看图",
             [],

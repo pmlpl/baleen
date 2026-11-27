@@ -21,7 +21,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.core.config import ROOT_DIR, get_settings
+from app.core.config import ROOT_DIR
 from app.repo import Repos
 from app.service.chunk import ChunkResult, chunk
 from app.service.embed import EMBEDDING_MODEL, count_tokens, embed_passage
@@ -169,7 +169,7 @@ def _video_image_resolver(video_images: list[dict]):
             # 这里只在视频 sidecar 场景兜底成「落不了地」——video md 里不该有别的图
             return None
         try:
-            index = int(src[len(IMAGE_SCHEME):])
+            index = int(src[len(IMAGE_SCHEME) :])
         except ValueError:
             return None
         img = by_index.get(index)
@@ -262,11 +262,7 @@ def video_keep_meta(prev_meta: dict) -> dict:
     一律用 ``video_`` 前缀命名 → 本函数自动放行;忘加白被 G0 静默丢的坑(治本批
     踩过)从机制上根除。前缀外的保留键列 ``_VIDEO_KEEP_EXTRA``。
     """
-    return {
-        k: v
-        for k, v in prev_meta.items()
-        if k.startswith("video_") or k in _VIDEO_KEEP_EXTRA
-    }
+    return {k: v for k, v in prev_meta.items() if k.startswith("video_") or k in _VIDEO_KEEP_EXTRA}
 
 
 async def run_import_async(
@@ -425,7 +421,9 @@ async def run_import_async(
                             meta={"engine": "video-markdown", "chars": chars},
                         )
                     except Exception:  # noqa: BLE001 —— 视频 md 解析异常退普通解析
-                        pr = parse_file(path, client=None if no_llm else client, media_sink=store_media)
+                        pr = parse_file(
+                            path, client=None if no_llm else client, media_sink=store_media
+                        )
                 else:
                     pr = parse_file(path, client=None if no_llm else client, media_sink=store_media)
                 # 视频导入的进度字段在 worker 阶段写进 parse_meta，
@@ -501,7 +499,11 @@ async def run_import_async(
 
             if result.g1_verdict == "reject":
                 return await _finish(
-                    repos, job_id, result, None, session,
+                    repos,
+                    job_id,
+                    result,
+                    None,
+                    session,
                     capture=_capture_info(result, path, sha, owner_id, worker, None),
                 )
 
@@ -578,7 +580,11 @@ async def run_import_async(
                 mark("G2", t)
                 if result.g2_verdict == "reject":
                     return await _finish(
-                        repos, job_id, result, None, session,
+                        repos,
+                        job_id,
+                        result,
+                        None,
+                        session,
                         capture=_capture_info(result, path, sha, owner_id, worker, None),
                     )
                 # organizer 返回了重写后的 blocks → 替换（流向 note.doc 与 chunk）
@@ -644,7 +650,11 @@ async def run_import_async(
             mark("embed", t)
 
             return await _finish(
-                repos, job_id, result, note_id, session,
+                repos,
+                job_id,
+                result,
+                note_id,
+                session,
                 capture=_capture_info(result, path, sha, owner_id, worker, note_id),
             )
 

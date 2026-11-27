@@ -138,7 +138,9 @@ def _list_to_md(
                 pieces.append(_inlines_to_md(child.get("content")))
             elif t in ("bulletList", "orderedList"):
                 nested = _list_to_md(
-                    child, ordered=t == "orderedList", indent=item_indent,
+                    child,
+                    ordered=t == "orderedList",
+                    indent=item_indent,
                     image_counter=image_counter,
                 )
                 pieces.append("\n" + "\n".join(nested) if nested else "")

@@ -463,8 +463,7 @@ async def run_agent_iter(
                             "tool": name,
                             "arg": query[:80],
                             "result": (
-                                f"{len(new_results)} results"
-                                + (f"({fb_note})" if fb_note else "")
+                                f"{len(new_results)} results" + (f"({fb_note})" if fb_note else "")
                             ),
                             "latency_ms": tool_ms,
                         }

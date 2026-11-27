@@ -412,10 +412,7 @@ class TestShortErrorBody:
 
     def test_angle_brackets_in_plain_body_not_treated_as_html(self):
         # 正文里带尖括号(如 <reference_files> 块说明)不算 HTML 页,原样保留
-        assert (
-            _short("用 <reference_files> 块传附件".encode("utf-8"))
-            == "用 <reference_files> 块传附件"
-        )
+        assert _short("用 <reference_files> 块传附件".encode()) == "用 <reference_files> 块传附件"
 
 
 class _StreamTransport:

@@ -170,8 +170,7 @@ def fetch_bilibili(url: str, *, sessdata: str = "") -> BilibiliResult:
         owner_name=d["owner"]["name"],
         duration=d.get("duration", 0),
         chapters=[
-            Chapter(time=float(vp["from"]), title=vp["content"])
-            for vp in d.get("view_points", [])
+            Chapter(time=float(vp["from"]), title=vp["content"]) for vp in d.get("view_points", [])
         ],
     )
 
@@ -194,7 +193,11 @@ def fetch_bilibili(url: str, *, sessdata: str = "") -> BilibiliResult:
                 subs = subs_retry  # 重试拿到了更多轨道，用重试结果
 
     if not subs:
-        hint = "可在 B 站开启 AI 字幕后重试" if not sessdata else "SESSDATA 可能已过期,请检查 .env 配置"
+        hint = (
+            "可在 B 站开启 AI 字幕后重试"
+            if not sessdata
+            else "SESSDATA 可能已过期,请检查 .env 配置"
+        )
         raise BilibiliError(f"该视频没有字幕(CC 字幕或 AI 字幕),暂无法导入。{hint}")
 
     # 优先中文字幕,否则取第一个

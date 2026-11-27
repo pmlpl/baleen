@@ -1,4 +1,5 @@
-"""转写治本三件套测试（2026-11-22）：turbo+None 参数断言、LLM 自校正 pass（应用/降级/skipped/封顶）。"""
+"""转写治本三件套测试（2026-11-22）：turbo+None 参数断言、
+LLM 自校正 pass（应用/降级/skipped/封顶）。"""
 
 from __future__ import annotations
 
@@ -15,8 +16,8 @@ from app.service.video_extractor import (
     transcribe_audio,
 )
 
-
 # ---------------------------------------------------------------- 参数断言（turbo + language=None）
+
 
 def test_whisper_model_is_turbo() -> None:
     """治本批：模型名必须是 large-v3-turbo（spike 选型，small 专名错听是错字根源）。"""
@@ -166,7 +167,11 @@ def test_correction_input_capped_at_30k() -> None:
 def test_correction_cross_segment_evidence_recorded_as_missed() -> None:
     """evidence 跨段（转写分段切在错误词中间）→ 记 missed 不硬改,留痕可查。"""
     content = json.dumps(
-        {"corrections": [{"evidence": "底线。这些 lint", "fixed": "底线。这些 lint rules", "reason": "r"}]},
+        {
+            "corrections": [
+                {"evidence": "底线。这些 lint", "fixed": "底线。这些 lint rules", "reason": "r"}
+            ]
+        },
         ensure_ascii=False,
     )
     client = FakeFixClient(content)
@@ -180,7 +185,9 @@ def test_correction_stage_logged_via_progress_cb() -> None:
     """video_log 新 stage「转写校正中…」经由 progress_cb 上报（worker 写 video_log）。"""
     client = FakeFixClient(CANNED)
     stages: list[str] = []
-    correct_transcript_segments([dict(s) for s in SEGMENTS], client, progress_cb=lambda s, pct, est=None: stages.append(s))
+    correct_transcript_segments(
+        [dict(s) for s in SEGMENTS], client, progress_cb=lambda s, pct, est=None: stages.append(s)
+    )
     assert "转写校正中…" in stages
 
 

@@ -3,6 +3,7 @@ name: CI
 # 2026-11-26 落地（WorkBuddy 复评报告 P1.3，主人拍板选 GitHub Actions）：
 # pytest + doc_lint + vue-tsc 三道门，基线从「本地纪律 + pre-commit」升级为远端强制门。
 # 2026-11-27 补第四道门：alembic check（模型↔迁移一致性，防 schema 静默回退）。
+# 2026-11-27 补第五道门：ruff check + format --check（存量清完后防复发）。
 #
 # ⚠️ pytest 摘要门（下面 grep 的 720）与 STATUS 基线同数——动了测试的批次
 #    必须同步升这里和 STATUS（同一条「基线只增不降」纪律）。
@@ -78,6 +79,16 @@ jobs:
 
       - name: doc_lint（文档一致性，ERROR 必须为 0）
         run: uv run --project backend python scripts/doc_lint.py
+
+      - name: ruff（lint + format，第五道门）
+        # 2026-11-27 落地：ruff 清完存量(144 错+31 文件重排)后装闸防复发。
+        # 与 .githooks/pre-commit 同口径——本地提交时就拦，别等推上来才红。
+        # organizer.py 的 E501 是单文件豁免(prompt 三引号内 4 行中文,折行=改喂
+        # LLM 的字节),在 backend/pyproject.toml per-file-ignores 登记,不是绕闸。
+        working-directory: backend
+        run: |
+          uv run ruff check app tests
+          uv run ruff format --check app tests
 
       - name: pytest（基线强制门）
         # ⚠️ 必须在 backend/ 下跑：pyproject 的 pytest 配置是 `pythonpath = ["."]`，

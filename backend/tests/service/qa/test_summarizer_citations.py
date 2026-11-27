@@ -108,8 +108,16 @@ def test_array_index_not_treated_as_citation() -> None:
 def test_same_source_deduped_to_one_label() -> None:
     """两条回答引用了同一个网址 → 合并成一个编号。"""
     messages = [
-        {"role": "assistant", "content": "A [W1]。", "citations": [_web(1, "甲", "https://a.example/1")]},
-        {"role": "assistant", "content": "B [W1]。", "citations": [_web(1, "甲", "https://a.example/1")]},
+        {
+            "role": "assistant",
+            "content": "A [W1]。",
+            "citations": [_web(1, "甲", "https://a.example/1")],
+        },
+        {
+            "role": "assistant",
+            "content": "B [W1]。",
+            "citations": [_web(1, "甲", "https://a.example/1")],
+        },
     ]
     renamed, citations = renumber_citations(messages)
     assert renamed[1]["content"] == "B [W1]。"
@@ -119,8 +127,16 @@ def test_same_source_deduped_to_one_label() -> None:
 def test_note_dialogue_range_limits_citations() -> None:
     """按主题裁区间时,区间外的引用不能跟进这篇笔记。"""
     messages = [
-        {"role": "assistant", "content": "第一篇 [W1]。", "citations": [_web(1, "甲", "https://a.example/1")]},
-        {"role": "assistant", "content": "第二篇 [W1]。", "citations": [_web(1, "乙", "https://b.example/2")]},
+        {
+            "role": "assistant",
+            "content": "第一篇 [W1]。",
+            "citations": [_web(1, "甲", "https://a.example/1")],
+        },
+        {
+            "role": "assistant",
+            "content": "第二篇 [W1]。",
+            "citations": [_web(1, "乙", "https://b.example/2")],
+        },
     ]
     dialogue, citations = note_dialogue(messages, 1, 1)
     assert "第二篇" in dialogue and "第一篇" not in dialogue
@@ -130,8 +146,20 @@ def test_note_dialogue_range_limits_citations() -> None:
 def test_appendix_lists_only_used_labels() -> None:
     """模型删掉某个引用时,附录不该硬塞一条没人引用的来源。"""
     citations = [
-        {"label": "W1", "note_id": None, "note_title": "甲", "heading_path": None, "url": "https://a.example/1"},
-        {"label": "W2", "note_id": None, "note_title": "乙", "heading_path": None, "url": "https://b.example/2"},
+        {
+            "label": "W1",
+            "note_id": None,
+            "note_title": "甲",
+            "heading_path": None,
+            "url": "https://a.example/1",
+        },
+        {
+            "label": "W2",
+            "note_id": None,
+            "note_title": "乙",
+            "heading_path": None,
+            "url": "https://b.example/2",
+        },
     ]
     out = append_citation_appendix("# t\n\n只见 [W1]。", citations)
     assert "## 出处" in out
@@ -142,9 +170,20 @@ def test_appendix_lists_only_used_labels() -> None:
 def test_appendix_format_web_and_kb() -> None:
     """联网 → autolink;库内 → 站内路由(裸路径,前端自己识别)。"""
     citations = [
-        {"label": "W1", "note_id": None, "note_title": "甲", "heading_path": None, "url": "https://a.example/1"},
-        {"label": "1", "note_id": 161, "note_title": "Agent 指南",
-         "heading_path": "方法", "url": None},
+        {
+            "label": "W1",
+            "note_id": None,
+            "note_title": "甲",
+            "heading_path": None,
+            "url": "https://a.example/1",
+        },
+        {
+            "label": "1",
+            "note_id": 161,
+            "note_title": "Agent 指南",
+            "heading_path": "方法",
+            "url": None,
+        },
     ]
     out = append_citation_appendix("# t\n\n见 [W1][1]。", citations)
     assert "- [W1] 甲 — <https://a.example/1>" in out
@@ -154,7 +193,13 @@ def test_appendix_format_web_and_kb() -> None:
 def test_appendix_skipped_when_nothing_cited() -> None:
     """模型把标记全删了 → 不追加空清单。"""
     citations = [
-        {"label": "W1", "note_id": None, "note_title": "甲", "heading_path": None, "url": "https://a.example/1"}
+        {
+            "label": "W1",
+            "note_id": None,
+            "note_title": "甲",
+            "heading_path": None,
+            "url": "https://a.example/1",
+        }
     ]
     out = append_citation_appendix("# t\n\n没有标记。", citations)
     assert "## 出处" not in out

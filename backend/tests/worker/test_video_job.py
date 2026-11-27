@@ -8,8 +8,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import os
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +20,6 @@ from app.worker import worker as worker_module
 from app.worker.worker import (
     WorkerSettings,
     extract_and_import_video,
-    import_file,
 )
 
 PortalFn = Any  # callable returning Awaitable[Any]
@@ -36,7 +33,9 @@ def test_worker_settings_registers_video_task() -> None:
     names = [getattr(f, "name", None) or f.__name__ for f in WorkerSettings.functions]
     assert "import_file" in names
     assert "extract_and_import_video" in names
-    video_fn = next(f for f in WorkerSettings.functions if getattr(f, "name", "") == "extract_and_import_video")
+    video_fn = next(
+        f for f in WorkerSettings.functions if getattr(f, "name", "") == "extract_and_import_video"
+    )
     assert video_fn.timeout_s == 7200  # 2 小时（enqueue_job 没有 _timeout 参数，只能在这里设）
     assert WorkerSettings.job_timeout == 900  # 文件导入保持 15 分钟
 
@@ -120,9 +119,7 @@ def _stub_factory():
 # ---------- 成功路径 ----------
 
 
-def test_extract_video_success_calls_pipeline_with_source_id(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_extract_video_success_calls_pipeline_with_source_id(tmp_path: Path, monkeypatch) -> None:
     """提取成功 → run_import_async 被调用且 source_id 传入；暂存被清理。"""
     import app.service.imports as imports_pkg
     import app.service.video_extractor as vextract
@@ -134,11 +131,24 @@ def test_extract_video_success_calls_pipeline_with_source_id(
     fake_vc = type(
         "VC",
         (),
-        {"markdown": "# 测试视频\n\n内容", "title": "测试视频",
-         "frame_images": [{"index": 0}], "frame_candidates": 1},
+        {
+            "markdown": "# 测试视频\n\n内容",
+            "title": "测试视频",
+            "frame_images": [{"index": 0}],
+            "frame_candidates": 1,
+        },
     )()
 
-    def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None, cover_cb=None):
+    def fake_extract(
+        url,
+        *,
+        sessdata="",
+        cookies_str="",
+        client=None,
+        progress_cb=None,
+        bilibili_login_cb=None,
+        cover_cb=None,
+    ):
         return fake_vc
 
     monkeypatch.setattr(vextract, "extract_video_content", fake_extract)
@@ -155,8 +165,11 @@ def test_extract_video_success_calls_pipeline_with_source_id(
 
     result = asyncio.run(
         extract_and_import_video(
-            {}, "https://www.bilibili.com/video/BV1GJ411x7h7/",
-            owner_id=1, source_id=42, mode="whisper",
+            {},
+            "https://www.bilibili.com/video/BV1GJ411x7h7/",
+            owner_id=1,
+            source_id=42,
+            mode="whisper",
         )
     )
 
@@ -179,8 +192,12 @@ def test_extract_video_writes_markdown_to_staging(tmp_path: Path, monkeypatch) -
     fake_vc = type(
         "VC",
         (),
-        {"markdown": "# 测试\n\n内容", "title": "测试",
-         "frame_images": [{"index": 0}], "frame_candidates": 1},
+        {
+            "markdown": "# 测试\n\n内容",
+            "title": "测试",
+            "frame_images": [{"index": 0}],
+            "frame_candidates": 1,
+        },
     )()
     monkeypatch.setattr(vextract, "extract_video_content", lambda *a, **kw: fake_vc)
 
@@ -188,15 +205,25 @@ def test_extract_video_writes_markdown_to_staging(tmp_path: Path, monkeypatch) -
 
     async def fake_run(path: str, **kwargs: Any) -> ImportResult:
         p = Path(path)
-        staging_info.append({"path": path, "name": p.name, "exists": p.exists(), "text": p.read_text(encoding="utf-8")})
+        staging_info.append(
+            {
+                "path": path,
+                "name": p.name,
+                "exists": p.exists(),
+                "text": p.read_text(encoding="utf-8"),
+            }
+        )
         return ImportResult(source_id=1, parse_status="ok")
 
     monkeypatch.setattr(imports_pkg, "run_import_async", fake_run)
 
     asyncio.run(
         extract_and_import_video(
-            {}, "https://www.bilibili.com/video/BV1GJ411x7h7/",
-            owner_id=1, source_id=1, mode="whisper",
+            {},
+            "https://www.bilibili.com/video/BV1GJ411x7h7/",
+            owner_id=1,
+            source_id=1,
+            mode="whisper",
         )
     )
 
@@ -212,9 +239,7 @@ def test_extract_video_writes_markdown_to_staging(tmp_path: Path, monkeypatch) -
 # ---------- 提取失败 ----------
 
 
-def test_extract_video_failure_marks_job_failed(
-    db_scope, tmp_path: Path, monkeypatch
-) -> None:
+def test_extract_video_failure_marks_job_failed(db_scope, tmp_path: Path, monkeypatch) -> None:
     """提取失败 → job 标记 failed + source.parse_meta 显示错误。"""
     import app.service.imports as imports_pkg
     import app.service.video_extractor as vextract
@@ -247,7 +272,16 @@ def test_extract_video_failure_marks_job_failed(
         monkeypatch.setattr(worker_module, "session_factory", factory)
 
         # fake extraction raises
-        def boom(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None, cover_cb=None):
+        def boom(
+            url,
+            *,
+            sessdata="",
+            cookies_str="",
+            client=None,
+            progress_cb=None,
+            bilibili_login_cb=None,
+            cover_cb=None,
+        ):
             raise RuntimeError("download failed")
 
         monkeypatch.setattr(vextract, "extract_video_content", boom)
@@ -260,8 +294,11 @@ def test_extract_video_failure_marks_job_failed(
 
         with pytest.raises(RuntimeError, match="download failed"):
             await extract_and_import_video(
-                {}, "https://www.bilibili.com/video/BVtest/",
-                owner_id=1, source_id=source_id, mode="whisper",
+                {},
+                "https://www.bilibili.com/video/BVtest/",
+                owner_id=1,
+                source_id=source_id,
+                mode="whisper",
             )
 
         # 验证 job 标记 failed
@@ -287,16 +324,22 @@ def test_extract_video_failure_marks_job_failed(
 
 def test_extract_video_subtitle_mode(tmp_path: Path, monkeypatch) -> None:
     """subtitle 模式：worker 调 fetch_bilibili 而非 extract_video_content。"""
-    import app.service.imports as imports_pkg
     import app.service.bilibili as bili
+    import app.service.imports as imports_pkg
 
     monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path)
     monkeypatch.setattr(worker_module, "session_factory", _stub_factory)
 
     fake_result = bili.BilibiliResult(
         info=bili.BilibiliVideoInfo(
-            bvid="BV1test", aid=1, cid=2, title="测试",
-            description="", owner_name="UP", duration=60, chapters=[],
+            bvid="BV1test",
+            aid=1,
+            cid=2,
+            title="测试",
+            description="",
+            owner_name="UP",
+            duration=60,
+            chapters=[],
         ),
         markdown="# 测试\n\n字幕内容",
     )
@@ -309,8 +352,11 @@ def test_extract_video_subtitle_mode(tmp_path: Path, monkeypatch) -> None:
 
     result = asyncio.run(
         extract_and_import_video(
-            {}, "https://www.bilibili.com/video/BV1test/",
-            owner_id=1, source_id=1, mode="subtitle",
+            {},
+            "https://www.bilibili.com/video/BV1test/",
+            owner_id=1,
+            source_id=1,
+            mode="subtitle",
         )
     )
     assert result["source_id"] == 1
@@ -357,15 +403,23 @@ def test_resolve_cookie_file_priority(tmp_path: Path) -> None:
     from app.service.video_extractor import _resolve_cookie_file
 
     existing = tmp_path / "harvested.txt"
-    existing.write_text("# Netscape HTTP Cookie File\n.bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tx\n", encoding="utf-8")
+    existing.write_text(
+        "# Netscape HTTP Cookie File\n.bilibili.com\tTRUE\t/\tFALSE\t0\tSESSDATA\tx\n",
+        encoding="utf-8",
+    )
 
     # cookies_file 存在 → 直接用，不解析别的
-    cf = _resolve_cookie_file(sessdata="sd", cookies_str="a=b", cookies_file=str(existing), output_dir=tmp_path)
+    cf = _resolve_cookie_file(
+        sessdata="sd", cookies_str="a=b", cookies_file=str(existing), output_dir=tmp_path
+    )
     assert cf == str(existing)
 
     # cookies_file 不存在 → 退回 cookies_str
     cf2 = _resolve_cookie_file(
-        sessdata="sd", cookies_str="a=b", cookies_file=str(tmp_path / "nope.txt"), output_dir=tmp_path
+        sessdata="sd",
+        cookies_str="a=b",
+        cookies_file=str(tmp_path / "nope.txt"),
+        output_dir=tmp_path,
     )
     text2 = Path(cf2).read_text(encoding="utf-8")
     assert "a" in text2 and "b" in text2
@@ -389,7 +443,8 @@ def test_extract_video_content_bilibili_fallback_on_412(tmp_path: Path, monkeypa
         raise RuntimeError("yt-dlp 元信息提取失败: HTTP Error 412: Precondition Failed")
 
     fake_media = type(
-        "BilibiliMedia", (),
+        "BilibiliMedia",
+        (),
         {
             "bvid": "BV1wFZ8YBEt4",
             "title": "吃盐科普",
@@ -409,7 +464,9 @@ def test_extract_video_content_bilibili_fallback_on_412(tmp_path: Path, monkeypa
     monkeypatch.setattr(ve, "_fetch_video_info", fake_info)
     monkeypatch.setattr("app.service.bilibili_extractor.fetch_bilibili_media", fake_browser_fetch)
     monkeypatch.setattr(ve, "extract_audio", lambda vp, od: od / "audio.wav")
-    monkeypatch.setattr(ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "盐"}])
+    monkeypatch.setattr(
+        ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "盐"}]
+    )
 
     vc = ve.extract_video_content(
         "https://www.bilibili.com/video/BV1wFZ8YBEt4/",
@@ -422,14 +479,22 @@ def test_extract_video_content_bilibili_fallback_on_412(tmp_path: Path, monkeypa
     assert calls["info"] == 1  # generic 只试一次，失败即进兜底
 
 
-def test_extract_video_content_bilibili_no_fallback_for_duration(tmp_path: Path, monkeypatch) -> None:
+def test_extract_video_content_bilibili_no_fallback_for_duration(
+    tmp_path: Path, monkeypatch
+) -> None:
     """时长超限是确定性错误 → 不触发浏览器兜底。"""
     import app.service.video_extractor as ve
 
     monkeypatch.setattr(
-        ve, "_fetch_video_info",
-        lambda url, **kw: {"title": "长视频", "duration": 7200, "uploader": "",
-                           "description": "", "webpage_url": url},
+        ve,
+        "_fetch_video_info",
+        lambda url, **kw: {
+            "title": "长视频",
+            "duration": 7200,
+            "uploader": "",
+            "description": "",
+            "webpage_url": url,
+        },
     )
 
     def _no_browser(url, *, sessdata="", output_dir=None):
@@ -462,7 +527,7 @@ def test_dhash_dedup_removes_near_duplicates(tmp_path: Path) -> None:
     a1, a2, b = tmp_path / "a1.jpg", tmp_path / "a2.jpg", tmp_path / "b.jpg"
     two_color((255, 0, 0), (0, 0, 0)).save(a1)  # 左红右黑
     two_color((255, 0, 0), (0, 0, 0)).save(a2)  # 同上 → 同 hash
-    two_color((0, 0, 0), (255, 0, 0)).save(b)   # 左黑右红（翻转）→ hash 不同
+    two_color((0, 0, 0), (255, 0, 0)).save(b)  # 左黑右红（翻转）→ hash 不同
     assert _dhash(a1) == _dhash(a2)
     assert _hamming(_dhash(a1), _dhash(b)) > 5
 
@@ -486,7 +551,10 @@ def test_build_video_markdown_embeds_image_markers() -> None:
         transcript_segments=[{"start": 0.0, "end": 5.0, "text": "这是第一段字幕"}],
         frame_contents=[
             FrameContent(
-                timestamp=2.0, alt="代码截图", text_layer="```python\nprint('hi')\n```", media_key="abc123"
+                timestamp=2.0,
+                alt="代码截图",
+                text_layer="```python\nprint('hi')\n```",
+                media_key="abc123",
             )
         ],
         url="https://example.com/v",
@@ -641,7 +709,8 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
     import app.service.video_extractor as ve
 
     fake_dv = type(
-        "DV", (),
+        "DV",
+        (),
         {
             "title": "博弈论深度解读",
             "description": "读懂策略互动",
@@ -659,9 +728,12 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
         return fake_dv
 
     monkeypatch.setattr(ve, "extract_audio", lambda vp, od: od / "audio.wav")
-    monkeypatch.setattr(ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "内容"}])
     monkeypatch.setattr(
-        ve, "_extract_frames",
+        ve, "transcribe_audio", lambda wav: [{"start": 0.0, "end": 1.0, "text": "内容"}]
+    )
+    monkeypatch.setattr(
+        ve,
+        "_extract_frames",
         lambda vp, od, cli: frame_calls.append({"video_path": vp, "client": cli}) or ([], 0),
     )
     monkeypatch.setattr("app.service.douyin_extractor.fetch_douyin_video", fake_fetch)
@@ -684,8 +756,11 @@ def test_extract_video_content_bilibili_still_ytdlp(tmp_path: Path, monkeypatch)
 
     def fake_info(url, *, sessdata="", cookies_str="", cookies_file=""):
         return {
-            "title": "B站视频", "duration": 100,
-            "uploader": "UP主", "description": "", "webpage_url": url,
+            "title": "B站视频",
+            "duration": 100,
+            "uploader": "UP主",
+            "description": "",
+            "webpage_url": url,
         }
 
     monkeypatch.setattr(ve, "_fetch_video_info", fake_info)
@@ -788,9 +863,7 @@ def test_same_scene_dual_candidates_keep_latest(monkeypatch, tmp_path) -> None:
     assert out[0].scene_idx == 7
 
 
-def test_completed_import_redelivery_short_circuits(
-    db_scope, tmp_path: Path, monkeypatch
-) -> None:
+def test_completed_import_redelivery_short_circuits(db_scope, tmp_path: Path, monkeypatch) -> None:
     """幂等守卫(2026-11-19):source ok + 笔记在 → 重投递直接标 done,不重跑提取。
 
     背景:arq 对非正常关机残留 in-progress 的 job 重启即重投递——11-19 早晨
@@ -831,8 +904,11 @@ def test_completed_import_redelivery_short_circuits(
         monkeypatch.setattr(vextract, "extract_video_content", boom)
 
         result = await extract_and_import_video(
-            {}, "https://www.bilibili.com/video/BVdone/",
-            owner_id=1, source_id=source_id, mode="whisper",
+            {},
+            "https://www.bilibili.com/video/BVdone/",
+            owner_id=1,
+            source_id=source_id,
+            mode="whisper",
         )
 
         assert result == {"deduped": True, "source_id": source_id, "note_id": note_id}
@@ -853,8 +929,8 @@ def test_bilibili_login_cb_persists_and_reports(db_scope, monkeypatch) -> None:
     """
     from datetime import UTC, datetime
 
-    from app.service.bilibili_login import BiliLoginResult
     import app.service.bilibili_login as bili_login_mod
+    from app.service.bilibili_login import BiliLoginResult
     from app.service.llm.resolve import resolve_bilibili_sessdata
 
     async def scenario(factory) -> None:
@@ -873,9 +949,7 @@ def test_bilibili_login_cb_persists_and_reports(db_scope, monkeypatch) -> None:
             source_id = source.id
 
         monkeypatch.setattr(worker_module, "session_factory", factory)
-        fake_result = BiliLoginResult(
-            sessdata="fresh-sd", uid="777", logged_at=datetime.now(UTC)
-        )
+        fake_result = BiliLoginResult(sessdata="fresh-sd", uid="777", logged_at=datetime.now(UTC))
         monkeypatch.setattr(
             bili_login_mod, "qr_login_bilibili", lambda timeout_s=180.0: fake_result
         )
@@ -901,9 +975,7 @@ def test_bilibili_login_cb_persists_and_reports(db_scope, monkeypatch) -> None:
     asyncio.run(db_scope(scenario))
 
 
-def test_transcript_fix_lands_in_parse_meta(
-    db_scope, tmp_path: Path, monkeypatch
-) -> None:
+def test_transcript_fix_lands_in_parse_meta(db_scope, tmp_path: Path, monkeypatch) -> None:
     """转写 LLM 自校正留痕（2026-11-22 治本批）：vc.transcript_fix 在 pipeline 前写进
     parse_meta.llm_transcript_fix，且 fake pipeline 执行时已可读到（G0 保留机制的
     配套前提——该键不在 video_ 前缀内，靠 pipeline 的例外键集合放行）。"""
@@ -936,7 +1008,7 @@ def test_transcript_fix_lands_in_parse_meta(
                 kind="import",
             )
             await session.commit()
-            source_id, job_id = source.id, job.id
+            source_id = source.id
 
         monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path)
         monkeypatch.setattr(worker_module, "session_factory", factory)
@@ -944,13 +1016,25 @@ def test_transcript_fix_lands_in_parse_meta(
         fake_vc = type(
             "VC",
             (),
-            {"markdown": "# 测试视频",
-             "title": "测试视频",
-             "frame_images": [], "frame_candidates": 0,
-             "transcript_fix": fix_record},
+            {
+                "markdown": "# 测试视频",
+                "title": "测试视频",
+                "frame_images": [],
+                "frame_candidates": 0,
+                "transcript_fix": fix_record,
+            },
         )()
 
-        def fake_extract(url, *, sessdata="", cookies_str="", client=None, progress_cb=None, bilibili_login_cb=None, cover_cb=None):
+        def fake_extract(
+            url,
+            *,
+            sessdata="",
+            cookies_str="",
+            client=None,
+            progress_cb=None,
+            bilibili_login_cb=None,
+            cover_cb=None,
+        ):
             return fake_vc
 
         monkeypatch.setattr(vextract, "extract_video_content", fake_extract)
@@ -969,8 +1053,11 @@ def test_transcript_fix_lands_in_parse_meta(
         monkeypatch.setattr(imports_pkg, "run_import_async", fake_run)
 
         result = await extract_and_import_video(
-            {}, "https://www.bilibili.com/video/BVfix/",
-            owner_id=1, source_id=source_id, mode="whisper",
+            {},
+            "https://www.bilibili.com/video/BVfix/",
+            owner_id=1,
+            source_id=source_id,
+            mode="whisper",
         )
         assert result["parse_status"] == "ok"
 

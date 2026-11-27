@@ -44,9 +44,7 @@ def _chat(content: str, *, total: int = 20) -> bytes:
 
 def _clear(env: SimpleNamespace) -> None:
     """把该账号的 charter 和 nickname 清空(UPDATE 空串 = 清空,回退内置默认)。"""
-    assert (
-        env.client.put("/api/persona", json={"charter": "", "nickname": ""}).status_code == 200
-    )
+    assert env.client.put("/api/persona", json={"charter": "", "nickname": ""}).status_code == 200
 
 
 @pytest.fixture
@@ -99,9 +97,7 @@ def test_put_then_get(env: SimpleNamespace) -> None:
     assert body["charter"] == text
 
 
-def test_generate_returns_charter_text(
-    env: SimpleNamespace, persona_llm: SimpleNamespace
-) -> None:
+def test_generate_returns_charter_text(env: SimpleNamespace, persona_llm: SimpleNamespace) -> None:
     """POST generate(事实问卷)→ LLM 生成 charter 文本(不落库,GET 仍 false)。"""
     _clear(env)
     persona_llm.responses.append((200, _chat("## 这是谁的库\n「小明」的库,一名软件工程师。")))
@@ -389,8 +385,7 @@ def _seed_self_answered(env: SimpleNamespace, count: int) -> None:
         sid = (
             await conn.execute(
                 text(
-                    "INSERT INTO qa_sessions (owner_id, title) "
-                    "VALUES (1, '自答测试') RETURNING id"
+                    "INSERT INTO qa_sessions (owner_id, title) VALUES (1, '自答测试') RETURNING id"
                 )
             )
         ).scalar_one()

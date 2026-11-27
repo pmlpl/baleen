@@ -324,16 +324,18 @@ class TestHeadingRewrite:
         # 一段很长的纯正文(无标题),organizer 应返回带标题的 markdown
         body = "\n\n".join([_PARAGRAPH] * 4)
         path = _write(tmp_path, "plain.md", body)
-        llm = _RoutingLLM(json.dumps(
-            {
-                "organizable": True,
-                "markdown": "# 闭包与内存泄漏\n\n## 定义\n\n" + _PARAGRAPH,
-                "quality": "core",
-                "note_type": "concept",
-                "reasons": ["补了标题"],
-            },
-            ensure_ascii=False,
-        ))
+        llm = _RoutingLLM(
+            json.dumps(
+                {
+                    "organizable": True,
+                    "markdown": "# 闭包与内存泄漏\n\n## 定义\n\n" + _PARAGRAPH,
+                    "quality": "core",
+                    "note_type": "concept",
+                    "reasons": ["补了标题"],
+                },
+                ensure_ascii=False,
+            )
+        )
 
         async def case():
             async with db_scope() as factory:
@@ -385,9 +387,7 @@ class TestHeadingRewrite:
 
         asyncio.run(case())
 
-    def test_well_structured_doc_still_organized(
-        self, tmp_path, db_scope, fake_embed, fake_tokens
-    ):
+    def test_well_structured_doc_still_organized(self, tmp_path, db_scope, fake_embed, fake_tokens):
         # organizer always runs (no needs_rewrite check) — 验证它跑了且产出有标题
         md = (
             "# 一、总览\n\n" + _PARAGRAPH + "\n\n"
@@ -396,16 +396,18 @@ class TestHeadingRewrite:
             "## 2.2 子节乙\n\n" + _PARAGRAPH
         )
         path = _write(tmp_path, "good.md", md)
-        llm = _RoutingLLM(json.dumps(
-            {
-                "organizable": True,
-                "markdown": "# 总览\n\n" + _PARAGRAPH + "\n\n## 细节\n\n" + _PARAGRAPH,
-                "quality": "normal",
-                "note_type": "concept",
-                "reasons": ["结构良好，轻度整理"],
-            },
-            ensure_ascii=False,
-        ))
+        llm = _RoutingLLM(
+            json.dumps(
+                {
+                    "organizable": True,
+                    "markdown": "# 总览\n\n" + _PARAGRAPH + "\n\n## 细节\n\n" + _PARAGRAPH,
+                    "quality": "normal",
+                    "note_type": "concept",
+                    "reasons": ["结构良好，轻度整理"],
+                },
+                ensure_ascii=False,
+            )
+        )
 
         async def case():
             async with db_scope() as factory:

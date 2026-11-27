@@ -38,7 +38,8 @@ async def _seed_note(factory: Any, *, title: str) -> int:
 
 async def _seed_chunks(factory: Any, note_id: int) -> None:
     from app.repo import Repos
-    from app.service.chunk import Chunk as ChunkDC, ChunkResult
+    from app.service.chunk import Chunk as ChunkDC
+    from app.service.chunk import ChunkResult
 
     async with factory() as session:
         repos = Repos(session, 1)
@@ -57,9 +58,7 @@ async def _seed_chunks(factory: Any, note_id: int) -> None:
             metrics={},
         )
         for _chunk, row in await repos.chunks.bulk_insert(note_id, result):
-            session.add(
-                Embedding(chunk_id=row.id, model="fake-model", dim=1024, vec=[0.5] * 1024)
-            )
+            session.add(Embedding(chunk_id=row.id, model="fake-model", dim=1024, vec=[0.5] * 1024))
         await session.commit()
 
 
@@ -70,7 +69,9 @@ async def _chunk_count(factory: Any, note_id: int) -> int:
 
 
 def test_soft_delete_hides_from_list_and_detail_but_keeps_chunks(env: SimpleNamespace) -> None:
-    note_id = env.client.portal.call(lambda: _seed_note(env.shared["factory"], title=MARKER + " 软删"))
+    note_id = env.client.portal.call(
+        lambda: _seed_note(env.shared["factory"], title=MARKER + " 软删")
+    )
     env.client.portal.call(lambda: _seed_chunks(env.shared["factory"], note_id))
 
     assert env.client.delete(f"/api/notes/{note_id}").status_code == 204
@@ -85,7 +86,9 @@ def test_soft_delete_hides_from_list_and_detail_but_keeps_chunks(env: SimpleName
 
 
 def test_trash_list_reports_remaining_days(env: SimpleNamespace) -> None:
-    note_id = env.client.portal.call(lambda: _seed_note(env.shared["factory"], title=MARKER + " 天数"))
+    note_id = env.client.portal.call(
+        lambda: _seed_note(env.shared["factory"], title=MARKER + " 天数")
+    )
     env.client.delete(f"/api/notes/{note_id}")
 
     body = env.client.get("/api/notes/trash").json()
@@ -97,7 +100,9 @@ def test_trash_list_reports_remaining_days(env: SimpleNamespace) -> None:
 
 
 def test_restore_puts_note_back(env: SimpleNamespace) -> None:
-    note_id = env.client.portal.call(lambda: _seed_note(env.shared["factory"], title=MARKER + " 放回"))
+    note_id = env.client.portal.call(
+        lambda: _seed_note(env.shared["factory"], title=MARKER + " 放回")
+    )
     env.client.portal.call(lambda: _seed_chunks(env.shared["factory"], note_id))
     env.client.delete(f"/api/notes/{note_id}")
 
@@ -118,7 +123,9 @@ def test_restore_puts_note_back(env: SimpleNamespace) -> None:
 
 def test_purge_rejects_active_note(env: SimpleNamespace) -> None:
     """彻底删除只认纸篓里的行 —— 防止绕过软删直接毁一篇 active 笔记。"""
-    note_id = env.client.portal.call(lambda: _seed_note(env.shared["factory"], title=MARKER + " 不许"))
+    note_id = env.client.portal.call(
+        lambda: _seed_note(env.shared["factory"], title=MARKER + " 不许")
+    )
     assert env.client.delete(f"/api/notes/{note_id}/purge").status_code == 404
     assert env.client.get(f"/api/notes/{note_id}").status_code == 200, "笔记必须还在"
 
@@ -128,7 +135,9 @@ def test_restore_missing_is_404(env: SimpleNamespace) -> None:
 
 
 def test_purge_twice_second_is_404(env: SimpleNamespace) -> None:
-    note_id = env.client.portal.call(lambda: _seed_note(env.shared["factory"], title=MARKER + " 两次"))
+    note_id = env.client.portal.call(
+        lambda: _seed_note(env.shared["factory"], title=MARKER + " 两次")
+    )
     env.client.delete(f"/api/notes/{note_id}")
     assert env.client.delete(f"/api/notes/{note_id}/purge").status_code == 204
     assert env.client.delete(f"/api/notes/{note_id}/purge").status_code == 404
@@ -136,7 +145,9 @@ def test_purge_twice_second_is_404(env: SimpleNamespace) -> None:
 
 def test_soft_delete_twice_404(env: SimpleNamespace) -> None:
     """已在纸篓里的笔记再删一次 → 404(不泄漏状态,也不重复盖时间戳)。"""
-    note_id = env.client.portal.call(lambda: _seed_note(env.shared["factory"], title=MARKER + " 重复"))
+    note_id = env.client.portal.call(
+        lambda: _seed_note(env.shared["factory"], title=MARKER + " 重复")
+    )
     assert env.client.delete(f"/api/notes/{note_id}").status_code == 204
     assert env.client.delete(f"/api/notes/{note_id}").status_code == 404
 

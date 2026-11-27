@@ -61,9 +61,7 @@ def dialogue_from_messages(msgs: list) -> str:
     answerer 重放的事),省 token 且避免摘要被超长 <context> 撑爆。
     超 ``DIGEST_DIALOGUE_MAX_CHARS`` 时从最旧截(摘要看重近期)。
     """
-    text = "\n".join(
-        f"{'用户' if m.role == 'user' else '助手'}:{m.content}" for m in msgs
-    )
+    text = "\n".join(f"{'用户' if m.role == 'user' else '助手'}:{m.content}" for m in msgs)
     if len(text) > DIGEST_DIALOGUE_MAX_CHARS:
         # 保留最新的部分:从尾部取
         text = text[-DIGEST_DIALOGUE_MAX_CHARS:]

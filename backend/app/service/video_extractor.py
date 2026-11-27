@@ -22,7 +22,6 @@ import logging
 import re
 import subprocess
 import tempfile
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,6 +40,7 @@ def _extract_url(text: str) -> str:
         return text
     m = _URL_RE.search(text)
     return m.group(0) if m else text
+
 
 # whisper 模型懒加载（第一次调用时加载，后续复用）
 _whisper_model = None
@@ -117,7 +117,9 @@ def _load_whisper(device: str):
     if local_dir and Path(local_dir).exists():
         model_source = local_dir
     elif local_dir:
-        log.warning("WHISPER_MODEL_DIR=%s 不存在,退回 hub 模型名 %s(可能在线下载)", local_dir, WHISPER_MODEL)
+        log.warning(
+            "WHISPER_MODEL_DIR=%s 不存在,退回 hub 模型名 %s(可能在线下载)", local_dir, WHISPER_MODEL
+        )
 
     if device == "cuda":
         return WhisperModel(model_source, device="cuda", compute_type="float16")
@@ -177,14 +179,24 @@ def download_video(
     output_template = str(out_dir / "video.%(ext)s")
 
     cmd = [
-        sys.executable, "-m", "yt_dlp",
-        "--proxy", "",
-        "-f", "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[height<=720]/best",
-        "--merge-output-format", "mp4",
-        "--no-warnings", "--no-playlist", "--quiet",
-        "--retries", "3",
-        "--socket-timeout", "30",
-        "-o", output_template,
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--proxy",
+        "",
+        "-f",
+        "bestvideo[ext=mp4][height<=720]+bestaudio[ext=m4a]/best[height<=720]/best",
+        "--merge-output-format",
+        "mp4",
+        "--no-warnings",
+        "--no-playlist",
+        "--quiet",
+        "--retries",
+        "3",
+        "--socket-timeout",
+        "30",
+        "-o",
+        output_template,
     ]
     cookie = _resolve_cookie_file(
         sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file, output_dir=out_dir
@@ -224,13 +236,22 @@ def download_audio(
     output_template = str(out_dir / "audio.%(ext)s")
 
     cmd = [
-        sys.executable, "-m", "yt_dlp",
-        "--proxy", "",
-        "-f", "bestaudio[ext=m4a]/best",
-        "--no-warnings", "--no-playlist", "--quiet",
-        "--retries", "5",
-        "--socket-timeout", "30",
-        "-o", output_template,
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--proxy",
+        "",
+        "-f",
+        "bestaudio[ext=m4a]/best",
+        "--no-warnings",
+        "--no-playlist",
+        "--quiet",
+        "--retries",
+        "5",
+        "--socket-timeout",
+        "30",
+        "-o",
+        output_template,
     ]
     cookie = _resolve_cookie_file(
         sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file, output_dir=out_dir
@@ -288,7 +309,8 @@ def _resolve_cookie_file(
 
 
 def _write_cookie_string(cookies_str: str, output_dir: Path) -> Path:
-    """把 cookie 字符串（key=value; key=value 格式，从浏览器 dev tools 复制）写成 Netscape cookie 文件。
+    """把 cookie 字符串（key=value; key=value 格式，从浏览器 dev tools 复制）
+    写成 Netscape cookie 文件。
 
     用于抖音等需要多个 cookie 的平台（ttwid/msToken/__ac_nonce 等）。
     兼容粘贴整个 Cookie 请求头（带 "Cookie:" 前缀）——自动剥掉前缀再解析。
@@ -320,11 +342,16 @@ def extract_audio(video_path: Path, output_dir: Path) -> Path:
     audio_path = output_dir / "audio.wav"
     subprocess.run(
         [
-            "ffmpeg", "-i", str(video_path),
+            "ffmpeg",
+            "-i",
+            str(video_path),
             "-vn",  # 不要视频
-            "-acodec", "pcm_s16le",
-            "-ar", "16000",  # 16kHz
-            "-ac", "1",  # 单声道
+            "-acodec",
+            "pcm_s16le",
+            "-ar",
+            "16000",  # 16kHz
+            "-ac",
+            "1",  # 单声道
             "-y",  # 覆盖
             str(audio_path),
         ],
@@ -365,11 +392,12 @@ def transcribe_audio(audio_path: Path) -> list[dict]:
         return _run(_whisper_model)
 
 
-# ---------------------------------------------------------------- 转写 LLM 自校正（2026-11-22 治本批）
+# ------------------------------------------------- 转写 LLM 自校正（2026-11-22 治本批）
 # spike 实测（eval/runs/transcribe_spike_2026-11-22.md）：whisper 专名错听是转写错字的根源，
 # LLM 盲修（零词典、只出修改清单、程序化应用留痕）11 修 0 漏；v1「让模型重发全文」必截断，
 # v2 只出 corrections 清单（spike_llm_fix.py 同款 prompt）。
-# 成本上限 3 万字符（spike 同款）；max_tokens 16000（推理网关把 8000 全烧在 reasoning 上 0 输出的教训）。
+# 成本上限 3 万字符（spike 同款）；max_tokens 16000
+# （推理网关把 8000 全烧在 reasoning 上 0 输出的教训）。
 
 TRANSCRIPT_FIX_PROMPT = (
     "你是「智能笔记库」的转写自校正员。输入是一段视频语音转写的原始文本(未经整理,可能全英文)。"
@@ -444,7 +472,14 @@ def correct_transcript_segments(
             continue
         occurrences = hit["text"].count(ev)
         hit["text"] = hit["text"].replace(ev, fx, 1)
-        applied.append({"evidence": ev[:80], "fixed": fx[:80], "reason": str(c.get("reason", ""))[:120], "occurrences": occurrences})
+        applied.append(
+            {
+                "evidence": ev[:80],
+                "fixed": fx[:80],
+                "reason": str(c.get("reason", ""))[:120],
+                "occurrences": occurrences,
+            }
+        )
         log.info("转写校正: %r -> %r", ev[:40], fx[:40])
 
     record = {
@@ -568,8 +603,17 @@ def extract_scene_frames(
             # -ss 放在 -i 前是 fast seek（跳到最近 keyframe），单帧抽取足够快且准
             subprocess.run(
                 [
-                    "ffmpeg", "-ss", f"{ts:.3f}", "-i", str(video_path),
-                    "-frames:v", "1", "-q:v", "2", "-y", str(frame_path),
+                    "ffmpeg",
+                    "-ss",
+                    f"{ts:.3f}",
+                    "-i",
+                    str(video_path),
+                    "-frames:v",
+                    "1",
+                    "-q:v",
+                    "2",
+                    "-y",
+                    str(frame_path),
                 ],
                 capture_output=True,
                 check=True,
@@ -610,7 +654,9 @@ def _parse_frame_output(content: str) -> tuple[str, str, bool]:
     if info_m:
         is_informative = info_m.group(1).lower() == "high"
 
-    m = re.search(r"TEXT_LAYER\s*[:：]\s*(.*?)(?:\n\s*DESC\s*[:：]|$)", text, re.DOTALL | re.IGNORECASE)
+    m = re.search(
+        r"TEXT_LAYER\s*[:：]\s*(.*?)(?:\n\s*DESC\s*[:：]|$)", text, re.DOTALL | re.IGNORECASE
+    )
     if m:
         text_layer = m.group(1).strip()
         m2 = re.search(r"DESC\s*[:：]\s*(.*)", text, re.DOTALL | re.IGNORECASE)
@@ -636,7 +682,8 @@ _FRAME_TRANSCRIBE_PROMPT = (
     "2. 【逐字转录】画面里如果有代码/命令行/终端/幻灯片文字/表格，逐字转录出来，"
     "严格保留缩进、符号、大小写、表格结构，不要改写或修正，不要添加解释。"
     "是代码就用代码块包裹（标注语言，如 ```python）；表格用 markdown 表格；是纯文字就直接给。\n"
-    "3. 【画面描述】用一句话描述这个画面展示什么（图表/架构图/动画的某一帧/纯人物说话/页面截图）。\n\n"
+    "3. 【画面描述】用一句话描述这个画面展示什么"
+    "（图表/架构图/动画的某一帧/纯人物说话/页面截图）。\n\n"
     "严格按以下格式输出（不要加额外说明）：\n"
     "INFO: high 或 low\n\n"
     "TEXT_LAYER:\n<转录的文字；画面里没有可读文字就写「无」>\n\n"
@@ -687,10 +734,18 @@ def transcribe_frames(
             if len(raw) > 10 * 1024 * 1024:  # 超过 10MB 跳过
                 continue
             b64 = base64.b64encode(raw).decode("ascii")
-            image_part = {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}}
+            image_part = {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
+            }
 
             chat = client.chat(
-                [{"role": "user", "content": [{"type": "text", "text": _FRAME_TRANSCRIBE_PROMPT}, image_part]}],
+                [
+                    {
+                        "role": "user",
+                        "content": [{"type": "text", "text": _FRAME_TRANSCRIBE_PROMPT}, image_part],
+                    }
+                ],
                 temperature=0.0,
                 max_tokens=get_settings().llm_max_output_tokens,
             )
@@ -704,7 +759,15 @@ def transcribe_frames(
             if not desc and not text_layer:
                 # 格式没被遵守且没解析出内容 → 兜底重试纯描述
                 chat2 = client.chat(
-                    [{"role": "user", "content": [{"type": "text", "text": _FRAME_DESC_ONLY_PROMPT}, image_part]}],
+                    [
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": _FRAME_DESC_ONLY_PROMPT},
+                                image_part,
+                            ],
+                        }
+                    ],
                     temperature=0.0,
                     max_tokens=get_settings().llm_max_output_tokens,
                 )
@@ -713,8 +776,11 @@ def transcribe_frames(
             kept += 1
             results.append(
                 FrameContent(
-                    timestamp=timestamp, alt=desc or "画面截图", text_layer=text_layer,
-                    media_key=media_key, scene_idx=scene_idx,
+                    timestamp=timestamp,
+                    alt=desc or "画面截图",
+                    text_layer=text_layer,
+                    media_key=media_key,
+                    scene_idx=scene_idx,
                 )
             )
         except Exception:
@@ -730,9 +796,8 @@ def transcribe_frames(
             if prev is None or fc.timestamp > prev.timestamp:
                 by_scene[fc.scene_idx] = fc
         if len(by_scene) != len(grouped):
-            results = (
-                [fc for fc in results if fc.scene_idx < 0]
-                + sorted(by_scene.values(), key=lambda f: f.timestamp)
+            results = [fc for fc in results if fc.scene_idx < 0] + sorted(
+                by_scene.values(), key=lambda f: f.timestamp
             )
             log.info("同场景双候选择优：%d → %d 帧", len(grouped), len(by_scene))
 
@@ -741,7 +806,9 @@ def transcribe_frames(
     return results
 
 
-def _extract_frames(video_path: Path | None, output_dir: Path, client) -> tuple[list[FrameContent], int]:
+def _extract_frames(
+    video_path: Path | None, output_dir: Path, client
+) -> tuple[list[FrameContent], int]:
     """公共帧逻辑：场景检测双候选抽帧 + dHash 去重 + 视觉转录 + store_media 真嵌图。
 
     douyin / B站兜底 / yt-dlp 三条路径共用。返回 ``(存活的帧, 候选帧数)``——候选数
@@ -824,7 +891,9 @@ def _emit_frame(parts: list[str], idx: int, fc: FrameContent) -> None:
     parts.append(f"\n![[{ts}] {fc.alt}](baleen-image:{idx})\n")
 
 
-def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "", cookies_file: str = "") -> dict:
+def _fetch_video_info(
+    url: str, *, sessdata: str = "", cookies_str: str = "", cookies_file: str = ""
+) -> dict:
     """用 yt-dlp 提取视频元信息（不下载，只取 JSON）。平台无关。
 
     返回 {title, duration, uploader, description, webpage_url}。
@@ -834,10 +903,15 @@ def _fetch_video_info(url: str, *, sessdata: str = "", cookies_str: str = "", co
 
     output_dir = Path(tempfile.mkdtemp(prefix="video_info_"))
     cmd = [
-        sys.executable, "-m", "yt_dlp",
-        "--dump-json", "--skip-download",
-        "--no-playlist", "--quiet",
-        "--socket-timeout", "30",
+        sys.executable,
+        "-m",
+        "yt_dlp",
+        "--dump-json",
+        "--skip-download",
+        "--no-playlist",
+        "--quiet",
+        "--socket-timeout",
+        "30",
     ]
     cookie = _resolve_cookie_file(sessdata=sessdata, cookies_str=cookies_str, output_dir=output_dir)
     if cookie:
@@ -980,7 +1054,9 @@ def _extract_generic_content(
     output_dir = Path(tempfile.mkdtemp(prefix="video_extract_"))
 
     # ① 获取视频元信息（yt-dlp --dump-json，平台无关）
-    info = _fetch_video_info(url, sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file)
+    info = _fetch_video_info(
+        url, sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file
+    )
     title = info["title"]
     description = info["description"]
     owner_name = info["uploader"]
@@ -1000,7 +1076,9 @@ def _extract_generic_content(
     # ② 下载音频（总是执行——小文件、可靠）
     audio_file = download_audio(
         resolved_url,
-        sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file,
+        sessdata=sessdata,
+        cookies_str=cookies_str,
+        cookies_file=cookies_file,
         output_dir=output_dir,
     )
     # ③ 尝试下载视频（可选，帧提取用；失败跳过，不影响转写）
@@ -1009,7 +1087,9 @@ def _extract_generic_content(
         try:
             video_path = download_video(
                 resolved_url,
-                sessdata=sessdata, cookies_str=cookies_str, cookies_file=cookies_file,
+                sessdata=sessdata,
+                cookies_str=cookies_str,
+                cookies_file=cookies_file,
                 output_dir=output_dir,
             )
         except Exception:
@@ -1075,7 +1155,11 @@ def extract_video_content(
     first_err_msg: str | None = None
     try:
         return _extract_generic_content(
-            url, sessdata=sessdata, cookies_str=cookies_str, client=client, progress_cb=progress_cb,
+            url,
+            sessdata=sessdata,
+            cookies_str=cookies_str,
+            client=client,
+            progress_cb=progress_cb,
         )
     except Exception as exc:
         # 非 B站链接不兜底；时长超限是确定性错误，兜底重试也不会变。
@@ -1112,9 +1196,7 @@ def extract_video_content(
                 "同主题视频换抖音链接导入通常最快"
             ) from retry_err
     except Exception as browser_err:
-        raise RuntimeError(
-            f"{first_err_msg}；浏览器兜底也失败: {browser_err}"
-        ) from browser_err
+        raise RuntimeError(f"{first_err_msg}；浏览器兜底也失败: {browser_err}") from browser_err
 
     if media.duration_s > 3600:
         raise RuntimeError(

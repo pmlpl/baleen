@@ -198,6 +198,12 @@ DATABASE_URL="postgresql+asyncpg://baleen:baleen@localhost:5432/baleen_ci" \
 DATABASE_URL="postgresql+asyncpg://baleen:baleen@localhost:5432/baleen_ci" \
   uv run pytest -q                   # ⚠️ 空库全量 = CI 同口径,见下
 
+# ---------- lint（第五道门,与 CI 同口径） ----------
+cd backend
+uv run ruff check app tests          # lint(pre-commit 也挂了)
+uv run ruff format --check app tests # format 检查;重排: uv run ruff format app tests
+# organizer.py 的 E501 是登记过的单文件豁免(prompt 三引号内中文超宽,折行=改喂 LLM 的字节)
+
 # ---------- 评测 ----------
 python eval/scripts/candidates.py --samples eval/inputs/samples --out eval/inputs/candidates.csv
 python eval/scripts/runner.py --samples eval/samples --out eval/preds.csv --predictor fake
@@ -317,3 +323,4 @@ chore: 升级 uv 到 0.13
 
 | 2026-11-27 | §7 新增「测试」命令块 + §7.1「空库同口径必须跑」：CI 首次实跑红了 36 个测试，根因**全是对开发库残留数据的隐式依赖**（35 个靠 owner 1 已有的真 api_key 过上传/视频导入的 key 前置闸、1 个靠 identity 序列已被真实数据推进过、1 个靠开发库那 86 条自答记录），空库上全暴露；夹具改为自带数据（假 key + 自造消息，事务内回滚），并补 `setval` 修正手插 id=1 的序列。理由：本地开发库有真数据 → 本地永远绿，只有空库能复现 CI；这类缺陷不会自己消失。同时 §7 原本**没有** pytest 命令（ci.yml 注释声称「与 AGENTS §7 同口径」是假的），一并补齐 |
 | 2026-11-27 | §7 补 `uv run alembic check` 命令 + `alembic revision --autogenerate` 的裸 SQL 索引警告：审计发现两处**模型↔迁移漂移**（`jobs_dedupe_uq` 模型停在 0008 之前的老定义、迁移 0019 裸 SQL 建的 `notes_archived_at_idx` 没在模型里声明），autogenerate 下一条迁移会把它们**静默改回去**——前者会重新引入 0008 修掉的多用户互相去重。修完把「模型改了必须跑 alembic check」写进常用命令，并让 CI 装上同一道闸（本地与 CI 同口径）。理由：`upgrade head` 只证明迁移能执行，证明不了 schema 与模型一致；这道闸是该类缺陷唯一的机械守卫 |
+| 2026-11-27 | §7 补「lint」命令块（ruff check + format，与 CI 第五道门同口径）:ruff 存量清完（144 错全修 + 63 文件重排 + F821 隐性雷——summarizer.py 用 LLMClient 没 import，靠 `from __future__ import annotations` 惰性化才没炸）后装闸防复发；pre-commit 同步挂 ruff。organizer.py 的 E501 单文件豁免登记在 backend/pyproject.toml（prompt 三引号内 4 行中文超宽，折行=改喂 LLM 的字节，prompt 变更不进 lint 批）。字符串字节等价用 AST 探针证明（backend/tmp/probe_ruff_strings.py，HEAD vs 工作树非 docstring 字符串常量多重集全等）|

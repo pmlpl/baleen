@@ -15,7 +15,6 @@ from typing import Any
 
 import pytest
 
-
 # ---------- Fake Playwright ----------
 
 
@@ -220,10 +219,11 @@ def test_login_cb_retries_fallback_with_fresh_sessdata(
     assert calls["cb"] == 1
 
 
-def test_login_cb_not_called_for_non_auth_failure(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_login_cb_not_called_for_non_auth_failure(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """非凭证类失败（如 CDN 下载崩）→ 不触发扫码钩子（弹了也没用）。"""
     import app.service.video_extractor as ve
-    from app.service.bilibili_extractor import BilibiliAuthRequired
 
     _install_ytdlp_failing(monkeypatch)
 

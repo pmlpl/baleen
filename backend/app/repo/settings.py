@@ -65,9 +65,7 @@ class SettingsRepo(Repo):
             # 0/负 = 清空(回退兜底:不截断全文喂);正数 = 用户填的上限
             row.llm_context_tokens = llm_context_tokens if llm_context_tokens > 0 else None
         if llm_max_output_tokens is not None:
-            row.llm_max_output_tokens = (
-                llm_max_output_tokens if llm_max_output_tokens > 0 else None
-            )
+            row.llm_max_output_tokens = llm_max_output_tokens if llm_max_output_tokens > 0 else None
         if allow_diagrams is not None:
             row.allow_diagrams = allow_diagrams
         if agent_enabled is not None:

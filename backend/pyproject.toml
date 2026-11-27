@@ -43,6 +43,11 @@ target-version = "py313"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.lint.per-file-ignores]
+# organizer 的 _CONTRACT_RULES/_VIDEO_RULES 是三引号 prompt:内部 4 行中文超宽,
+# 折行=改喂 LLM 的字节(prompt 变更不进 lint 批),只能豁免;其余文件照拦。
+"app/service/rewrite/organizer.py" = ["E501"]
+
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]

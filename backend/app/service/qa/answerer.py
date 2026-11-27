@@ -136,8 +136,7 @@ def _system_prompt(nickname: str | None = None) -> str:
         "**优先依据图片内容回答**——图就是用户给的素材,不要因为 <context> 没命中"
         "就回 [NO_KB] 或去搜网。用户问「这图讲了什么/帮我看看图」时,先认出图的"
         "主题与结构并简述,再问用户想就哪部分深入(而不是直接长篇讲解或罗列工具)。"
-        "图里的文字尽量照原图措辞复述;看不清的部分如实说看不清,不编。\n"
-        + FORMAT_GUIDE
+        "图里的文字尽量照原图措辞复述;看不清的部分如实说看不清,不编。\n" + FORMAT_GUIDE
     )
 
 
@@ -229,7 +228,8 @@ def build_qa_messages(
     # 固定开销:system + 三个块包装 + "问题:" 行 + 余量
     fixed_overhead = (
         estimate_tokens(system)
-        + estimate_tokens("<context>\n\n</context>\n\n问题:") + 64
+        + estimate_tokens("<context>\n\n</context>\n\n问题:")
+        + 64
         + estimate_tokens(ref_block)
         + estimate_tokens(att_block)
     )
@@ -255,8 +255,7 @@ def build_qa_messages(
     # 没命中就不放空 <context>(追问靠历史);有命中才编号
     context = "\n\n".join(entries) if entries else "(本次检索没有命中相关笔记片段)"
     current_user = (
-        f"{ref_block}{att_block}<context>\n{context}\n</context>\n\n"
-        f"问题:{question.strip()}"
+        f"{ref_block}{att_block}<context>\n{context}\n</context>\n\n问题:{question.strip()}"
     )
 
     messages: list[dict[str, str]] = [{"role": "system", "content": system}]
@@ -323,7 +322,8 @@ def build_web_answer_messages(
     attachments: list[dict[str, str]] | None = None,
     digest_summaries: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    """库外问题的消息组装:system(+digest) → 历史重放 → 当前 user(引用块 + 附件块 + <web_context> + 问题)。"""
+    """库外问题的消息组装:system(+digest) → 历史重放 →
+    当前 user(引用块 + 附件块 + <web_context> + 问题)。"""
     entries = []
     for i, r in enumerate(results, start=1):
         content = (r.get("content") or "")[:1200]
@@ -332,8 +332,7 @@ def build_web_answer_messages(
     ref_block = _ref_notes_block(ref_notes or [])
     att_block = _reference_files_block(attachments or [])
     current_user = (
-        f"{ref_block}{att_block}<web_context>\n{context}\n</web_context>\n\n"
-        f"问题:{question.strip()}"
+        f"{ref_block}{att_block}<web_context>\n{context}\n</web_context>\n\n问题:{question.strip()}"
     )
     # 无昵称时与 WEB_SYSTEM_PROMPT 字节一致(保持前缀缓存/等价性)
     system = WEB_SYSTEM_PROMPT + (f"\n{_greet_line(nickname)}" if nickname else "")
@@ -385,7 +384,13 @@ def answer_web(
     """
     cli = client or LLMClient.from_settings()
     messages = build_web_answer_messages(
-        question, results, history=history, nickname=nickname, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
+        question,
+        results,
+        history=history,
+        nickname=nickname,
+        ref_notes=ref_notes,
+        attachments=attachments,
+        digest_summaries=digest_summaries,
     )
     if images:
         attach_images(messages, images)
@@ -397,7 +402,12 @@ def answer_web(
         if not images:
             raise
         messages = build_web_answer_messages(
-            question, results, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
+            question,
+            results,
+            history=history,
+            ref_notes=ref_notes,
+            attachments=attachments,
+            digest_summaries=digest_summaries,
         )
         chat = cli.chat(messages, max_tokens=max_tokens, temperature=temperature)
         degraded_no_image = True
@@ -462,7 +472,13 @@ def answer(
 
     cli = client or LLMClient.from_settings()
     messages, meta = build_qa_messages(
-        question, hits, history=history, nickname=nickname, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
+        question,
+        hits,
+        history=history,
+        nickname=nickname,
+        ref_notes=ref_notes,
+        attachments=attachments,
+        digest_summaries=digest_summaries,
     )
     if images:
         attach_images(messages, images)
@@ -475,7 +491,12 @@ def answer(
         if not images:
             raise
         messages, meta = build_qa_messages(
-            question, hits, history=history, ref_notes=ref_notes, attachments=attachments, digest_summaries=digest_summaries
+            question,
+            hits,
+            history=history,
+            ref_notes=ref_notes,
+            attachments=attachments,
+            digest_summaries=digest_summaries,
         )
         chat = cli.chat(messages, max_tokens=max_tokens, temperature=temperature)
         degraded_no_image = True

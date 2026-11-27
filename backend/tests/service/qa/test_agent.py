@@ -274,9 +274,7 @@ class TestWebTool:
                 {"title": "用药指南", "url": "https://example.com/drug", "content": "不建议同服…"}
             ]
 
-        result = _run(
-            client, retrieve, kb_hits=[], tavily_key="tvly-x", web_search=degraded_web
-        )
+        result = _run(client, retrieve, kb_hits=[], tavily_key="tvly-x", web_search=degraded_web)
         assert result is not None
         tool_step = result.meta["agent"]["steps"][1]
         assert tool_step["tool"] == "search_web"

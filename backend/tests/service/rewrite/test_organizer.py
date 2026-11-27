@@ -10,18 +10,23 @@ import pytest
 from app.service.llm.client import LLMError
 from app.service.parse.types import ParseResult, ParseStatus
 from app.service.rewrite.organizer import (
-    OrganizeResult,
     organize_note,
     renumber_headings_in_blocks,
 )
 
-
 # ---- fake LLM client ----
+
 
 class FakeClient:
     """假 LLMClient：按预设返回 content，记录调用次数。"""
 
-    def __init__(self, responses: list[str], *, model: str = "fake-model", fail_with: type[Exception] | None = None):
+    def __init__(
+        self,
+        responses: list[str],
+        *,
+        model: str = "fake-model",
+        fail_with: type[Exception] | None = None,
+    ):
         self._responses = list(responses)
         self.model = model
         self.fail_with = fail_with
@@ -29,7 +34,14 @@ class FakeClient:
         self.received_messages: list[list[dict]] = []
         self.received_max_tokens: list[int] = []
 
-    def chat(self, messages: list[dict], *, temperature: float = 0.0, max_tokens: int = 800, response_format: Any = None) -> Any:
+    def chat(
+        self,
+        messages: list[dict],
+        *,
+        temperature: float = 0.0,
+        max_tokens: int = 800,
+        response_format: Any = None,
+    ) -> Any:
         self.received_messages.append(messages)
         self.received_max_tokens.append(max_tokens)
         self.call_count += 1
@@ -40,12 +52,16 @@ class FakeClient:
 
 
 def _make_parse_result(text: str = "这是一段关于闭包的技术内容。") -> ParseResult:
-    blocks = {"type": "doc", "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}]}
+    blocks = {
+        "type": "doc",
+        "content": [{"type": "paragraph", "content": [{"type": "text", "text": text}]}],
+    }
     return ParseResult(parse_status=ParseStatus.OK, blocks=blocks, meta={"chars": len(text)})
 
 
 _SUCCESS_JSON = (
-    '{"organizable": true, "markdown": "# 闭包详解\\n\\n## 闭包的定义\\n\\n闭包是函数和词法环境的组合。", '
+    '{"organizable": true, "markdown": "# 闭包详解\\n\\n## 闭包的定义'
+    '\\n\\n闭包是函数和词法环境的组合。", '
     '"quality": "core", "note_type": "concept", "reasons": ["提取了技术内容"]}'
 )
 
@@ -57,8 +73,13 @@ _NOT_ORGANIZABLE_JSON = (
 
 # ---- renumber_headings_in_blocks ----
 
+
 def _heading(level: int, text: str) -> dict:
-    return {"type": "heading", "attrs": {"level": level}, "content": [{"type": "text", "text": text}]}
+    return {
+        "type": "heading",
+        "attrs": {"level": level},
+        "content": [{"type": "text", "text": text}],
+    }
 
 
 def _para(text: str) -> dict:
@@ -66,14 +87,17 @@ def _para(text: str) -> dict:
 
 
 def test_renumber_simple() -> None:
-    doc = {"type": "doc", "content": [
-        _heading(1, "什么是闭包"),
-        _para("闭包是..."),
-        _heading(2, "形成条件"),
-        _para("需要嵌套..."),
-        _heading(2, "应用场景"),
-        _para("用于回调..."),
-    ]}
+    doc = {
+        "type": "doc",
+        "content": [
+            _heading(1, "什么是闭包"),
+            _para("闭包是..."),
+            _heading(2, "形成条件"),
+            _para("需要嵌套..."),
+            _heading(2, "应用场景"),
+            _para("用于回调..."),
+        ],
+    }
     result = renumber_headings_in_blocks(doc)
     headings = [b for b in result["content"] if b["type"] == "heading"]
     assert headings[0]["content"][0]["text"] == "一、什么是闭包"
@@ -83,12 +107,15 @@ def test_renumber_simple() -> None:
 
 def test_renumber_strips_existing_numbers() -> None:
     """LLM 可能加编号，strip 后重新编号。"""
-    doc = {"type": "doc", "content": [
-        _heading(1, "一、闭包基础"),
-        _para("内容"),
-        _heading(2, "2.1 定义"),
-        _para("内容"),
-    ]}
+    doc = {
+        "type": "doc",
+        "content": [
+            _heading(1, "一、闭包基础"),
+            _para("内容"),
+            _heading(2, "2.1 定义"),
+            _para("内容"),
+        ],
+    }
     result = renumber_headings_in_blocks(doc)
     headings = [b for b in result["content"] if b["type"] == "heading"]
     assert headings[0]["content"][0]["text"] == "一、闭包基础"
@@ -96,19 +123,26 @@ def test_renumber_strips_existing_numbers() -> None:
 
 
 def test_renumber_multi_level() -> None:
-    doc = {"type": "doc", "content": [
-        _heading(1, "闭包基础"),
-        _heading(2, "定义与原理"),
-        _heading(3, "词法作用域"),
-        _heading(3, "变量捕获"),
-        _heading(2, "应用场景"),
-        _heading(1, "闭包进阶"),
-    ]}
+    doc = {
+        "type": "doc",
+        "content": [
+            _heading(1, "闭包基础"),
+            _heading(2, "定义与原理"),
+            _heading(3, "词法作用域"),
+            _heading(3, "变量捕获"),
+            _heading(2, "应用场景"),
+            _heading(1, "闭包进阶"),
+        ],
+    }
     result = renumber_headings_in_blocks(doc)
     headings = [b["content"][0]["text"] for b in result["content"] if b["type"] == "heading"]
     assert headings == [
-        "一、闭包基础", "1.1 定义与原理", "1.1.1 词法作用域",
-        "1.1.2 变量捕获", "1.2 应用场景", "二、闭包进阶",
+        "一、闭包基础",
+        "1.1 定义与原理",
+        "1.1.1 词法作用域",
+        "1.1.2 变量捕获",
+        "1.2 应用场景",
+        "二、闭包进阶",
     ]
 
 
@@ -119,6 +153,7 @@ def test_renumber_no_headings() -> None:
 
 
 # ---- organize_note ----
+
 
 def test_organize_success() -> None:
     client = FakeClient([_SUCCESS_JSON])
@@ -183,7 +218,10 @@ def test_organize_llm_error_raises() -> None:
 
 
 def test_organize_organizable_but_empty_markdown_degrades() -> None:
-    json_empty_md = '{"organizable": true, "markdown": "", "quality": "normal", "note_type": "other", "reasons": []}'
+    json_empty_md = (
+        '{"organizable": true, "markdown": "", '
+        '"quality": "normal", "note_type": "other", "reasons": []}'
+    )
     client = FakeClient([json_empty_md])
     pr = _make_parse_result()
     result = organize_note(pr, filename="test.md", ext=".md", client=client)
@@ -302,7 +340,7 @@ _VIDEO_MD = (
 
 _VIDEO_SUCCESS_JSON = (
     '{"organizable": true, "markdown": "# 信任与智能体\\n\\n## 讲者观点\\n\\n'
-    '讲者认为 AI 是结对伙伴。\\n\\n![[0:40] 讲者画面](baleen-image:0)\\n\\n'
+    "讲者认为 AI 是结对伙伴。\\n\\n![[0:40] 讲者画面](baleen-image:0)\\n\\n"
     '## 白板示意\\n\\n白板展示了 trust 曲线。\\n\\n![[1:46] tldraw白板](baleen-image:1)", '
     '"quality": "core", "note_type": "concept", "reasons": ["融合语音与画面"]}'
 )
@@ -328,7 +366,13 @@ def _make_video_images(tmp_path, count: int = 2) -> list[dict]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(data)
         out.append(
-            {"index": i, "media_key": key, "alt": f"画面{i}", "text_layer": f"code_{i}()", "timestamp": i * 60.0}
+            {
+                "index": i,
+                "media_key": key,
+                "alt": f"画面{i}",
+                "text_layer": f"code_{i}()",
+                "timestamp": i * 60.0,
+            }
         )
     return out
 
@@ -372,12 +416,10 @@ def test_organize_video_restores_image_blocks(tmp_path, monkeypatch) -> None:
     pr = _make_parse_result(md_with_images)
     client = FakeClient([_VIDEO_SUCCESS_JSON])
 
-    result = organize_note(
-        pr, filename="v.md", ext=".md", client=client, video_images=video_images
-    )
+    result = organize_note(pr, filename="v.md", ext=".md", client=client, video_images=video_images)
     assert result.organizable and result.blocks
 
-    from app.service.notes_edit import doc_has_image_blocks, _iter_images
+    from app.service.notes_edit import _iter_images, doc_has_image_blocks
 
     assert doc_has_image_blocks(result.blocks)  # 图没丢
     imgs = _iter_images(result.blocks["content"])
@@ -396,13 +438,11 @@ def test_organize_video_prompt_forbids_dropping_markers() -> None:
     assert "图跟着所属主题走" in rules
 
 
-
-
 _VIDEO_DUPE_JSON = (
     '{"organizable": true, "markdown": "# 双例\\n\\n## 第一节\\n\\n'
-    '一节内容。\\n\\n![[0:40] 一线城市家庭案例计算](baleen-image:0)\\n\\n'
-    '## 第二节\\n\\n'
-    '二节内容,想把同一张图再配一次。\\n\\n![[0:41] 反向推演600万案例](baleen-image:0)\\n\\n'
+    "一节内容。\\n\\n![[0:40] 一线城市家庭案例计算](baleen-image:0)\\n\\n"
+    "## 第二节\\n\\n"
+    "二节内容,想把同一张图再配一次。\\n\\n![[0:41] 反向推演600万案例](baleen-image:0)\\n\\n"
     '另一帧正常保留。\\n\\n![[1:46] 白板](baleen-image:1)", '
     '"quality": "core", "note_type": "concept", "reasons": ["融合语音与画面"]}'
 )
@@ -424,9 +464,7 @@ def test_organize_video_dedupes_duplicate_frame_marker(tmp_path, monkeypatch) ->
 
     pr = _make_parse_result(_VIDEO_MD)
     client = FakeClient([_VIDEO_DUPE_JSON])
-    result = organize_note(
-        pr, filename="v.md", ext=".md", client=client, video_images=video_images
-    )
+    result = organize_note(pr, filename="v.md", ext=".md", client=client, video_images=video_images)
     assert result.organizable and result.blocks
 
     imgs = _iter_images(result.blocks["content"])
@@ -449,10 +487,28 @@ _LISTY_MD = (
 )
 
 # 节点全部来自原文标题 → 应保留
-_LISTY_GOOD_JSON = "{\"organizable\": true, \"markdown\": \"# AI 入门地图\\n\\n本笔记按学习阶段分组。\\n\\n下图把 5 个层次归为一张地图。\\n\\n```mermaid\\nmindmap\\n  root((AI 入门))\\n    模型层\\n    工具层\\n    场景层\\n    概念层\\n    执行层\\n```\\n\\n从上到下是学习的推荐顺序。\\n\\n## 模型层\\n\\n大模型的基本概念与原理。\\n\\n## 工具层\\n\\n各类 AI 工具产品。\\n\\n## 场景层\\n\\n视频生成与编程等场景。\\n\\n## 概念层\\n\\n从模型到 Skill 的概念梳理。\\n\\n## 执行层\\n\\n让 AI 真正做事的工程实践。\", \"quality\": \"normal\", \"note_type\": \"concept\", \"reasons\": [\"整理了清单\"]}"
+_LISTY_GOOD_JSON = (
+    '{"organizable": true, "markdown": "# AI 入门地图\\n\\n本笔记按学习阶段分组。\\n'
+    "\\n下图把 5 个层次归为一张地图。\\n\\n```mermaid\\nmindmap\\n  root((AI 入门))\\n"
+    "    模型层\\n    工具层\\n    场景层\\n    概念层\\n    执行层\\n```\\n"
+    "\\n从上到下是学习的推荐顺序。\\n\\n## 模型层\\n\\n大模型的基本概念与原理。\\n\\n## 工具层\\n"
+    "\\n各类 AI 工具产品。\\n\\n## 场景层\\n\\n视频生成与编程等场景。\\n\\n## 概念层\\n"
+    "\\n从模型到 Skill 的概念梳理。\\n\\n## 执行层\\n"
+    '\\n让 AI 真正做事的工程实践。", "quality": "normal", "note_type":'
+    ' "concept", "reasons": ["整理了清单"]}'
+)
 
 # 节点是模型自己编的概念 → 必须被摘掉
-_LISTY_FAKE_JSON = "{\"organizable\": true, \"markdown\": \"# AI 入门地图\\n\\n本笔记按学习阶段分组。\\n\\n```mermaid\\nmindmap\\n  root((AI 全景))\\n    量子计算\\n    脑机接口\\n    可控核聚变\\n    太空电梯\\n```\\n\\n## 模型层\\n\\n大模型的基本概念与原理。\\n\\n## 工具层\\n\\n各类 AI 工具产品。\\n\\n## 场景层\\n\\n视频生成与编程等场景。\\n\\n## 概念层\\n\\n从模型到 Skill 的概念梳理。\\n\\n## 执行层\\n\\n让 AI 真正做事的工程实践。\", \"quality\": \"normal\", \"note_type\": \"concept\", \"reasons\": [\"整理了清单\"]}"
+_LISTY_FAKE_JSON = (
+    '{"organizable": true, "markdown": "# AI 入门地图\\n\\n本笔记按学习阶段分组。\\n'
+    "\\n```mermaid\\nmindmap\\n  root((AI 全景))\\n    量子计算\\n"
+    "    脑机接口\\n    可控核聚变\\n    太空电梯\\n```\\n"
+    "\\n## 模型层\\n\\n大模型的基本概念与原理。\\n"
+    "\\n## 工具层\\n\\n各类 AI 工具产品。\\n\\n## 场景层\\n\\n视频生成与编程等场景。\\n"
+    "\\n## 概念层\\n\\n从模型到 Skill 的概念梳理。\\n\\n## 执行层\\n"
+    '\\n让 AI 真正做事的工程实践。", "quality": "normal", '
+    '"note_type": "concept", "reasons": ["整理了清单"]}'
+)
 
 
 def _make_listy_parse_result() -> ParseResult:
@@ -464,21 +520,32 @@ def _make_listy_parse_result() -> ParseResult:
     """
 
     def h(text: str, level: int) -> dict:
-        return {"type": "heading", "attrs": {"level": level},
-                "content": [{"type": "text", "text": text}]}
+        return {
+            "type": "heading",
+            "attrs": {"level": level},
+            "content": [{"type": "text", "text": text}],
+        }
 
     def para(text: str) -> dict:
         return {"type": "paragraph", "content": [{"type": "text", "text": text}]}
 
-    blocks = {"type": "doc", "content": [
-        h("AI 入门地图", 1),
-        para("本笔记按学习阶段分组介绍 AI 核心概念。"),
-        h("模型层", 2), para("大模型的基本概念与原理。"),
-        h("工具层", 2), para("各类 AI 工具产品。"),
-        h("场景层", 2), para("视频生成与编程等场景。"),
-        h("概念层", 2), para("从模型到 Skill 的概念梳理。"),
-        h("执行层", 2), para("让 AI 真正做事的工程实践。"),
-    ]}
+    blocks = {
+        "type": "doc",
+        "content": [
+            h("AI 入门地图", 1),
+            para("本笔记按学习阶段分组介绍 AI 核心概念。"),
+            h("模型层", 2),
+            para("大模型的基本概念与原理。"),
+            h("工具层", 2),
+            para("各类 AI 工具产品。"),
+            h("场景层", 2),
+            para("视频生成与编程等场景。"),
+            h("概念层", 2),
+            para("从模型到 Skill 的概念梳理。"),
+            h("执行层", 2),
+            para("让 AI 真正做事的工程实践。"),
+        ],
+    }
     return ParseResult(parse_status=ParseStatus.OK, blocks=blocks, meta={"chars": 200})
 
 
@@ -501,7 +568,10 @@ def test_diagram_kept_when_nodes_traceable_to_source() -> None:
 
     pr = _make_listy_parse_result()
     result = organize_note(
-        pr, filename="ai.md", ext=".md", client=FakeClient([_LISTY_GOOD_JSON]),
+        pr,
+        filename="ai.md",
+        ext=".md",
+        client=FakeClient([_LISTY_GOOD_JSON]),
         allow_diagram=True,
     )
     assert result.organizable and result.blocks
@@ -520,7 +590,10 @@ def test_diagram_dropped_when_nodes_fabricated() -> None:
 
     pr = _make_listy_parse_result()
     result = organize_note(
-        pr, filename="ai.md", ext=".md", client=FakeClient([_LISTY_FAKE_JSON]),
+        pr,
+        filename="ai.md",
+        ext=".md",
+        client=FakeClient([_LISTY_FAKE_JSON]),
         allow_diagram=True,
     )
     assert result.organizable and result.blocks

@@ -111,9 +111,7 @@ def test_chat_attaches_hit_image(env, qa_setup, tmp_path) -> None:  # noqa: ANN0
 
 def test_chat_text_note_keeps_plain_string(env, qa_setup) -> None:  # noqa: ANN001
     note_id = env.client.portal.call(
-        lambda: _seed_image_note(
-            env.shared["factory"], env.tmp_path, "文本笔记", ext=".md"
-        )
+        lambda: _seed_image_note(env.shared["factory"], env.tmp_path, "文本笔记", ext=".md")
     )
     qa_setup.hits = [_hit(note_id, "文本笔记", "一、文", "普通正文。")]
     qa_setup.responses.append((200, _chat("答。")))
@@ -226,12 +224,11 @@ def test_stream_user_image_reported_in_meta(env, qa_setup) -> None:  # noqa: ANN
     assert any(p.get("type") == "image_url" for p in content if isinstance(p, dict))
 
 
-def test_chat_user_image_skips_web_search_even_with_tavily(
-    env, qa_setup, monkeypatch
-) -> None:  # noqa: ANN001
+def test_chat_user_image_skips_web_search_even_with_tavily(env, qa_setup, monkeypatch) -> None:  # noqa: ANN001
     """挂了图时即便库内无命中 + 配了 Tavily,也不走联网:
     图本身是内容,搜「图片/内容」只会搜出 OCR 工具之类。让视觉模型直接看图答。
     """
+
     async def fake_tavily_key(*_a, **_kw):  # noqa: ANN001
         return "tvly-test"
 

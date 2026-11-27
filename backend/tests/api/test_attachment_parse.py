@@ -27,9 +27,9 @@ def test_parse_txt_full_mode(env) -> None:
 def test_parse_html_strips_base64_and_returns_image(env) -> None:
     b64 = base64.b64encode(PNG_1X1).decode()
     html = (
-        '<html><body><p>姓名:张三</p>'
+        "<html><body><p>姓名:张三</p>"
         f'<img src="data:image/png;base64,{b64}" alt="头像">'
-        '</body></html>'
+        "</body></html>"
     )
     resp = _upload(env, "resume.html", html.encode())
     assert resp.status_code == 200

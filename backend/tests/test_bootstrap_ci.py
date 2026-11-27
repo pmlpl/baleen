@@ -42,11 +42,11 @@ B = _load()
 @pytest.mark.parametrize(
     ("k", "n", "expect_upper"),
     [
-        (0, 17, 0.195064),   # test ok 口径:0/17
-        (0, 47, 0.075486),   # 全量 ok 口径:0/47
-        (0, 30, 0.115703),   # dev ok 口径:0/30
-        (3, 50, 0.165482),   # 全量全口径:3/50
-        (1, 48, 0.110696),   # 改判前的 1/48
+        (0, 17, 0.195064),  # test ok 口径:0/17
+        (0, 47, 0.075486),  # 全量 ok 口径:0/47
+        (0, 30, 0.115703),  # dev ok 口径:0/30
+        (3, 50, 0.165482),  # 全量全口径:3/50
+        (1, 48, 0.110696),  # 改判前的 1/48
     ],
 )
 def test_cp_upper_known_values(k: int, n: int, expect_upper: float) -> None:
@@ -135,9 +135,7 @@ def test_metric_ci_normal_proportion_also_uses_cp() -> None:
     旧实现的 if 只在 0 或 n 时切 CP，正常比例用 bootstrap，
     导致同表混用两种方法（答辩会被追问为什么口径不一致）。
     """
-    point, lo, hi, n_shown, method = B.metric_ci(
-        n_event=33, n_denom=35, point=33 / 35
-    )
+    point, lo, hi, n_shown, method = B.metric_ci(n_event=33, n_denom=35, point=33 / 35)
     assert method == "CP 精确"
     assert 0.80 < lo < 0.95
     assert 0.95 < hi <= 1.0

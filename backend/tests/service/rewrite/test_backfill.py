@@ -219,9 +219,7 @@ def test_backfill_rewrites_and_rebuilds(db_scope, fake_embed, fake_tokens) -> No
                 source = await _get_source(session, source_id)
                 # 标题带编号(编号是代码算的),title 不被覆盖
                 texts = [
-                    b["content"][0]["text"]
-                    for b in note.doc["content"]
-                    if b["type"] == "heading"
+                    b["content"][0]["text"] for b in note.doc["content"] if b["type"] == "heading"
                 ]
                 assert "一、错误处理" in texts
                 assert "1.1 fetch 场合" in texts

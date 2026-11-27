@@ -36,4 +36,19 @@ if [ "$status" -ne 0 ]; then
     exit 1
 fi
 
+# ruff（2026-11-27 第五道门的本地版：与 CI 同口径，提交时就拦，别等推上去才红）
+if command -v uv >/dev/null 2>&1; then
+    (cd backend && uv run ruff check app tests && uv run ruff format --check app tests)
+    status=$?
+    if [ "$status" -ne 0 ]; then
+        echo ""
+        echo "────────────────────────────────────────────────"
+        echo "提交被拦：ruff 未过（lint 或 format）。"
+        echo "修法：cd backend && uv run ruff check app tests --fix && uv run ruff format app tests"
+        echo "确认要跳过：git commit --no-verify（CI 同款闸，推上去还是会红）"
+        echo "────────────────────────────────────────────────"
+        exit 1
+    fi
+fi
+
 exit 0

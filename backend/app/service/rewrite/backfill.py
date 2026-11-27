@@ -171,9 +171,7 @@ async def _backfill_one(
             return outcome
 
         # LLM 是同步阻塞调用,丢线程池(照 pipeline 口径)
-        specs = await asyncio.to_thread(
-            plan_outline, note.doc, title=note.title, client=client
-        )
+        specs = await asyncio.to_thread(plan_outline, note.doc, title=note.title, client=client)
         if not specs:
             outcome.status = NO_SPECS
             return outcome
@@ -189,9 +187,7 @@ async def _backfill_one(
         outcome.new_chunks = len(result.chunks)
 
         todo = [
-            (row.id, c.text)
-            for c, row in inserted
-            if not (row.meta or {}).get("skipped_embed")
+            (row.id, c.text) for c, row in inserted if not (row.meta or {}).get("skipped_embed")
         ]
         if todo:
             vectors = embed_func([text for _, text in todo])

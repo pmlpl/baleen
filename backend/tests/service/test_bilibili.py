@@ -9,17 +9,17 @@ from app.service.bilibili import (
     BilibiliError,
     BilibiliResult,
     Chapter,
+    _build_markdown,
+    _format_duration,
+    _segments_to_paragraphs,
     extract_bvid,
     extract_page,
     fetch_bilibili,
     sanitize_filename,
-    _build_markdown,
-    _format_duration,
-    _segments_to_paragraphs,
 )
 
-
 # ----------------------------------------------------------------- extract_page
+
 
 @pytest.mark.parametrize(
     "url,expected",
@@ -35,6 +35,7 @@ def test_extract_page(url: str, expected: int | None) -> None:
 
 
 # ----------------------------------------------------------------- extract_bvid
+
 
 @pytest.mark.parametrize(
     "url,expected",
@@ -65,6 +66,7 @@ def test_extract_bvid_none(url: str) -> None:
 
 
 # ----------------------------------------------------------------- _segments_to_paragraphs
+
 
 def test_segments_merge_by_sentence() -> None:
     """句末标点 → 断段。"""
@@ -123,11 +125,17 @@ def test_segments_empty_list() -> None:
 
 # ----------------------------------------------------------------- _build_markdown
 
+
 def _make_info(**kw) -> bilibili.BilibiliVideoInfo:
     defaults = dict(
-        bvid="BV1GJ411x7h7", aid=12345, cid=67890,
-        title="测试视频", description="", owner_name="UP主",
-        duration=600, chapters=[],
+        bvid="BV1GJ411x7h7",
+        aid=12345,
+        cid=67890,
+        title="测试视频",
+        description="",
+        owner_name="UP主",
+        duration=600,
+        chapters=[],
     )
     defaults.update(kw)
     return bilibili.BilibiliVideoInfo(**defaults)
@@ -146,10 +154,12 @@ def test_build_markdown_no_chapters() -> None:
 
 
 def test_build_markdown_with_chapters() -> None:
-    info = _make_info(chapters=[
-        Chapter(time=0.0, title="第一章"),
-        Chapter(time=60.0, title="第二章"),
-    ])
+    info = _make_info(
+        chapters=[
+            Chapter(time=0.0, title="第一章"),
+            Chapter(time=60.0, title="第二章"),
+        ]
+    )
     segs = [
         {"from": 0.0, "to": 5.0, "content": "第一章内容。"},
         {"from": 60.0, "to": 65.0, "content": "第二章内容。"},
@@ -171,6 +181,7 @@ def test_build_markdown_long_description_truncated() -> None:
 
 # ----------------------------------------------------------------- _format_duration
 
+
 def test_format_duration() -> None:
     assert _format_duration(0) == "0:00"
     assert _format_duration(65) == "1:05"
@@ -178,6 +189,7 @@ def test_format_duration() -> None:
 
 
 # ----------------------------------------------------------------- sanitize_filename
+
 
 def test_sanitize_filename() -> None:
     assert sanitize_filename("正常标题") == "正常标题"
@@ -188,6 +200,7 @@ def test_sanitize_filename() -> None:
 
 
 # ----------------------------------------------------------------- fetch_bilibili (mocked)
+
 
 def _fake_view_response() -> dict:
     return {
@@ -213,8 +226,16 @@ def _fake_player_response() -> dict:
         "data": {
             "subtitle": {
                 "subtitles": [
-                    {"lan": "zh-CN", "lan_doc": "中文(简体)", "subtitle_url": "//aisubtitle.hdslb.com/test.json"},
-                    {"lan": "en", "lan_doc": "English", "subtitle_url": "//aisubtitle.hdslb.com/test_en.json"},
+                    {
+                        "lan": "zh-CN",
+                        "lan_doc": "中文(简体)",
+                        "subtitle_url": "//aisubtitle.hdslb.com/test.json",
+                    },
+                    {
+                        "lan": "en",
+                        "lan_doc": "English",
+                        "subtitle_url": "//aisubtitle.hdslb.com/test_en.json",
+                    },
                 ]
             }
         },
@@ -292,15 +313,26 @@ def test_fetch_bilibili_multi_part(monkeypatch: pytest.MonkeyPatch) -> None:
         if "web-interface/view" in url:
             return view_with_pages
         if "player/v2" in url:
-            return {"code": 0, "data": {"subtitle": {"subtitles": [
-                {"lan": "zh-CN", "subtitle_url": "//aisubtitle.hdslb.com/test.json"},
-            ]}}}
+            return {
+                "code": 0,
+                "data": {
+                    "subtitle": {
+                        "subtitles": [
+                            {"lan": "zh-CN", "subtitle_url": "//aisubtitle.hdslb.com/test.json"},
+                        ]
+                    }
+                },
+            }
         return {}
 
     monkeypatch.setattr(bilibili, "_api_get", fake_api_get)
-    monkeypatch.setattr(bilibili, "_fetch_subtitle_raw", lambda u: [
-        {"from": 0.0, "to": 2.0, "content": "闭包是函数和环境的组合。"},
-    ])
+    monkeypatch.setattr(
+        bilibili,
+        "_fetch_subtitle_raw",
+        lambda u: [
+            {"from": 0.0, "to": 2.0, "content": "闭包是函数和环境的组合。"},
+        ],
+    )
 
     result = fetch_bilibili("https://www.bilibili.com/video/BV1GJ411x7h7/?p=2")
     assert "闭包详解" in result.info.title  # 标题包含分P名称
@@ -312,8 +344,12 @@ def test_fetch_bilibili_multi_part_out_of_range(monkeypatch: pytest.MonkeyPatch)
     view_with_pages = {
         "code": 0,
         "data": {
-            "aid": 12345, "cid": 67890, "title": "课程", "desc": "",
-            "owner": {"name": "讲师"}, "duration": 3600,
+            "aid": 12345,
+            "cid": 67890,
+            "title": "课程",
+            "desc": "",
+            "owner": {"name": "讲师"},
+            "duration": 3600,
             "pages": [{"cid": 67890, "page": 1, "part": "第1集"}],
         },
     }
@@ -328,7 +364,9 @@ def test_fetch_bilibili_no_bvid() -> None:
 
 
 def test_fetch_bilibili_video_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(bilibili, "_api_get", lambda url, *, sessdata="": {"code": -404, "message": "视频不存在"})
+    monkeypatch.setattr(
+        bilibili, "_api_get", lambda url, *, sessdata="": {"code": -404, "message": "视频不存在"}
+    )
     with pytest.raises(BilibiliError, match="视频信息获取失败"):
         fetch_bilibili("https://www.bilibili.com/video/BV1GJ411x7h7/")
 
@@ -392,4 +430,3 @@ def test_sanitize_filename_strips_newlines() -> None:
     safe = sanitize_filename(raw)
     assert "\n" not in safe and "\r" not in safe and "\t" not in safe
     assert "从单" in safe
-

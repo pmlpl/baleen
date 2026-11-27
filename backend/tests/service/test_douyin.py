@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from app.service.douyin import detect_douyin, extract_douyin_id
 
-
 # ---------- detect_douyin ----------
 
 

@@ -344,7 +344,9 @@ class TestParentDisplayText:
                 {
                     "type": "codeBlock",
                     "attrs": {"language": "bash"},
-                    "content": [{"type": "text", "text": "docker run -d --name web -p 8080:80 nginx"}],
+                    "content": [
+                        {"type": "text", "text": "docker run -d --name web -p 8080:80 nginx"}
+                    ],
                 },
                 _text("上面是启动命令的示例,直接复制即可使用。但说明文字要足够长," * 5),
             ],
@@ -449,8 +451,7 @@ class TestParentDisplayText:
         assert "> 引用块:" in ptext, "blockquote 必须带 > 前缀"
         # embedding 子块仍是纯文本
         plain_children = [
-            c for c in r.chunks
-            if not c.is_parent and c.meta.get("block_type") == "text"
+            c for c in r.chunks if not c.is_parent and c.meta.get("block_type") == "text"
         ]
         for c in plain_children:
             assert "**" not in c.text and "```" not in c.text

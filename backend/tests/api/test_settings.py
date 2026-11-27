@@ -103,9 +103,7 @@ def test_resolve_llm_budgets_reads_db(env: SimpleNamespace) -> None:
     from app.service.llm.resolve import resolve_llm_budgets
 
     # 先清空(可能被前一个测试设过)
-    env.client.put(
-        "/api/settings", json={"llm_context_tokens": 0, "llm_max_output_tokens": 0}
-    )
+    env.client.put("/api/settings", json={"llm_context_tokens": 0, "llm_max_output_tokens": 0})
 
     async def _read() -> tuple:
         async with env.shared["factory"]() as session:

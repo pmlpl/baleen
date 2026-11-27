@@ -236,11 +236,13 @@ async def _merge_parse_meta_fields(source_id: int, owner_id: int, fields: dict) 
 def _make_progress_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEventLoop):
     """线程安全进度回调：extract_video_content 在 to_thread 线程里同步调 cb，
     通过 run_coroutine_threadsafe 调度回 worker 事件循环写 DB。"""
+
     def cb(stage: str, pct: int, est_seconds: int | None = None) -> None:
         asyncio.run_coroutine_threadsafe(
             _update_video_stage(source_id, stage, owner_id, progress=pct, est_seconds=est_seconds),
             loop,
         )
+
     return cb
 
 
@@ -252,11 +254,13 @@ def _make_cover_cb(source_id: int, owner_id: int, loop: asyncio.AbstractEventLoo
     可能要十几分钟。早写一次，前端轮询就能立刻把提示条升级成海报卡，
     不必等整个导入结束（实测 40 分钟视频：转写阶段封面仍 None 的坑）。
     """
+
     def cb(cover_key: str) -> None:
         asyncio.run_coroutine_threadsafe(
             _merge_parse_meta_fields(source_id, owner_id, {"video_cover_key": cover_key}),
             loop,
         )
+
     return cb
 
 
@@ -269,6 +273,7 @@ def _make_bilibili_login_cb(source_id: int, owner_id: int, loop: asyncio.Abstrac
     常规失败路径（前端 last_error 直接可读）。DB/进度操作用 run_coroutine_threadsafe
     切回 worker 事件循环（同 _make_progress_cb 的做法）。
     """
+
     async def _stage(text: str) -> None:
         await _update_video_stage(source_id, text, owner_id)
 
@@ -321,7 +326,8 @@ async def _fail_video_job(source_id: int, owner_id: int, exc: Exception) -> None
             job = await repos.jobs.get_by_dedupe_key(DEDUPE_PREFIX + source.sha256)
             if job is not None:
                 await repos.jobs.update_status(
-                    job.id, "failed",
+                    job.id,
+                    "failed",
                     last_error=f"{type(exc).__name__}: {exc}"[:1000],
                 )
             meta = dict(source.parse_meta or {})
@@ -383,7 +389,8 @@ async def extract_and_import_video(
                 job = await repos.jobs.get_by_dedupe_key(DEDUPE_PREFIX + source.sha256)
                 if job is not None:
                     await repos.jobs.update_status(
-                        job.id, "done",
+                        job.id,
+                        "done",
                         payload={"deduped": True, "source_id": source_id, "note_id": note.id},
                     )
                 await session.commit()
@@ -463,8 +470,10 @@ async def extract_and_import_video(
         if "Fresh cookies" in msg:
             friendly = RuntimeError(
                 "抖音拒绝访问（Cookies 无效、过期或不完整）。"
-                "请到「设置」页重新配置「抖音 Cookies」：打开 douyin.com → F12 → Network → 刷新页面 → "
-                "点一个 douyin.com 请求 → Request Headers → 复制整个 Cookie 的值（必须包含 msToken，"
+                "请到「设置」页重新配置「抖音 Cookies」：打开 douyin.com → F12 → "
+                "Network → 刷新页面 → "
+                "点一个 douyin.com 请求 → Request Headers → 复制整个 Cookie 的值"
+                "（必须包含 msToken，"
                 "只复制 ttwid 单个值不够）→ 粘贴保存，再重新导入。"
             )
             await _fail_video_job(source_id, owner_id, friendly)
@@ -522,7 +531,11 @@ async def extract_and_import_video(
 
 
 async def enqueue_video_extract(
-    url: str, *, mode: str, source_id: int, owner_id: int,
+    url: str,
+    *,
+    mode: str,
+    source_id: int,
+    owner_id: int,
     sessdata: str = "",
 ) -> str | None:
     """入队视频提取任务。
@@ -540,8 +553,11 @@ async def enqueue_video_extract(
         job_id = f"video:{source_id}"
         await pool.delete(f"{job_key_prefix}{job_id}", f"{result_key_prefix}{job_id}")
         job = await pool.enqueue_job(
-            "extract_and_import_video", url,
-            mode=mode, source_id=source_id, owner_id=owner_id,
+            "extract_and_import_video",
+            url,
+            mode=mode,
+            source_id=source_id,
+            owner_id=owner_id,
             sessdata=sessdata,
             _job_id=job_id,
         )

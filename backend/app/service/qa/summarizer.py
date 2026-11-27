@@ -11,7 +11,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from app.service.llm import LLMError
+from app.service.llm import LLMClient, LLMError
 
 
 def organize_conversation_messages(title: str, dialogue: str) -> list[dict[str, str]]:
@@ -44,8 +44,7 @@ NOTE_MAX_TOKENS = 8000
 # 让模型接着写(而不是重写整篇 —— 重写既费 token 又可能前后不一致)。
 CONTINUE_ROUNDS = 2
 CONTINUE_PROMPT = (
-    "上一段输出被长度上限截断了。请从截断处继续写完,"
-    "不要重复已输出的内容,不要重新开头。"
+    "上一段输出被长度上限截断了。请从截断处继续写完,不要重复已输出的内容,不要重新开头。"
 )
 
 
@@ -221,7 +220,7 @@ async def plan_note_split(
 # 引用标记:[1] [12] 库内出处,[W1] [W2] 联网来源。
 # 前置断言排除 arr[1] 这类数组下标,与前端 renderInline / QaView 的渲染口径逐字一致。
 # ⚠️ 别把 `]` 加进断言:连锁引用 `[W1][W2]` 的第二个前面就是 `]`,会被整条漏掉
-#(真实会话里 [W1][W3]、[W4][W5] 很常见,漏了就会串号)。
+# (真实会话里 [W1][W3]、[W4][W5] 很常见,漏了就会串号)。
 _CITE_RE = re.compile(r"(?<![\w.[])\[(W?\d+)\]")
 
 
@@ -255,6 +254,7 @@ def renumber_citations(messages: list[dict]) -> tuple[list[dict], list[dict]]:
             f"{'W' if c.get('url') else ''}{c.get('n')}": c for c in (msg.get("citations") or [])
         }
         if by_label:
+
             def _sub(match: re.Match[str], _bl=by_label) -> str:
                 nonlocal web_no, kb_no
                 cite = _bl.get(match.group(1))
@@ -304,8 +304,7 @@ def note_dialogue(
 
     renamed, citations = renumber_citations(picked)
     text = "\n\n".join(
-        f"{'用户' if m.get('role') == 'user' else '助手'}:{m.get('content', '')}"
-        for m in renamed
+        f"{'用户' if m.get('role') == 'user' else '助手'}:{m.get('content', '')}" for m in renamed
     )
     return text, citations
 

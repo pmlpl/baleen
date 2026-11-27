@@ -48,7 +48,7 @@ _VOCAB_SYSTEM = (
     "(不要同时出现「AI」「AI与大模型」「AI与智能体」);\n"
     "2. 标签用中文,2-6 个字,是知识领域名(如「工程基础」「AI与大模型」「财经」「个人成长」);\n"
     "3. 覆盖所有标题:每个标题都应能归到其中一个,实在归不进去的用「其他」;\n"
-    "4. 只输出 JSON 数组,形如 [\"工程基础\", \"AI与大模型\", \"财经\"],不要任何解释。\n\n"
+    '4. 只输出 JSON 数组,形如 ["工程基础", "AI与大模型", "财经"],不要任何解释。\n\n'
     "注意:标题可能是视频转写来的,口语化标题也按语义归类,不要因为是口语就归到「其他」。"
 )
 
@@ -60,7 +60,7 @@ _TAG_SYSTEM = (
     "要求:\n"
     "1. 标签**必须从给定主题表里原样选**,不许自创新标签、不许改字;"
     "2. 实在归不进任何一个主题的,用主题表里的「其他」(如果没有就选最接近的);\n"
-    "3. 只输出 JSON 对象,形如 {\"27\": [\"工程基础\"], \"70\": [\"工程基础\", \"Git\"]},"
+    '3. 只输出 JSON 对象,形如 {"27": ["工程基础"], "70": ["工程基础", "Git"]},'
     "键是笔记编号,值是标签数组。不要任何解释文字。"
 )
 
@@ -125,7 +125,12 @@ async def _build_vocabulary(
     否则增量打标几轮后会出现「AI」「AI与大模型」并存的老问题。
     """
     listing = "\n".join(f"{item['id']}: {item['title']}" for item in notes)
-    hint = f"\n\n已有的标签(请优先沿用,只在明显不足时才新增):{json.dumps(known_tags, ensure_ascii=False)}" if known_tags else ""
+    hint = (
+        f"\n\n已有的标签(请优先沿用,只在明显不足时才新增):"
+        f"{json.dumps(known_tags, ensure_ascii=False)}"
+        if known_tags
+        else ""
+    )
     raw = await _chat(client, _VOCAB_SYSTEM + hint, f"笔记标题:\n{listing}")
     vocab = _parse_vocab(raw)
     if not vocab:
@@ -133,7 +138,9 @@ async def _build_vocabulary(
     return vocab[:MAX_TOPICS]
 
 
-async def _tag_batch(batch: list[dict], vocab: list[str], *, client: LLMClient) -> dict[int, list[str]]:
+async def _tag_batch(
+    batch: list[dict], vocab: list[str], *, client: LLMClient
+) -> dict[int, list[str]]:
     """阶段②:固定主题表 → 本批每篇的标签。模型自创的标签会被 ``_parse_reply`` 过滤。"""
     listing = "\n".join(f"{item['id']}: {item['title']}" for item in batch)
     user = f"主题表:{json.dumps(vocab, ensure_ascii=False)}\n\n笔记标题:\n{listing}"

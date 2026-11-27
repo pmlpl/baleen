@@ -75,7 +75,9 @@ def parse_pptx(path: Path) -> ParseResult:
             content.append(blocks.heading(2, title))
             st.chars += len(title)
         _walk_shapes(
-            slide.shapes, content, st,
+            slide.shapes,
+            content,
+            st,
             slide.shapes.title.shape_id if title else None,
         )
 

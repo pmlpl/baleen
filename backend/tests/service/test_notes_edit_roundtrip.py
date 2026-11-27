@@ -71,7 +71,8 @@ def test_bold_trapped_close_keeps_boundary():
 
 @pytest.mark.xfail(
     reason="已知限制:粗体以标点开头+紧邻正文,spec 打不开 → 往返丢粗体;"
-    "打开侧松弛会偷走合法闭合符(见 md_parser 往返友好松弛节注释),需 emphasis 规则层查 pending opener 才能根治"
+    "打开侧松弛会偷走合法闭合符(见 md_parser 往返友好松弛节注释),"
+    "需 emphasis 规则层查 pending opener 才能根治"
 )
 def test_bold_trapped_open_keeps_boundary():
     """坑1b:正文紧邻以标点开头的粗体(``中文**（说明）**正文``),往返后边界不变。"""
@@ -111,7 +112,9 @@ def test_literal_underscore_heading_not_bolded():
     blk = doc2[0]
     assert blk["type"] == "heading"
     runs = _runs(blk["content"])
-    assert runs == [((), '1.1 用 if __name__ == "__main__" 包裹测试与主逻辑')], f"标题往返变形: {runs}"
+    assert runs == [((), '1.1 用 if __name__ == "__main__" 包裹测试与主逻辑')], (
+        f"标题往返变形: {runs}"
+    )
 
 
 def test_literal_underscore_and_asterisk_body():
@@ -150,7 +153,9 @@ def _nested_ordered_doc(start: int) -> dict:
                 },
                 {
                     "type": "listItem",
-                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": "下一项"}]}],
+                    "content": [
+                        {"type": "paragraph", "content": [{"type": "text", "text": "下一项"}]}
+                    ],
                 },
             ],
         }
@@ -189,11 +194,20 @@ def test_bullet_nested_bullet_still_two_spaces():
                     "type": "listItem",
                     "content": [
                         {"type": "paragraph", "content": [{"type": "text", "text": "父项"}]},
-                        {"type": "bulletList", "content": [
-                            {"type": "listItem", "content": [
-                                {"type": "paragraph", "content": [{"type": "text", "text": "子项"}]}
-                            ]}
-                        ]},
+                        {
+                            "type": "bulletList",
+                            "content": [
+                                {
+                                    "type": "listItem",
+                                    "content": [
+                                        {
+                                            "type": "paragraph",
+                                            "content": [{"type": "text", "text": "子项"}],
+                                        }
+                                    ],
+                                }
+                            ],
+                        },
                     ],
                 }
             ],

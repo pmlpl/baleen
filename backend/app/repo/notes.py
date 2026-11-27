@@ -45,9 +45,7 @@ class NotesRepo(Repo):
         主题分析是第一个真正的写入方。返回 False = 笔记不存在或不属于该 owner。
         """
         result = await self.session.execute(
-            update(Note)
-            .where(Note.id == note_id, Note.owner_id == self.owner_id)
-            .values(tags=tags)
+            update(Note).where(Note.id == note_id, Note.owner_id == self.owner_id).values(tags=tags)
         )
         return bool(result.rowcount)
 
@@ -217,7 +215,5 @@ async def purge_expired_archived(session: AsyncSession, cutoff: datetime) -> lis
     targets = [(int(note_id), int(owner_id)) for note_id, owner_id in rows.all()]
     if not targets:
         return []
-    await session.execute(
-        delete(Note).where(Note.id.in_([note_id for note_id, _ in targets]))
-    )
+    await session.execute(delete(Note).where(Note.id.in_([note_id for note_id, _ in targets])))
     return targets

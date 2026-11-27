@@ -231,7 +231,6 @@ def test_upload_md_with_attachments_lands_in_same_staging_dir(env) -> None:
             "file": ("note.md", md, "text/markdown"),
             "attachments": ("img/a.png", PNG_1X1, "image/png"),
         },
-
     )
     assert resp.status_code == 201, resp.text
     # enqueue 收到的是主文件路径;它和附件必须在同一目录里
@@ -261,7 +260,6 @@ def test_upload_rejects_non_image_attachment(env) -> None:
             "file": ("note.md", b"# hi\n", "text/markdown"),
             "attachments": ("evil.exe", b"MZ", "application/octet-stream"),
         },
-
     )
     assert resp.status_code == 415
     assert "图片" in resp.json()["detail"]
@@ -275,7 +273,6 @@ def test_upload_attachment_path_traversal_blocked(env) -> None:
             "file": ("note.md", b"# hi\n", "text/markdown"),
             "attachments": ("../../escape.png", PNG_1X1, "image/png"),
         },
-
     )
     assert resp.status_code == 201, resp.text
     staging_dir = Path(env.calls[-1]["file_path"]).parent
