@@ -1,8 +1,12 @@
 /**
- * Mermaid 懒加载渲染:答案/笔记里出现 ```mermaid 代码块时,把它替换成 SVG。
+ * 图表渲染:答案/笔记里出现 ```mermaid 代码块时,把它替换成 SVG。
  *
- * 为什么动态 import:mermaid 体积大(~700KB gzip),静态引入会把主包撑大;
- * 用 `await import('mermaid')` 后 Vite 拆成独立 chunk,用户真的看到图表才下载。
+ * **flowchart 优先走 Graphviz WASM**(见 `tryRenderViaGraphviz`):mermaid 依赖浏览器
+ * 量文字,同一份内容在主人机器上渲染成空白框/只剩一个节点,我这里却完全正常,两轮
+ * 判据修补都没治好。Graphviz 在 WASM 里算布局,不读浏览器测量 —— 从机制上绕开。
+ * mermaid 保留为回退:转换器不支持的语法(时序图/甘特/饼图等)照旧交给它。
+ *
+ * 体积纪律:两条路径都懒加载 —— 用户真的看到图才下载对应 chunk。
  *
  * 安全:securityLevel 'strict'(mermaid 自身消毒,不执行注入的脚本)。
  * 容错:单个块解析失败 → 保留原代码块 + 错误徽章,绝不抛错让整页挂掉。
@@ -10,6 +14,9 @@
  * 交互:点图开灯箱放大(+/−/重置/Esc);useMaxWidth=false 让图按自然尺寸出,
  * 宽图横向滚动而不是被压小,节点文字不因缩放测量偏差被裁。
  */
+
+import { looksLikeFlowchart, mermaidFlowchartToDot } from './mermaidToDot'
+import { renderDotToSvg } from './viz'
 
 let mermaidPromise: Promise<typeof import('mermaid').default> | null = null
 
@@ -299,27 +306,38 @@ const MIN_NODE_PX = 12
 export type SanityVerdict = 'ok' | 'bad' | 'unknown'
 
 export function judgeMermaidSvg(svg: SVGSVGElement): SanityVerdict {
-  // 一块图总得有节点;全空说明布局没跑起来
-  if (svg.querySelector('.node') === null) return 'bad'
-
   // 屏幕像素口径:getBoundingClientRect 已含所有祖先 transform,是用户真正看到的大小
   const rect = svg.getBoundingClientRect()
   if (!(rect.width > 0) || !(rect.height > 0)) return 'unknown'
 
-  const nodes = Array.from(svg.querySelectorAll<SVGGraphicsElement>('.node'))
-  let visible = 0
-  let maxW = 0
-  for (const node of nodes) {
-    const box = node.getBoundingClientRect()
-    if (box.width <= 0 || box.height <= 0) continue
-    visible += 1
-    maxW = Math.max(maxW, box.width)
-    // 只要有一个节点「读不出来」就判坏:塌缩时所有节点一起缩,不会只缩一个
+  // 元素颗粒度按图类型取:mermaid 各图型的 class 完全不同。
+  // - flowchart / state:`.node`(Graphviz 输出也是 `g.node`)
+  // - sequenceDiagram:`text.actor`、`text.messageText`,**没有 .node**
+  // - pie:`text.slice`、`.pieTitleText`,**没有 .node**
+  // 早期版本只认 `.node`,导致时序图/饼图 100% 被误判成坏图降级(db31916 引入,
+  // 2026-11-27 实测确认:HEAD 版本时序图与饼图都退回代码块,而 mermaid 本身渲染正常)。
+  // 所以改成「取实际画出来的最小可见元素」,不绑定某一种图型的 class。
+  const nodes = Array.from(
+    svg.querySelectorAll<SVGGraphicsElement>(
+      '.node, text.actor, text.messageText, text.slice, text.label, .pieTitleText, .taskText, .sectionTitle',
+    ),
+  )
+    .map((el) => el.getBoundingClientRect())
+    .filter((box) => box.width > 0 && box.height > 0)
+
+  // 一个可见元素都没有 → 布局没跑起来(真空图)
+  if (nodes.length === 0) return 'bad'
+
+  // 判据只看「高度」:塌缩时所有元素一起等比缩,高度是最稳的信号。
+  //
+  // **不要加「最宽元素必须够宽」这类条件** —— 时序图/饼图天然就窄(实测
+  // sequenceDiagram 的 actor 文字只有 9-11px 宽、messageText 34px),按宽度卡
+  // 会把整类图误判成坏图。db31916 就踩过:门槛 36px,而时序图最宽才 34px,
+  // 差 2px 全量降级。宽度对「这张图是不是画出来了」没有判别力,高度才有。
+  for (const box of nodes) {
     if (box.height < MIN_NODE_PX) return 'bad'
   }
-  if (visible === 0) return 'bad'
-  // 还要整张图占得住:最宽的节点得有个样子
-  return maxW >= MIN_NODE_PX * 3 ? 'ok' : 'bad'
+  return 'ok'
 }
 
 /** 布尔口径:'unknown' 按「未证明是坏图」处理 */
@@ -408,6 +426,40 @@ export function fitSvgToContent(svg: SVGSVGElement): boolean {
   return true
 }
 
+/**
+ * **优先路径**:flowchart 交给 Graphviz WASM 渲染。
+ *
+ * 返回 true = 已成功画进 DOM;false = 不支持/失败,调用方回退 mermaid。
+ *
+ * 为什么优先走这条(2026-11-27):mermaid 依赖浏览器量文字,同一份内容在主人机器上
+ * 渲染成空白框/只剩一个节点,在我这里完全正常,两轮防护都没治好。Graphviz 的布局
+ * 在 WASM 里算,不读浏览器测量,从机制上没有那个差异源。
+ */
+async function tryRenderViaGraphviz(pre: HTMLPreElement, source: string): Promise<boolean> {
+  if (!looksLikeFlowchart(source)) return false
+  let svg: string
+  try {
+    svg = await renderDotToSvg(mermaidFlowchartToDot(source))
+  } catch {
+    return false // 语法不在转换器支持范围 → 交还给 mermaid
+  }
+  const figure = document.createElement('div')
+  figure.className = 'mermaid-figure mermaid-figure--graphviz'
+  figure.title = '点击放大查看'
+  figure.innerHTML = svg
+  pre.replaceWith(figure)
+  await nextFrame()
+
+  // 同一套像素判据兜底:万一 Graphviz 输出也有问题(比如字体缺字),按坏图处理
+  const svgEl = figure.querySelector('svg')
+  if (svgEl !== null && judgeMermaidSvg(svgEl) !== 'bad') {
+    bindFigureClick()
+    return true
+  }
+  figure.replaceWith(pre)
+  return false
+}
+
 /** 单块渲染:成功→figure 已替换进 DOM;坏图/异常→pre 留在原位并带角标 */
 export async function renderMermaidBlock(
   pre: HTMLPreElement,
@@ -416,6 +468,9 @@ export async function renderMermaidBlock(
   seq: number,
   offscreen: HTMLElement,
 ): Promise<void> {
+  // 先试 Graphviz(WASM 布局,不受浏览器量字影响);不行再走 mermaid
+  if (await tryRenderViaGraphviz(pre, source)) return
+
   // 两次机会:第一次可能撞上字体未就绪/容器尚未布局,重试通常就好了
   for (let attempt = 0; attempt < 2; attempt += 1) {
     blockSeq += 1

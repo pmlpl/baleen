@@ -13,6 +13,7 @@
     "@markmap/parse": "^1.1.1",
     "@markmap/render": "^1.1.1",
     "@markmap/view": "^1.1.1",
+    "@viz-js/viz": "^3.31.0",
     "katex": "^0.19.1",
     "mermaid": "^12.2.0",
     "pinia": "^3.0.0",

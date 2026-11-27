@@ -17,6 +17,9 @@ importers:
       '@markmap/view':
         specifier: ^1.1.1
         version: 1.1.1
+      '@viz-js/viz':
+        specifier: ^3.31.0
+        version: 3.31.0
       katex:
         specifier: ^0.19.1
         version: 0.19.1
@@ -544,6 +547,9 @@ packages:
     peerDependencies:
       vite: ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0
       vue: ^3.2.25 || ^3.6.0-rc.10
+
+  '@viz-js/viz@3.31.0':
+    resolution: {integrity: sha512-r7zlQdRvcwvIpjHGgs+KNWHeE/P5/Dq7k8ZAKaMCbZqomxCBJV78gVuQYaHzFVca+kB0mX0fMW9UFevCOBG50A==}
 
   '@volar/language-core@2.4.28':
     resolution: {integrity: sha512-w4qhIJ8ZSitgLAkVay6AbcnC7gP3glYM3fYwKV3srj8m494E3xtrCv6E+bWviiK/8hs6e6t1ij1s2Endql7vzQ==}
@@ -1740,6 +1746,8 @@ snapshots:
       '@rolldown/pluginutils': 1.0.1
       vite: 7.3.7(yaml@2.9.1)
       vue: 3.5.44(typescript@5.8.2)
+
+  '@viz-js/viz@3.31.0': {}
 
   '@volar/language-core@2.4.28':
     dependencies:
