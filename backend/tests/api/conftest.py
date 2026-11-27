@@ -116,6 +116,24 @@ def env(db_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
                         "VALUES (1, 'test-user', 'x') ON CONFLICT (id) DO NOTHING"
                     )
                 )
+                # 手插 id=1 不推进 identity 序列 → 空库里注册接口 nextval 仍从 1 开始,
+                # 撞 users_pkey(CI 空库实锤;开发库因有真实数据序列早已越过 1 才没暴露)。
+                await shared["conn"].execute(
+                    text(
+                        "SELECT setval(pg_get_serial_sequence('users', 'id'),"
+                        " GREATEST((SELECT COALESCE(max(id), 0) FROM users), 1))"
+                    )
+                )
+                # 上传 / 视频导入接口有「没配 API Key 就 400」的前置闸,故夹具账号必须先
+                # 「配好」——用假 key 在事务内插入(结束时回滚,不碰开发库真值)。
+                # 之前本地能过纯属开发库 owner 1 本来就有一行真 key;CI 空库直接 35 个红。
+                # DO NOTHING:开发库已有真 key 时不覆盖(**连瞬时覆盖都不要**)。
+                await shared["conn"].execute(
+                    text(
+                        "INSERT INTO app_settings (owner_id, llm_api_key) "
+                        "VALUES (1, 'sk-test-fixture') ON CONFLICT (owner_id) DO NOTHING"
+                    )
+                )
                 shared["factory"] = async_sessionmaker(
                     bind=shared["conn"],
                     expire_on_commit=False,

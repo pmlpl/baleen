@@ -188,11 +188,29 @@ pnpm install
 pnpm dev
 pnpm build
 
+# ---------- 测试 ----------
+cd backend                           # ⚠️ 必须:pyproject 是 pythonpath=["."],从仓库根跑 = No module named 'app'
+uv run pytest -q                     # 全量(需 docker compose up -d)
+docker compose exec db psql -U baleen -d postgres -c "CREATE DATABASE baleen_ci"   # 空库
+DATABASE_URL="postgresql+asyncpg://baleen:baleen@localhost:5432/baleen_ci" \
+  uv run alembic upgrade head        # 空库迁移到 head
+DATABASE_URL="postgresql+asyncpg://baleen:baleen@localhost:5432/baleen_ci" \
+  uv run pytest -q                   # ⚠️ 空库全量 = CI 同口径,见下
+
 # ---------- 评测 ----------
 python eval/scripts/candidates.py --samples eval/inputs/samples --out eval/inputs/candidates.csv
 python eval/scripts/runner.py --samples eval/samples --out eval/preds.csv --predictor fake
 python eval/scripts/metrics.py --labels eval/inputs/labels.csv --preds eval/runs/preds.csv --split test
 ```
+
+### 7.1 「空库同口径」必须跑（本地全绿 ≠ CI 绿）
+
+开发库里有真实数据（owner 1 的 api_key、86 条自答记录、已推进的主键序列……），
+测试跑在它上面会**偷偷吃到这些残留**——本地绿、CI 空库红，2026-11-27 首跑实锤：
+36 个失败全在这类依赖上（35 个 api_key 前置闸 + 1 个 identity 序列 + 1 个自答总数）。
+
+**规矩：动了 API/夹具/DB 相关测试的批次，交付前必须跑一次上面的「空库全量」，摘要行与本地全量一致才算过。**
+夹具不许依赖开发库已有数据：需要什么自己造（假 key、造消息），造在事务内随夹具回滚。
 
 ---
 
@@ -296,3 +314,4 @@ chore: 升级 uv 到 0.13
 | 2026-11-12 | §1 定位去掉「中文优先」（主人拍板：定位就是「智能笔记库」）：同步 `docs/adr/0001` §1、`backend/pyproject.toml` description、`eval/TASK.md` §一。跨根目录/docs/backend/eval，理由：同一句定位散落 4 处；测试 fixture `utf8.txt` 中的「中文优先」是 UTF-8 编码测试文本，与定位无关，不动 |
 | 2026-11-18 | eval/ 目录按职责重组（inputs 标注语料 / queries 题集 / runs 跑批产物 / analysis 分析 / scripts 脚本，顶层 27→9 条目）：samples/candidates/labels/split_meta 迁入 inputs/，report/ci/preds 迁入 runs/，消融与缺陷台账迁入 analysis/；§3/§6/§10 的 eval 路径同步；eval_capture.py 归档路径随迁（532 passed，doc_lint 0/0） |
 
+| 2026-11-27 | §7 新增「测试」命令块 + §7.1「空库同口径必须跑」：CI 首次实跑红了 36 个测试，根因**全是对开发库残留数据的隐式依赖**（35 个靠 owner 1 已有的真 api_key 过上传/视频导入的 key 前置闸、1 个靠 identity 序列已被真实数据推进过、1 个靠开发库那 86 条自答记录），空库上全暴露；夹具改为自带数据（假 key + 自造消息，事务内回滚），并补 `setval` 修正手插 id=1 的序列。理由：本地开发库有真数据 → 本地永远绿，只有空库能复现 CI；这类缺陷不会自己消失。同时 §7 原本**没有** pytest 命令（ci.yml 注释声称「与 AGENTS §7 同口径」是假的），一并补齐 |

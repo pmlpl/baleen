@@ -70,7 +70,9 @@ jobs:
       - name: pytest（基线强制门）
         # ⚠️ 必须在 backend/ 下跑：pyproject 的 pytest 配置是 `pythonpath = ["."]`，
         # 从仓库根跑时 "." = 仓库根 → `ModuleNotFoundError: No module named 'app'`
-        # （首次 CI 实跑抓的真错，2026-11-27）。与 AGENTS §7 的本地命令同口径。
+        # （首次 CI 实跑抓的真错，2026-11-27）。与 AGENTS §7.1 同口径。
+        # 空库是本 job 的价值所在：第二次实跑又抓出 36 个「靠开发库残留数据才绿」的
+        # 测试（真 api_key / 推进过的序列 / 86 条自答记录），本地永远复现不了。
         working-directory: backend
         run: |
           uv run pytest -q 2>&1 | tee pytest-output.log

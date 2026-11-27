@@ -376,19 +376,59 @@ def test_topic_parse_discards_broken_json() -> None:
     assert _parse_vocab("不是数组") == []
 
 
+def _seed_self_answered(env: SimpleNamespace, count: int) -> None:
+    """造 count 组「用户提问 / AI 无引用自答」消息(同一会话交替,配对同会话上一条 user)。
+
+    口径对齐 ``repo.persona.self_answered``:assistant 消息 citations 是数组且既无
+    note_id 也无 url;提问长度 ≥6、非纯问候、含字母数字。直接写事务连接,随夹具回滚。
+    """
+    from sqlalchemy import text
+
+    async def _seed() -> None:
+        conn = env.shared["conn"]
+        sid = (
+            await conn.execute(
+                text(
+                    "INSERT INTO qa_sessions (owner_id, title) "
+                    "VALUES (1, '自答测试') RETURNING id"
+                )
+            )
+        ).scalar_one()
+        for i in range(count):
+            await conn.execute(
+                text(
+                    "INSERT INTO qa_messages (owner_id, session_id, role, content, citations) "
+                    "VALUES (1, :sid, 'user', :q, '[]'::jsonb)"
+                ),
+                {"sid": sid, "q": f"第 {i:03d} 个问题到底是什么"},
+            )
+            await conn.execute(
+                text(
+                    "INSERT INTO qa_messages (owner_id, session_id, role, content, citations) "
+                    "VALUES (1, :sid, 'assistant', '百科里没找到,改由我自己回答。', '[]'::jsonb)"
+                ),
+                {"sid": sid},
+            )
+
+    env.client.portal.call(_seed)
+
+
 def test_self_answered_total_counts_all_not_page(env: SimpleNamespace) -> None:
     """自答清单的 total 必须是**真实总数**,不能等于 len(items) 上限。
 
     真机截图抓出来的 bug:列表上限改 30 后,页面显示「30」而不是真实的 86。
     页面上同一个数字,一个是真的「我有 86 个问题没答上」,一个是「我这页放了 30 条」——
     后者会骗人。这条守住「total 走独立 COUNT 查询」而不是 len(items)。
+
+    数据自己造(31 组 > 页上限 30):原先靠开发库里那 86 条真实记录,CI 空库直接
+    total(0) vs items(0) 判不出来 —— 又一处「本地绿靠开发库残留」。
     """
-    body = env.client.get("/api/persona/stats").json()
-    block = body["self_answered"]
-    # dev 库里自答问题远超一页(实测 86 条 vs 上限 30)。若这条挂掉,
-    # 说明 total 退回了 len(items) —— 先看 repo.self_answered 是否还在 COUNT。
+    _seed_self_answered(env, 31)
+    block = env.client.get("/api/persona/stats").json()["self_answered"]
+    assert len(block["items"]) == 30, f"items 有 30 条上限(实得 {len(block['items'])})"
+    assert block["total"] >= 31, f"total 少了造进去的 31 条(实得 {block['total']})"
+    # 核心断言:总数独立 COUNT,不受页上限影响(相等即退回 len(items))
     assert block["total"] > len(block["items"]), (
         f"total({block['total']}) 应大于 items 条数({len(block['items'])});"
         " 若相等,多半是 total 退回了 len(items) 而不是独立 COUNT"
     )
-    assert len(block["items"]) <= 30, "items 有 30 条上限"
