@@ -118,3 +118,58 @@ def test_html_meta_link_in_head_do_not_swallow_body(tmp_path) -> None:
     text = blocks.flatten_text(r.blocks)
     assert "正文标题" in text and "正文内容" in text
     assert "t" not in text, "head 内 title 不许进正文"
+
+
+def test_html_unclosed_head_falls_back_coarse(tmp_path) -> None:
+    """挂账①:未闭合的 <head> 会让 skip_depth 永不归零,首轮整篇被吞 → text=""。
+
+    Word「另存为 HTML」的真实形态(head 无闭合标签)。首轮空 → 粗提取重喂
+    (skip 集去掉 head/template),正文必须回来,且警告留痕。
+    """
+    html = (
+        "<html><head><meta charset='UTF-8'><title>张三的简历\n"  # head 从未闭合
+        "<body><h1>张三</h1><p>前端工程师,邮箱 z@x.com</p></body></html>"
+    )
+    r = parse_file(_html_file(tmp_path, html))
+    text = blocks.flatten_text(r.blocks)
+    assert "前端工程师" in text and "z@x.com" in text, "粗提取必须救回正文"
+    assert any("回退粗提取" in w for w in r.warnings)
+    # title 未闭合时无法按跳过处理——回退路径里 title 一行元数据可能混进正文
+    # (一行元数据换整篇正文,可接受;见 _COARSE_SKIP_TAGS 注释)
+
+
+def test_html_template_body_falls_back_coarse(tmp_path) -> None:
+    """挂账①同批:导出器把正文裹进 <template>(首轮按惰性内容跳过)→ 粗提取救回。"""
+    html = (
+        "<html><body><template><h1>工作经历</h1>"
+        "<p>2023-2026 后端工程师</p></template></body></html>"
+    )
+    r = parse_file(_html_file(tmp_path, html))
+    assert "后端工程师" in blocks.flatten_text(r.blocks)
+    assert any("回退粗提取" in w for w in r.warnings)
+
+
+def test_html_utf16_bom_decoded(tmp_path) -> None:
+    """挂账①同批:UTF-16LE+BOM(Word 另存常见)在 utf-8/gb18030 下不报错,
+    LE 的 ASCII 解成 NUL 夹层乱码——必须先认 BOM,正文才有意义。"""
+    p = tmp_path / "resume_utf16.html"
+    p.write_bytes(
+        "<html><head><title>r</title></head><body><p>张三 男 本科</p></body></html>".encode(
+            "utf-16"
+        )
+    )
+    r = parse_file(p)
+    text = blocks.flatten_text(r.blocks)
+    assert "张三 男 本科" in text
+    assert "\x00" not in text, "NUL 夹层乱码不许再出现"
+    assert any("UTF-16" in w for w in r.warnings)
+
+
+def test_html_healthy_doc_no_coarse_fallback(tmp_path) -> None:
+    """健康文档不触发粗提取路径(不产『回退粗提取』警告)。"""
+    html = (
+        "<html><head><title>页标题</title></head><body><h1>张三</h1><p>前端工程师</p></body></html>"
+    )
+    r = parse_file(_html_file(tmp_path, html))
+    assert "前端工程师" in blocks.flatten_text(r.blocks)
+    assert not any("回退粗提取" in w for w in r.warnings)

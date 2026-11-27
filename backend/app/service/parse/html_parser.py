@@ -89,8 +89,18 @@ _DATA_URI_RE = re.compile(r"^data:(image/[a-zA-Z0-9.+-]+);base64,([A-Za-z0-9+/=\
 
 
 def _decode(raw: bytes) -> tuple[str, list[str]]:
-    """编码探测与 parse_txt 同款:utf-8-sig → gb18030 → replace。"""
+    """编码探测:带 BOM 的 UTF-16 先认 BOM;其余 utf-8-sig → gb18030 → replace。
+
+    ⚠️ UTF-16(Word「另存为 HTML」常见)必须先认 BOM——它在 utf-8/gb18030 下
+    都不报错,LE 的 ASCII 会解码成 NUL 夹层乱码(实测整篇「\\x00」夹层,正文全废),
+    靠 UnicodeDecodeError 分流的探测链救不了它。
+    """
     warnings: list[str] = []
+    if raw[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            return raw.decode("utf-16"), ["文件是 UTF-16(带 BOM),已按 UTF-16 解码"]
+        except UnicodeDecodeError:
+            pass  # BOM 撞脸但不是真 UTF-16:落回常规链
     try:
         return raw.decode("utf-8-sig"), warnings
     except UnicodeDecodeError:
@@ -105,6 +115,13 @@ def _decode(raw: bytes) -> tuple[str, list[str]]:
     return raw.decode("utf-8", errors="replace"), warnings
 
 
+# 粗提取的 skip 集:去掉 head/template/title——三者都是「未闭合时吞掉整篇正文」的
+# 元凶(head 未闭合是 Word 另存 HTML 的真实形态,title 常跟着 head 一起未闭合,
+# template 是导出器裹正文)。代价:title 一行元数据可能混进正文,回退路径里可接受;
+# style/script 保留,防 CSS 混进正文(未闭合 style 的部分丢失见交付块已知限制)
+_COARSE_SKIP_TAGS = _SKIP_TAGS - {"head", "template", "title"}
+
+
 class _Extractor(HTMLParser):
     """把 HTML 拆成「标题/段落行 + data URI 图片」的顺序条目流。
 
@@ -112,9 +129,12 @@ class _Extractor(HTMLParser):
     落行时全空白的缓冲直接丢弃(标签间的排版缩进不产空段落)。
     """
 
-    def __init__(self, sink: Callable[[bytes, str], str] | None) -> None:
+    def __init__(
+        self, sink: Callable[[bytes, str], str] | None, skip: frozenset[str] = _SKIP_TAGS
+    ) -> None:
         super().__init__(convert_charrefs=True)
         self._sink = sink
+        self._skip = skip
         # 顺序条目:{"kind":"text","level":N,"text":...}
         #          | {"kind":"image","index":i,"alt":...,"media":key}
         self.items: list[dict] = []
@@ -142,7 +162,7 @@ class _Extractor(HTMLParser):
 
     def handle_starttag(self, tag, attrs):
         tag = tag.lower()
-        if tag in _SKIP_TAGS:
+        if tag in self._skip:
             self._skip_depth += 1
             return
         if self._skip_depth:
@@ -160,7 +180,7 @@ class _Extractor(HTMLParser):
 
     def handle_endtag(self, tag):
         tag = tag.lower()
-        if tag in _SKIP_TAGS:
+        if tag in self._skip:
             self._skip_depth = max(0, self._skip_depth - 1)
             return
         if self._skip_depth:
@@ -230,6 +250,22 @@ def parse_html(path: Path, *, media_sink: Callable[[bytes, str], str] | None = N
         extractor.close()
     except Exception:  # noqa: BLE001 —— 已提取的部分照用,不让坏 HTML 炸掉 G0
         warnings.append("HTML 结构异常,已按可解析部分提取")
+
+    # 首轮什么都没抽到(实测根因:未闭合的 head/style 把后续正文整篇吞掉,
+    # 或导出器把正文裹进 template)→ 回退粗提取重喂一遍。此路径下首轮零条目,
+    # media_sink 从未被调过,不存在重复落图;粗提取仍跳过 style/script,CSS 不进正文。
+    if not extractor.items:
+        coarse = _Extractor(media_sink, skip=_COARSE_SKIP_TAGS)
+        try:
+            coarse.feed(text)
+            coarse.close()
+        except Exception:  # noqa: BLE001 —— 粗提取也炸就维持空结果,不做无限兜底
+            pass
+        if coarse.items:
+            extractor = coarse
+            warnings.append(
+                "首轮提取为空(疑似未闭合的 head/style 标签,或正文被裹在 template 内),已回退粗提取"
+            )
 
     content: list[dict] = []
     for item in extractor.items:

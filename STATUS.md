@@ -14,6 +14,7 @@
 
 | 日期 | 批次 | 一句话 | pytest |
 |---|---|---|---|
+| 2026-11-27 | 挂账①HTML附件 text="" 修复 | 三个根因坐实并修：未闭合 `<head>`（skip 卡死吞正文）+ 正文裹 `<template>` → **首轮空结果自动回退粗提取**（skip 集去 head/template/title 重喂+警告留痕）；UTF-16LE+BOM（Word 另存常见）在 utf-8/gb18030 下不报错只出 NUL 乱码 → `_decode` 先认 BOM。已知限制：未闭合 `<style>` 中段的部分丢失仍存在（粗提取保留 style 防 CSS 混正文） | 724 |
 | 2026-11-27 | ruff 清债 + CI 第五道门 | 存量 144 错全修（含 F821 隐性雷：summarizer 用 LLMClient 没 import）+ 63 文件 format 重排 + CI/pre-commit 装 ruff 闸；**prompt 字节等价用 AST 探针证明**（66 文件 vs HEAD 非 docstring 字符串常量全等，唯二差异是 UP012/UP037 自动修）；organizer.py E501 单文件豁免（prompt 三引号内中文超宽，折行=改 prompt 字节） | 720 |
 | 2026-11-27 | 模型↔迁移漂移修复 + CI 第四道门 | `alembic check` 对活库查出两处漂移（`jobs_dedupe_uq` 模型停在 0008 之前的老定义 → 下条 autogenerate 会把多用户互相去重装回来；迁移 0019 裸 SQL 建的 `notes_archived_at_idx` 没进模型 → 会被顺手 drop）→ 对齐两处模型 + CI 装 `alembic check` 闸（upgrade head 只证明迁移能执行，证明不了 schema 与模型一致） | 720 |
 | 2026-11-27 | CI 两次实跑闭环 | 首跑挂 cwd（`working-directory: backend`）；二跑挂 36 个「靠开发库残留数据才绿」（真 api_key / 未推进的 identity 序列 / 86 条自答记录）→ 夹具自带假 key + 自造 31 组消息 + `setval` 修序列；**空库全量 = CI 同口径，成了硬规矩**（AGENTS §7.1） | 720 |
@@ -33,7 +34,7 @@
 | 2026-11-23 | 联网搜索两级链 | Tavily 任何失败自动降级 DeepSeek Search，降级留痕 | 680 |
 | 2026-11-23 | 负例集创建批 | 负例 8→25 条，preflight v2 三段式 | 668 |
 
-测试基线 **720 passed**（+1 xfailed）。每批完整交付说明 → `backend/delivery/`（2026-11 月见 `2026-11.md`）；更早基线轨迹见该文件交付块。
+测试基线 **724 passed**（+1 xfailed）。每批完整交付说明 → `backend/delivery/`（2026-11 月见 `2026-11.md`）；更早基线轨迹见该文件交付块。
 
 **backlog #1/#3/#6 全部落地(2026-11-19 深夜续)**：#3 渲染回归探针 35 断言(探针当天抓出 `looksLikeCode` 把 `**粗体**` 开头段落吞成代码的真缺陷,400 父块对拍只 4 处变化全是修复)+ g2_eval 视觉通道修复(9 条 G0 假缺口)+ #6 帧选择评测(16 条题集,首跑 5 FAIL 全对应主人裁决)+ #1 驳回样本筛选工具(发现一个三方标注分歧待裁决)
 
@@ -97,7 +98,7 @@
 ### 测试基线
 
 ```
-cd backend && uv run pytest -q     →  720 passed, 1 xfailed（2026-11-26 抖音封面批实测;715+5[封面优先级/跳过非http/存media key/下载失败返None/cover_cb先于下载];CI 同数——.github/workflows/ci.yml 的 grep 门必须与本行同步升降）
+cd backend && uv run pytest -q     →  724 passed, 1 xfailed（2026-11-27 挂账①HTML附件批实测;720+4[未闭合head粗提取回退/template裹正文回退/UTF-16 BOM解码/健康文档不触发回退];CI 同数——.github/workflows/ci.yml 的 grep 门必须与本行同步升降）
 ```
 
 基线轨迹：37 → 62 → 77 → 87 → 90 → 109 → 118 → 139（线 M）→ 176（线 Q 批1-8）
