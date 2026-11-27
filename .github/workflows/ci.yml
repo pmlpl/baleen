@@ -68,8 +68,12 @@ jobs:
         run: uv run --project backend python scripts/doc_lint.py
 
       - name: pytest（基线强制门）
+        # ⚠️ 必须在 backend/ 下跑：pyproject 的 pytest 配置是 `pythonpath = ["."]`，
+        # 从仓库根跑时 "." = 仓库根 → `ModuleNotFoundError: No module named 'app'`
+        # （首次 CI 实跑抓的真错，2026-11-27）。与 AGENTS §7 的本地命令同口径。
+        working-directory: backend
         run: |
-          uv run --project backend pytest -q 2>&1 | tee pytest-output.log
+          uv run pytest -q 2>&1 | tee pytest-output.log
           tail -n 3 pytest-output.log
           # 摘要行与本地全量一致（模型在场，无 skip 档）；掉线此处非零退出
           grep -qE "^720 passed, 1 xfailed" pytest-output.log
