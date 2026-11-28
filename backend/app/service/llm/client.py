@@ -11,6 +11,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import time
@@ -228,6 +229,8 @@ class LLMClient:
 
         ``tools`` / ``tool_choice`` / ``timeout`` 与 ``chat()`` 同语义(透传/单次超时覆盖)。
         流式不做重试(中途重试无法续传);打开失败(认证/限流/5xx)在首个 yield 前抛出。
+        网络层异常(开流失败/读流中断/读超时)一律包装成 LLMError 子类带原因上抛,
+        不裸抛 OSError——调用方 except LLMError 统一接得住(2026-11-28 网关诊断定案)。
         同步生成器;async 调用方用 to_thread 逐段推进或自行包任务。
         """
         if not messages:
@@ -251,9 +254,23 @@ class LLMClient:
         stream_fn = getattr(self._transport, "request_stream", None)
         if stream_fn is None:  # 旧自定义 Transport 未实现流式
             raise LLMError("当前 Transport 不支持流式(request_stream 缺失)")
-        status, _headers, resp = cast(
-            Any, stream_fn("POST", url, headers, body, self.timeout if timeout is None else timeout)
-        )
+        effective_timeout = self.timeout if timeout is None else timeout
+        try:
+            status, _headers, resp = cast(
+                Any, stream_fn("POST", url, headers, body, effective_timeout)
+            )
+        except (TimeoutError, urllib.error.URLError) as exc:
+            # 开流失败也是网络层错误,分类成 LLMError 子类——此前裸抛 OSError,调用方
+            # except LLMError 接不住,SSE 端点只能报通用文案(2026-11-28 网关诊断定案)
+            if isinstance(exc, TimeoutError) or isinstance(
+                getattr(exc, "reason", None), TimeoutError
+            ):
+                raise LLMTimeoutError(
+                    f"流式连接超时({effective_timeout:.0f}s):网关迟迟未开流"
+                ) from exc
+            raise LLMNetworkError(f"流式连接失败:{getattr(exc, 'reason', exc)}") from exc
+        except OSError as exc:
+            raise LLMNetworkError(f"流式连接失败({type(exc).__name__}: {exc})") from exc
         if status in (401, 403):
             raw = resp.read() if hasattr(resp, "read") else b""
             raise LLMAuthError(f"认证失败(HTTP {status}):请检查 LLM_API_KEY", status_code=status)
@@ -324,6 +341,21 @@ class LLMClient:
                 valid = [tc for tc in assembled if tc["id"] and tc["function"]["name"]]
                 if valid:
                     yield {"type": "tool_calls", "tool_calls": valid}
+        except (TimeoutError, urllib.error.URLError) as exc:
+            # socket 超时按每次 read 计时:语义是「X 秒无新增数据」,不是总耗时
+            if isinstance(exc, TimeoutError) or isinstance(
+                getattr(exc, "reason", None), TimeoutError
+            ):
+                raise LLMTimeoutError(
+                    f"流式读取超时({effective_timeout:.0f}s 无新增数据):网关/上游断流"
+                ) from exc
+            raise LLMNetworkError(f"流式连接中断:{getattr(exc, 'reason', exc)}") from exc
+        except http.client.IncompleteRead as exc:
+            raise LLMNetworkError("流式响应提前中断(IncompleteRead):流未到 [DONE] 即断开") from exc
+        except (ConnectionError, http.client.HTTPException) as exc:
+            raise LLMNetworkError(f"流式连接中断({type(exc).__name__})") from exc
+        except OSError as exc:
+            raise LLMNetworkError(f"流式连接中断({type(exc).__name__}: {exc})") from exc
         finally:
             close = getattr(resp, "close", None)
             if close is not None:

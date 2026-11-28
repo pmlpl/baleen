@@ -12,7 +12,9 @@ import json
 from types import SimpleNamespace
 from typing import Any
 
-from app.service.llm import LLMClient, LLMResponseError
+import pytest
+
+from app.service.llm import LLMClient, LLMResponseError, LLMTimeoutError
 from app.service.qa.agent import AGENT_ADDENDUM, run_agent, run_agent_iter
 from app.service.qa.answerer import ContextHit, build_qa_messages
 
@@ -693,3 +695,63 @@ class TestStreamingIter:
         assert result is not None
         assert "[1]" in result.answer  # 修复成有效编号
         assert any(s["kind"] == "repair" for s in result.meta["agent"]["steps"])
+
+
+class TestStreamingMidStreamFailure:
+    """流式中途 LLM 层失败的两个分支(2026-11-28 网关诊断定案):
+    已放行过正文 → 上抛(回落=决策树重播一份新答案接在后面,重复正文事故);
+    一个增量都没放行 → 语义不变:回落决策树(result qa=None)。"""
+
+    def test_mid_stream_failure_after_delta_propagates(self):
+        """已放行增量后网络层断流(TimeoutError 被 client 包装成 LLMTimeoutError)
+        → 异常从 run_agent_iter 上抛,绝不 yield result 事件。"""
+
+        class _BrokenAfterDelta:
+            def request(self, method, url, headers, body, timeout):  # pragma: no cover
+                raise AssertionError("流式测试不应走非流式 request")
+
+            def request_stream(self, method, url, headers, body, timeout):
+                def _gen():
+                    yield (
+                        _sse({"choices": [{"delta": {"content": "已放行的一段正文。\n"}}]}) + "\n"
+                    ).encode()
+                    raise TimeoutError()  # 网络层裸异常:client 层包装 → agent 上抛
+
+                return 200, {}, _gen()
+
+        client = LLMClient(
+            base_url="https://api.example.test/v1",
+            api_key="sk-stream-SECRET",
+            model="fake-model",
+            transport=_BrokenAfterDelta(),
+            sleep=lambda _s: None,
+        )
+        retrieve, _calls = _retrieve_fn({})
+        with pytest.raises(LLMTimeoutError, match="流式读取超时"):
+            _run_iter(client, retrieve)
+
+    def test_failure_before_any_delta_still_falls_back(self):
+        """开流即失败(零增量放行)→ 回落语义不变:result qa=None,决策树兜底。"""
+
+        class _BrokenAtOpen:
+            def request(self, method, url, headers, body, timeout):  # pragma: no cover
+                raise AssertionError("流式测试不应走非流式 request")
+
+            def request_stream(self, method, url, headers, body, timeout):
+                def _gen():
+                    raise TimeoutError()
+                    yield b""  # pragma: no cover —— 不可达,仅为成为生成器
+
+                return 200, {}, _gen()
+
+        client = LLMClient(
+            base_url="https://api.example.test/v1",
+            api_key="sk-stream-SECRET",
+            model="fake-model",
+            transport=_BrokenAtOpen(),
+            sleep=lambda _s: None,
+        )
+        retrieve, _calls = _retrieve_fn({})
+        events = _run_iter(client, retrieve)
+        assert [ev["type"] for ev in events] == ["result"]
+        assert events[-1]["qa"] is None

@@ -348,6 +348,11 @@ async def run_agent_iter(
                 cache_hit += chat.prompt_cache_hit_tokens or 0
                 cache_miss += chat.prompt_cache_miss_tokens or 0
         except LLMError:
+            if streaming and streamed_any:
+                # 已放行过正文增量:回落决策树会重新生成一份新答案接在已放行文本后
+                # (重复正文事故),只能上抛——流式端点 except LLMError 把真实原因
+                # 透传成 error 事件(2026-11-28:中途断流此前裸抛 → 通用兜底文案吞原因)
+                raise
             # LLM 层失败(认证/超时/网络/响应)→ 回落,决策树自己也会撞同一错误
             yield {"type": "result", "qa": None}
             return

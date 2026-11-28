@@ -1,4 +1,4 @@
-# API 契约 v44
+# API 契约 v45
 
 > **版本号以文末「变更记录」的最新一条为准**（2026-11-07 校正：头部曾长期停留在 v3）。
 > 改任何字段都必须同时升这里和变更记录的版本号。
@@ -465,7 +465,7 @@ SESSDATA。v30 起**不用手抄 cookie**：扫码登录后 Playwright 抓 SESSD
 
 ### `POST /api/qa/chat/stream`（SSE 流式，同请求体）
 
-响应 `text/event-stream`，事件序：`meta` → `delta`* → `done`；LLM 失败 → `error`（用户消息已落库）。
+响应 `text/event-stream`，事件序：`meta` → `delta`* → `done`；LLM 失败 → `error`（用户消息已落库）。**v45 起 `error` 的 `detail` 必带真实原因**：LLM 网络层异常（开流连接失败 / 读流中断 IncompleteRead / 读超时「X 秒无新增数据」）在 client 层统一包装成 LLMError 子类上抛，此前裸抛 OSError 只能落进端点通用兜底「流式回答中断,请重试」；agent 模式已放行正文增量后失败**不回落决策树**（会重播一份新答案=重复正文），直接上抛——零增量时回落语义不变。
 
 - `meta`：`{session_id, session_title, search_query, agent, images_attached, model, prepare_ms, user_message}`（`agent` = 本轮是否按 agent 模式跑（默认开）。**v44 起 meta 不再带 `used_web`**——agent 模式下该时点真值结构性未知，只能瞎报；是否联网看 `done` 的 `assistant_message.citations`（任何带 `url` 的出处即联网轮），与非流式 `ChatResponse.used_web` 同源于终值）
 - `status`：`{text}`（**v34**，agent 工具轮进度——「正在换词检索笔记库:…」/「正在联网搜索:…」，带检索词；旧前端忽略该事件）
@@ -705,6 +705,7 @@ DB charter 优先于内置默认（`resolve_charter`：DB → DEFAULT_CHARTER；
 
 | 日期 | 版本 | 变更 |
 |---|---|---|
+| 2026-11-28 | v45 | **流式 `error.detail` 必带真实原因**（2026-11-28 自制网关 429 诊断定案）：LLM 网络层异常（开流连接失败 / 读流中断 IncompleteRead / 读超时「X 秒无新增数据」）在 client.chat_stream 统一包装成 LLMError 子类带原因上抛——此前裸抛 OSError，agent 的 except LLMError 接不住，SSE 端点只能报通用兜底「流式回答中断,请重试」。agent 流式已放行正文增量后失败改**重抛不回落**（回落=决策树重播一份新答案接在已放行文本后=重复正文事故）；零增量回落语义不变。+7 测（client 5 + agent 2），双库 743 同口径 |
 | 2026-11-27 | v44 | **SSE `meta` 事件移除 `used_web` 字段**（挂账②收口：C1 批时点语义刻意未统一——agent 模式下 meta 时点真值结构性未知、恒 False，决策树模式下是预检时点值，同一字段两种语义且前端零消费）。移除后唯一真源 = 终值：非流式 `ChatResponse.used_web` 照旧，流式看 `done` 的 `assistant_message.citations`（带 url 即联网轮），口径天然一致。等价性测试同步改写（原「契约差异各自钉住」注释随之作废）+ 补流式侧「agent 回落+联网」API 级测试（原批欠账） |
 | 2026-11-26 | v43 | **抖音视频封面（海报卡）**：`GET /api/sources/{id}` 响应加 `video_cover_url`（可直接当 `<img src>` 的相对 URL `/api/media/{key}`；null = 无封面/非抖音/未提取）。抖音不支持网页内嵌播放，前端原先把抖音塞进 B 站 iframe 的 16:9 **黑底容器**，变成一个 850×480 的黑洞里飘两行小字（主人反馈「这是一个黑色的，不好看」）。现在前端两种形态：有封面 → **海报卡**（9:16 竖版封面 + 标题 + 外链；抖音是竖屏平台，实测封面 1080×1920，按 16:9 裁会切掉标题和人物）；无封面/粘贴瞬间 → **一行高提示条**（69px，纸面底色 + 站点名 + `在抖音中打开`）。**封面存 media 内容寻址 key 而不是抖音原 URL**：抖音封面是签名链（实测 `x-expires` 两周过期），存原样会变裂图。**封面在下载视频之前就写库**（新增 `cover_cb` 早回调），否则 40 分钟视频要让海报卡白等十几分钟（实测转写阶段 `video_cover_url` 仍是 null 的坑）。B 站播放器**不动**（iframe 的 16:9 黑框是正确形态） |
 | 2026-11-26 | v42 | **画像页收成一屏**（主人反馈「要拉滚动条才能看到所有内容，用多了数据更多不是一直拉很长的条」）：右栏来源/质量/回答方式**三块并排**、块间距 26→22px、两个清单（死库存/纯自答）改成**默认折叠**的一行标题+数量，点开才展开且列表自带 260px 上限内滚。前端整页改为**两栏等高各自内滚、整页零滚动**（复用 `stage--fill` 高度链，1440/1280/1100 三档实测滚 0px）。清单上限 8→**30 条**（折叠态不占高度，展开时用户真想看）。**`self_answered` 响应形状改 `{total, items}`**（与 `dead_notes` 一致）——原先是裸数组，页面把 len 当总数显示「30」，而真实自答 86 条，数字会骗人；现在 total 走独立 COUNT 查询。§8 同步 |

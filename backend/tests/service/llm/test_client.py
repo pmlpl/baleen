@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import http.client
 import json
 import urllib.error
 
@@ -555,3 +556,82 @@ class TestStreamFunctionCalling:
         client, _transport = _stream_client(lines)
         events = list(client.chat_stream([{"role": "user", "content": "x"}], tools=[]))
         assert [e["type"] for e in events] == ["content", "tool_calls"]
+
+
+class _BrokenStreamTransport:
+    """开流成功但迭代中途抛异常(或开流即抛):模拟网关断流/读超时。"""
+
+    def __init__(self, mid_exc: Exception | None = None, open_exc: Exception | None = None) -> None:
+        self.mid_exc = mid_exc
+        self.open_exc = open_exc
+
+    def request(self, method, url, headers, body, timeout):  # pragma: no cover
+        raise AssertionError("流式测试不应走非流式 request")
+
+    def request_stream(self, method, url, headers, body, timeout):
+        if self.open_exc is not None:
+            raise self.open_exc
+
+        def _gen():
+            yield (_sse_line({"choices": [{"delta": {"content": "前半"}}]}) + "\n").encode()
+            assert self.mid_exc is not None
+            raise self.mid_exc
+
+        return 200, {}, _gen()
+
+
+class TestStreamNetworkErrors:
+    """流式网络层异常一律包装成 LLMError 子类带原因上抛(2026-11-28 网关诊断定案):
+    此前裸抛 OSError → agent 的 except LLMError 接不住 → SSE 端点只能报通用兜底文案,
+    真实原因(超时/断流/重置)全被吞。"""
+
+    def _consume_mid(self, mid_exc: Exception) -> LLMError:
+        client = LLMClient(
+            base_url="https://api.example.test/v1",
+            api_key="sk-stream-SECRET",
+            model="fake-model",
+            transport=_BrokenStreamTransport(mid_exc=mid_exc),
+            sleep=lambda _s: None,
+        )
+        gen = client.chat_stream([{"role": "user", "content": "x"}])
+        assert next(gen) == {"type": "content", "text": "前半"}  # 第一帧正常放行
+        with pytest.raises(LLMError) as exc_info:
+            next(gen)  # 第二帧迭代时网络层炸
+        return exc_info.value
+
+    def test_mid_stream_timeout_wrapped_as_llm_timeout(self):
+        exc = self._consume_mid(TimeoutError())
+        assert isinstance(exc, LLMTimeoutError)
+        assert "流式读取超时" in str(exc)
+
+    def test_mid_stream_connection_reset_wrapped_as_llm_network(self):
+        exc = self._consume_mid(ConnectionResetError())
+        assert isinstance(exc, LLMNetworkError)
+        assert "流式连接中断" in str(exc)
+
+    def test_mid_stream_incomplete_read_wrapped_as_llm_network(self):
+        exc = self._consume_mid(http.client.IncompleteRead(b"partial"))
+        assert isinstance(exc, LLMNetworkError)
+        assert "IncompleteRead" in str(exc)
+
+    def test_open_phase_connection_refused_wrapped_as_llm_network(self):
+        client = LLMClient(
+            base_url="https://api.example.test/v1",
+            api_key="sk-stream-SECRET",
+            model="fake-model",
+            transport=_BrokenStreamTransport(open_exc=ConnectionRefusedError()),
+            sleep=lambda _s: None,
+        )
+        with pytest.raises(LLMNetworkError, match="流式连接失败"):
+            list(client.chat_stream([{"role": "user", "content": "x"}]))
+
+    def test_open_phase_timeout_wrapped_as_llm_timeout(self):
+        client = LLMClient(
+            base_url="https://api.example.test/v1",
+            api_key="sk-stream-SECRET",
+            model="fake-model",
+            transport=_BrokenStreamTransport(open_exc=TimeoutError()),
+            sleep=lambda _s: None,
+        )
+        with pytest.raises(LLMTimeoutError, match="流式连接超时"):
+            list(client.chat_stream([{"role": "user", "content": "x"}]))
