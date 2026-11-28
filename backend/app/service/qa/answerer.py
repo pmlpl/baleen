@@ -86,10 +86,10 @@ class QaResult(BaseModel):
     meta: dict = Field(default_factory=dict)
 
 
-# 输出格式指引(渲染端支持:GFM 表格 / mermaid 图 / ```mindmap 导图 / SVG 插图;
-# 两个 system prompt 共用)
+# 输出格式指引(渲染端支持:GFM 表格 / mermaid 图 / ```mindmap 导图 / SVG 插图 /
+# ```demo 理科交互演示;两个 system prompt 共用)
 FORMAT_GUIDE = (
-    "输出格式(前端支持 Markdown 表格、mermaid 图、mindmap 导图和 SVG 插图,"
+    "输出格式(前端支持 Markdown 表格、mermaid 图、mindmap 导图、SVG 插图和 demo 交互演示,"
     "合理使用能让答案更清楚):\n"
     "- 多维度对比/枚举属性 → 用 Markdown 表格(表头行 + |---|分隔行);\n"
     "- 流程/结构/关系 → 用 ```mermaid 代码块(flowchart TD,节点文字别加引号);\n"
@@ -100,6 +100,15 @@ FORMAT_GUIDE = (
     "- 少量数值对比 → ```mermaid 里用 xychart-beta 柱状图;\n"
     "- mermaid 画不了的示意图/插图 → 用 ```svg 代码块画矢量图:输出**完整自包含**的"
     "<svg>…</svg>(viewBox 定比例、样式全内联;不要外部图片/字体/脚本);\n"
+    "- **理科交互演示 → 用 ```demo 代码块**(凡物理实验与现象、数学函数与几何变换、"
+    "化学/生物机制等需要看**动态过程**、**调参数**或**空间结构**才直观的内容都该生成,"
+    "一张静态图能讲清的就用 mermaid/svg 别硬造):整块输出一个**完整自包含的 HTML 文档**——"
+    "<!DOCTYPE html> 开头、内联 <style> 和 <script>、**零外部资源**(禁 CDN/外链图片/字体/"
+    "网络请求/fetch);画面用 <canvas> 或内联 <svg>(3D 演示用 canvas 手写投影即可);"
+    "必须可交互:播放/暂停/重置控件 + 参数滑块或输入框,鼠标和触屏都能拖;"
+    "宽度自适应容器、整体高度 ≤450px、界面用中文标签;"
+    "**科学规律是红线**(光沿直线传播、守恒律、公式关系不可错);"
+    "禁 alert/confirm/prompt;JS 逻辑写完自查一遍,运行报错=演示报废。\n"
     "- 简单问题别硬造图表,两三句话说清就好。\n\n"
 )
 

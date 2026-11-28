@@ -21,6 +21,7 @@ import { nextTick, type Ref } from 'vue'
 
 import { describeApiError } from '../api/http'
 import { streamChat, type ChatAttachment, type ChatImageAttachment, type QaMessage } from '../api/qa'
+import { renderDemosIn } from '../utils/demo'
 import { renderMermaidIn } from '../utils/mermaid'
 import { renderMindmapsIn } from '../utils/mindmap'
 import { renderSvgsIn } from '../utils/svg'
@@ -206,6 +207,7 @@ export function useChatSend(deps: ChatSendDeps) {
             // (mermaid 当年实测的教训);两个渲染器都幂等,历史/多轮场景重复调用安全
             void nextTick(() => {
               if (msgListEl.value !== null) {
+                void renderDemosIn(msgListEl.value)
                 void renderMermaidIn(msgListEl.value)
                 void renderMindmapsIn(msgListEl.value)
                 void renderSvgsIn(msgListEl.value)

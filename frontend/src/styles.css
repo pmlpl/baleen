@@ -816,6 +816,21 @@ pre.mindmap-error {
   border-radius: 8px;
 }
 
+/* demo 交互演示:沙箱 iframe(高度由帧内 postMessage 上报) */
+.demo-figure {
+  margin: 14px 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.demo-frame {
+  display: block;
+  width: 100%;
+  border: none;
+  border-radius: 8px;
+}
+
 /* SVG 解析失败:保留代码块 + 角标(与 mermaid 同款) */pre.svg-error {
   position: relative;
   padding-top: 30px;

@@ -10,10 +10,11 @@
 
 ## 📌 当前状态速览（★ 新会话只读这一节就够，维护者：协调方）
 
-**最后更新**：2026-11-28（输出上限按模型上限(接用户配置)+对话帧+钉底修复；此前同日：SVG 截断 8000+角标、流程图 A+B 混用、帧筛选判定升级、视频整理失败不入库、思维导图全展开、mermaid 塌图防护、ruff 清债 + CI/pre-commit 第五道门、alembic check 第四道门）
+**最后更新**：2026-11-28（理科交互演示:```demo 围栏+沙箱 iframe+笔记导出自包含 HTML；此前同日：输出上限按模型上限(接用户配置)+对话帧+钉底修复、SVG 截断 8000+角标、流程图 A+B 混用、帧筛选判定升级、视频整理失败不入库、思维导图全展开、mermaid 塌图防护、ruff 清债 + CI/pre-commit 第五道门、alembic check 第四道门）
 
 | 日期 | 批次 | 一句话 | pytest |
 |---|---|---|---|
+| 2026-11-28 | 理科交互演示:```demo 围栏+沙箱+笔记导出 | 主人拍板:问任何理科模型/实验/数学内容都能生成交互演示(宽域,不止经典实验),导出笔记里同样可交互。联网调研(Claude Artifacts 沙箱/MicroSims arXiv 2511.19864/OSP 主提示词)三方收敛=单文件自包含 vanilla HTML 进沙箱;配方=iframe sandbox「allow-scripts 刻意不给 same-origin」(不透明源,模型代码出不了沙箱)+srcdoc 注入 CSP(default-src 'none' 网络全禁)+postMessage 单向高度通道(父页按 event.source 对号入座,伪造消息被 liveFrames 拒);FORMAT_GUIDE 宽域正触发(物理/数学/化学/生物…凡动态过程/调参/空间结构)+OSP 实战硬约束(零外部资源/播放暂停重置/高≤450px/科学规律红线/禁 alert);summarizer+organizer 两处点名 demo 围栏整块保留;新增 noteExport.ts 笔记导出=自包含 HTML(渲染完 DOM 快照零重复,图片 data URI,demo srcdoc 原样复生,KaTeX/宋体 CDN 离线优雅退化);探针 11/11 全绿(帧内交互/高度协议/CSP 拦 fetch/不透明源禁 parent+localStorage/截断与非 HTML 双退化/导出四要素);vue-tsc+build 绿 | 736 |
 | 2026-11-28 | 输出上限按模型上限+对话帧+钉底 | 主人两令:①「不要默认固定,按模型上限来」——设置页 llm_max_output_tokens 优先(resolve_llm_budgets 接入问答,_ChatRound 新字段),没配走模型上限级兜底 131072(organizer 同口径,网关自行 clamp);消费点 5 处全接(流式决策树/answer/answer_web/run_agent/run_agent_iter,agent 签名加参数默认不破测试),DEFAULT_MAX_TOKENS=131072 仅测试兜底;②「打开会话停在顶部要自己滚+加对话帧」——根因=渲染器异步撑高列表而 scrollBottom 只在渲染前调一次→渲染器 await 完+双 rAF 各钉一次(9315=9315 实测);对话帧=右缘轮次导航轨(每提问一帧点,hover 显示问题/点击跳该轮/当前轮朱砂高亮/两轮以下不出现),零新依赖;八套探针 75 项全绿;⚠️后端需重启 | 733 |
 | 2026-11-28 | SVG 截断:输出预算 3000→8000+截断角标 | 主人现场:「AI 画图没渲染成图」——取证=```svg 围栏内容在 `<text x="12` 戛然而止,**连闭合围栏都没有**(答案 1971 字符,输出 token 耗尽被腰斩,reasoning 也烧预算);过不了 looksLikeSvg 的 endsWith 检查→**静默**显示代码块。修两层:①生成层 DEFAULT_MAX_TOKENS 3000→8000(单一真源,agent 三处+非流式两处+流式决策树 qa.py 消硬编码共用;现场=推理 reasoning+千字正文+SVG 标签碎片化 3000 不够);②渲染层 svg.ts 三态分类(完整→渲染/截断→专属角标「SVG 没有生成完整,按代码显示」/其他不碰),半张图不上屏也不静默。svg_trunc_probe 5/5;⚠️后端改动需重启生效 | 733 |
 | 2026-11-28 | 流程图形态重设计:A+B 混用 | 主人否决调尺寸要换形态,上网调研(Napkin AI 多风格/draw.io rough/mermaid v11 handDrawn)后建设计稿试验台(design-lab.html,4 方向真渲染比稿)→ 主人拍板 **A+B 按形状混用**:线性单链→稿件步骤条(纯 HTML,朱砂序号章+墨线主轴+朱砂收束卡,零画布永不塌),分支/菱形→宣纸墨稿(rough.js 重描 Graphviz 几何,手绘双线框+宋体+朱砂起止+黛青菱形);形状判定=parseLinearFlow(边数=节点-1+出入度≤1+连通单链);墨稿三坑(根 transform 丢=裁空白/rc 不自动插入/出入度要分开算)全部规避;roughjs 懒加载;六套探针 53 项全绿 | 725 |

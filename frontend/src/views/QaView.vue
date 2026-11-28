@@ -29,6 +29,7 @@ import {
 
 import type { NotePlanResponse, QaSessionItem, SaveNoteRequest } from '../api/qa'
 import { renderMarkdown } from '../utils/markdown'
+import { renderDemosIn } from '../utils/demo'
 import { renderMermaidIn } from '../utils/mermaid'
 import { renderMindmapsIn } from '../utils/mindmap'
 import { renderSvgsIn } from '../utils/svg'
@@ -703,6 +704,7 @@ async function openSession(id: number): Promise<void> {
     await nextTick()
     if (msgListEl.value !== null) {
       await Promise.all([
+        renderDemosIn(msgListEl.value),
         renderMermaidIn(msgListEl.value),
         renderMindmapsIn(msgListEl.value),
         renderSvgsIn(msgListEl.value),

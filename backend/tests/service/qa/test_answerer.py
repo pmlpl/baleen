@@ -373,3 +373,36 @@ class TestDigestBlock:
         body = transport.calls[0]["body"]
         assert b"prior_summary" in body
         assert "用户问了闭包".encode() in body
+
+
+class TestDemoFencePrompt:
+    """```demo 理科交互演示的 prompt 约束(2026-11-28):宽域触发 + 自包含硬约束。"""
+
+    def test_format_guide_has_demo_rule_with_broad_trigger(self) -> None:
+        """宽域触发面:物理/数学/化学/生物都在,不设经典实验白名单。"""
+        from app.service.qa.answerer import FORMAT_GUIDE
+
+        assert "```demo" in FORMAT_GUIDE
+        for domain in ("物理", "数学", "化学"):
+            assert domain in FORMAT_GUIDE
+        assert "动态过程" in FORMAT_GUIDE  # 触发条件:动态/调参/空间结构
+
+    def test_format_guide_demo_is_selfcontained_and_offline(self) -> None:
+        """自包含硬约束:零外部资源是沙箱 CSP 生效的前提。"""
+        from app.service.qa.answerer import FORMAT_GUIDE
+
+        assert "完整自包含" in FORMAT_GUIDE
+        assert "零外部资源" in FORMAT_GUIDE
+        assert "禁 CDN" in FORMAT_GUIDE
+        assert "<!DOCTYPE html>" in FORMAT_GUIDE
+
+    def test_summarizer_and_organizer_keep_demo_intact(self) -> None:
+        """demo 围栏在整理链两处都被点名整块保留(改写会弄坏 HTML 程序)。"""
+        from app.service.qa.summarizer import organize_conversation_messages
+        from app.service.rewrite.organizer import _CONTRACT_RULES
+
+        msgs = organize_conversation_messages("主题", "对话")
+        assert "```demo" in msgs[0]["content"]
+        assert "一行都不能改" in msgs[0]["content"]
+        assert "```demo" in _CONTRACT_RULES
+        assert "整块原样保留" in _CONTRACT_RULES

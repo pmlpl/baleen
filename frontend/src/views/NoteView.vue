@@ -19,9 +19,11 @@ import { deleteNote, getNote, updateNote } from '../api/notes'
 import type { NoteDetail, NoteParent } from '../api/notes'
 import { prevRoute } from '../router/prevRoute'
 import { applyFigureLayout } from '../utils/figure-layout'
+import { renderDemosIn } from '../utils/demo'
 import { renderMermaidIn } from '../utils/mermaid'
 import { renderMindmapsIn } from '../utils/mindmap'
 import { confirmDialog } from '../utils/confirm'
+import { exportNoteHtml } from '../utils/noteExport'
 import { renderSectionText, collectCitationTargets } from '../utils/section'
 import { renderSvgsIn } from '../utils/svg'
 
@@ -304,6 +306,7 @@ async function load(): Promise<void> {
   // mermaid 代码块渲染成图(懒加载;失败退化为代码块+角标,绝不抛错)
   // SVG 插图同理:沙箱 iframe 展示,失败退化代码块
   if (contentEl.value !== null) {
+    void renderDemosIn(contentEl.value)
     void renderMermaidIn(contentEl.value)
     void renderMindmapsIn(contentEl.value)
     void renderSvgsIn(contentEl.value)
@@ -389,7 +392,7 @@ async function removeNote(): Promise<void> {
   if (note.value === null || deleting.value) return
   const ok = await confirmDialog({
     title: `删除《${note.value.title}》`,
-    body: '正文、检索索引和原文件会一起删除,不可恢复。',
+    body: '正文、检索索引和原文件一起删除,不可恢复。',
     confirmText: '删除',
     danger: true,
   })
@@ -401,6 +404,19 @@ async function removeNote(): Promise<void> {
   } catch (error) {
     errorText.value = describeApiError(error)
     deleting.value = false
+  }
+}
+
+/** ---- 导出:自包含 HTML(渲染完的 DOM 快照,demo 交互演示原样内嵌可玩) ---- */
+const exporting = ref(false)
+
+async function exportNote(): Promise<void> {
+  if (note.value === null || exporting.value || contentEl.value === null) return
+  exporting.value = true
+  try {
+    await exportNoteHtml(note.value.title, contentEl.value)
+  } finally {
+    exporting.value = false
   }
 }
 </script>
@@ -420,6 +436,14 @@ async function removeNote(): Promise<void> {
         <div class="note-head-row">
           <h1 class="page-title">{{ note.title }}</h1>
           <div class="note-actions">
+            <button
+              class="btn"
+              type="button"
+              :disabled="editing || exporting"
+              @click="exportNote"
+            >
+              {{ exporting ? '导出中…' : '导出' }}
+            </button>
             <button class="btn" type="button" :disabled="editing" @click="startEdit">编辑</button>
             <button
               class="btn btn--danger"
