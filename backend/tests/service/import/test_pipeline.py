@@ -23,8 +23,10 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import Chunk, Embedding, Job, Note, ReviewRun, Source
+from app.repo.repos import Repos
 from app.service.imports import run_import_async
-from app.service.llm import ChatResult
+from app.service.imports.pipeline import DEDUPE_PREFIX
+from app.service.llm import ChatResult, LLMError
 
 _PARAGRAPH = (
     "闭包是函数与其词法环境的组合,函数在定义时就捕获了外层作用域中的变量。"
@@ -504,3 +506,118 @@ def test_video_keep_meta_prefix_convention() -> None:
     }
     # 例外键集合钉死:新例外必须显式进 _VIDEO_KEEP_EXTRA(写进 pipeline.py 注释)
     assert _VIDEO_KEEP_EXTRA == {"content_sha256", "llm_transcript_fix"}
+
+
+class TestOrganizeFailurePaths:
+    """整理失败的两种去向（2026-11-28 主人拍板）：
+
+    - 视频导入：整理失败=导入失败、不入库——裸转写入库只会污染检索+假装完成
+      （11876 首例：LLM 网络窗口三层降级，一墙错字原文进了库还召不回）；
+    - 普通文件：保持原文入库——文件本身可读，不因 LLM 抽风丢用户上传。
+    """
+
+    class _BoomLLM(_RoutingLLM):
+        """organize 调用必炸的假 LLM（模拟 LLM 网关不可达）。"""
+
+        def chat(self, messages, **kwargs) -> ChatResult:
+            system = messages[0]["content"] if messages else ""
+            if "笔记编辑助手" in system:
+                self.calls.append("organize")
+                raise LLMError("网络错误:[WinError 10061] 由于目标计算机积极拒绝，无法连接。")
+            self.calls.append("other")
+            return ChatResult(content="{}", model=self.model, total_tokens=10)
+
+    def test_video_organize_failure_fails_import_without_note(
+        self, tmp_path, db_scope, fake_embed, fake_tokens
+    ):
+        md = "# 视频转写\n\n" + "\n\n".join([_PARAGRAPH] * 3)
+        path = _write(tmp_path, "video.md", md)
+
+        async def case():
+            async with db_scope() as factory:
+                # 预创建视频 source + job（复刻 api/upload.py whisper 异步路径的最小形态）
+                async with factory() as session:
+                    repos = Repos(session, owner_id=1)
+                    source, _ = await repos.sources.create_or_get_by_sha256(
+                        sha256="video:BVFAIL:whisper",
+                        filename="BVFAIL.md",
+                        ext=".md",
+                        size_bytes=0,
+                        storage_path="",
+                        mime="text/markdown",
+                        parse_status="pending",
+                    )
+                    await repos.sources.update_parse_meta(
+                        source.id,
+                        {
+                            "video_url": "https://www.bilibili.com/video/BVFAIL",
+                            "video_mode": "whisper",
+                        },
+                    )
+                    job, _ = await repos.jobs.create_or_get(
+                        dedupe_key=DEDUPE_PREFIX + "video:BVFAIL:whisper",
+                        payload={"url": "u", "mode": "whisper", "source_id": source.id},
+                        kind="import",
+                    )
+                    await session.commit()
+                    source_id, job_id = source.id, job.id
+
+                llm = self._BoomLLM()
+                with pytest.raises(RuntimeError, match="笔记未入库"):
+                    await run_import_async(
+                        path,
+                        no_llm=False,
+                        session_factory=factory,
+                        embed_func=fake_embed,
+                        token_counter=fake_tokens,
+                        client=llm,
+                        source_id=source_id,
+                    )
+                assert "organize" in llm.calls, "organizer 确实被调过（失败在整理这一步）"
+
+                async with factory() as session:
+                    note = await session.scalar(select(Note).where(Note.source_id == source_id))
+                    assert note is None, "视频整理失败不得创建笔记"
+                    job = await session.get(Job, job_id)
+                    assert job.status == "failed"
+                    assert "AI 整理失败" in (job.last_error or "")
+                    source = await session.get(Source, source_id)
+                    stages = [e["stage"] for e in source.parse_meta["video_log"]]
+                    assert "AI 整理笔记中" in stages
+                    # 误导元凶钉死：失败路径绝不出现「AI 整理完成」
+                    assert not any("AI 整理完成" in s for s in stages)
+
+        asyncio.run(case())
+
+    def test_plain_file_organize_failure_degrades_to_raw(
+        self, tmp_path, db_scope, fake_embed, fake_tokens
+    ):
+        path = _write(tmp_path, "plain.md", "\n\n".join([_PARAGRAPH] * 3))
+
+        async def case():
+            async with db_scope() as factory:
+                result = await run_import_async(
+                    path,
+                    no_llm=False,
+                    session_factory=factory,
+                    embed_func=fake_embed,
+                    token_counter=fake_tokens,
+                    client=self._BoomLLM(),
+                )
+                assert result.note_id is not None
+                async with factory() as session:
+                    note = await session.get(Note, result.note_id)
+                    headings = [
+                        b for b in (note.doc or {}).get("content", []) if b.get("type") == "heading"
+                    ]
+                    assert not headings, "降级=原文入库,不应有 organizer 重写的标题"
+                    g2 = await session.scalar(
+                        select(ReviewRun).where(
+                            ReviewRun.source_id == result.source_id,
+                            ReviewRun.gate == "G2",
+                        )
+                    )
+                    assert g2 is not None
+                    assert any("已按原文入库" in r for r in (g2.reasons or []))
+
+        asyncio.run(case())

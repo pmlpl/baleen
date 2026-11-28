@@ -101,7 +101,7 @@ jobs:
           uv run pytest -q 2>&1 | tee pytest-output.log
           tail -n 3 pytest-output.log
           # 摘要行与本地全量一致（模型在场，无 skip 档）；掉线此处非零退出
-          grep -qE "^725 passed, 1 xfailed" pytest-output.log
+          grep -qE "^730 passed, 1 xfailed" pytest-output.log
 
   frontend:
     runs-on: ubuntu-latest

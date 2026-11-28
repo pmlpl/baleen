@@ -683,8 +683,9 @@ def test_low_info_frames_are_dropped(monkeypatch, tmp_path) -> None:
 
             return SimpleNamespace(content=r)
 
-    out = transcribe_frames(frames, client=FakeClient())
+    out, stats = transcribe_frames(frames, client=FakeClient())
     assert len(out) == 1  # 低信息帧被丢
+    assert stats.dropped == 1 and stats.kept == 1  # 2026-11-28:四去向计数
     assert out[0].alt == "代码编辑器"
     assert "x = 1" in out[0].text_layer
     assert out[0].media_key  # 留下的帧存了字节
@@ -734,7 +735,9 @@ def test_extract_video_content_routes_douyin_to_playwright(tmp_path: Path, monke
     monkeypatch.setattr(
         ve,
         "_extract_frames",
-        lambda vp, od, cli: frame_calls.append({"video_path": vp, "client": cli}) or ([], 0),
+        lambda vp, od, cli: (
+            frame_calls.append({"video_path": vp, "client": cli}) or ([], 0, ve.FrameStats())
+        ),
     )
     monkeypatch.setattr("app.service.douyin_extractor.fetch_douyin_video", fake_fetch)
 
@@ -821,8 +824,9 @@ def test_low_info_frame_with_text_layer_also_dropped(monkeypatch, tmp_path) -> N
                 content="INFO: low\n\nTEXT_LAYER:\n通货膨胀会影响生活\n\nDESC:\n主播口播特写"
             )
 
-    out = transcribe_frames([(33.9, p)], client=FakeClient())
+    out, stats = transcribe_frames([(33.9, p)], client=FakeClient())
     assert out == []
+    assert stats.dropped == 1 and stats.kept == 0
     media_files = [q for q in (tmp_path / "media").rglob("*") if q.is_file()]
     assert media_files == []  # 字节也不落盘
 
@@ -857,8 +861,9 @@ def test_same_scene_dual_candidates_keep_latest(monkeypatch, tmp_path) -> None:
             self.i += 1
             return SimpleNamespace(content=r)
 
-    out = transcribe_frames(frames, client=FakeClient())
+    out, stats = transcribe_frames(frames, client=FakeClient())
     assert len(out) == 1
+    assert stats.kept == 3  # kept 计数在择优前(双候选都过筛即计入),终态以 out 为准
     assert out[0].timestamp == 142.5  # 留最后(95% 点,画面最稳定)
     assert out[0].scene_idx == 7
 
@@ -1065,5 +1070,178 @@ def test_transcript_fix_lands_in_parse_meta(db_scope, tmp_path: Path, monkeypatc
             repos = Repos(session, 1)
             meta = await repos.sources.get_parse_meta(source_id)
             assert meta.get("llm_transcript_fix") == fix_record, "导入完成后留痕仍在 parse_meta"
+
+    asyncio.run(db_scope(scenario))
+
+
+# ---------- 帧全灭告警可定性（2026-11-28,11876 教训）----------
+
+
+async def _make_video_source(factory, tag: str) -> int:
+    """预创建 whisper 视频 source（复刻 API 最小形态），返回 source_id。"""
+
+    async with factory() as session:
+        repos = Repos(session, 1)
+        source, _ = await repos.sources.create_or_get_by_sha256(
+            sha256=f"video:{tag}:whisper",
+            filename=f"{tag}.md",
+            ext=".md",
+            size_bytes=10,
+            storage_path="",
+            mime="text/markdown",
+            parse_status="pending",
+        )
+        await repos.sources.update_parse_meta(
+            source.id, {"video_mode": "whisper", "video_stage": "排队中"}
+        )
+        await repos.jobs.create_or_get(
+            dedupe_key=f"import:video:{tag}:whisper",
+            payload={"url": "test", "mode": "whisper", "source_id": source.id},
+            kind="import",
+        )
+        await session.commit()
+        return source.id
+
+
+def _fake_vc(frame_stats):
+    """无帧的 VideoContent 替身,frame_stats 可注入。"""
+    return type(
+        "VC",
+        (),
+        {
+            "markdown": "# 测试视频",
+            "title": "测试视频",
+            "frame_images": [],
+            "frame_candidates": frame_stats.candidates,
+            "frame_stats": frame_stats,
+            "transcript_fix": None,
+        },
+    )()
+
+
+async def _run_video_job(tmp_path, monkeypatch, factory, source_id, fake_vc) -> None:
+    """以假 extract + 假 pipeline 跑一遍 extract_and_import_video。"""
+    import app.service.imports as imports_pkg
+    import app.service.video_extractor as vextract
+
+    monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path)
+    monkeypatch.setattr(worker_module, "session_factory", factory)
+    monkeypatch.setattr(vextract, "extract_video_content", lambda *a, **kw: fake_vc)
+
+    async def fake_run(path: str, **kwargs: Any) -> ImportResult:
+        return ImportResult(source_id=source_id, note_id=None, parse_status="ok")
+
+    monkeypatch.setattr(imports_pkg, "run_import_async", fake_run)
+    await extract_and_import_video(
+        {},
+        "https://www.bilibili.com/video/BVt/",
+        owner_id=1,
+        source_id=source_id,
+        mode="whisper",
+    )
+
+
+def test_frame_all_failed_warning_names_the_cause(db_scope, tmp_path: Path, monkeypatch) -> None:
+    """视觉网关挂 → 30 帧全异常:告警必须写明「提取失败」(可定性,该重导)。"""
+    from app.service.video_extractor import FrameStats
+
+    async def scenario(factory) -> None:
+        source_id = await _make_video_source(factory, "BVallfail")
+        await _run_video_job(
+            tmp_path,
+            monkeypatch,
+            factory,
+            source_id,
+            _fake_vc(
+                FrameStats(
+                    candidates=30,
+                    kept=0,
+                    dropped=0,
+                    failed=30,
+                )
+            ),
+        )
+        async with factory() as session:
+            repos = Repos(session, 1)
+            meta = await repos.sources.get_parse_meta(source_id)
+        warn = [e["stage"] for e in meta["video_log"] if "画面帧未进入笔记" in e["stage"]]
+        assert warn, "全灭必须有告警"
+        assert "提取失败 30 张" in warn[-1], warn[-1]
+        assert "视觉模型调用异常" in warn[-1], warn[-1]
+
+    asyncio.run(db_scope(scenario))
+
+
+def test_frame_all_filtered_warning_says_normal(db_scope, tmp_path: Path, monkeypatch) -> None:
+    """30 帧全被 INFO 判定无关:告警写明「判定无关属正常筛除」(不该重导)。"""
+    from app.service.video_extractor import FrameStats
+
+    async def scenario(factory) -> None:
+        source_id = await _make_video_source(factory, "BValllow")
+        await _run_video_job(
+            tmp_path,
+            monkeypatch,
+            factory,
+            source_id,
+            _fake_vc(
+                FrameStats(
+                    candidates=30,
+                    kept=0,
+                    dropped=30,
+                    failed=0,
+                )
+            ),
+        )
+        async with factory() as session:
+            repos = Repos(session, 1)
+            meta = await repos.sources.get_parse_meta(source_id)
+        warn = [e["stage"] for e in meta["video_log"] if "画面帧未进入笔记" in e["stage"]]
+        assert warn, "全灭必须有告警"
+        assert "全部被判定与知识无关" in warn[-1], warn[-1]
+        assert "属正常筛除" in warn[-1], warn[-1]
+
+    asyncio.run(db_scope(scenario))
+
+
+def test_pipeline_stage_failure_marks_video_log(db_scope, tmp_path: Path, monkeypatch) -> None:
+    """pipeline 阶段失败(含整理失败=不入库)也要给 video_log ❌,与提取阶段同 UX。"""
+    import app.service.imports as imports_pkg
+    import app.service.video_extractor as vextract
+
+    async def scenario(factory) -> None:
+        source_id = await _make_video_source(factory, "BVpipefail")
+        monkeypatch.setattr(worker_module, "STAGING_ROOT", tmp_path)
+        monkeypatch.setattr(worker_module, "session_factory", factory)
+        fake_vc = type(
+            "VC",
+            (),
+            {
+                "markdown": "# 测试视频",
+                "title": "测试视频",
+                "frame_images": [{"index": 0}],
+                "frame_candidates": 1,
+                "transcript_fix": None,
+            },
+        )()
+        monkeypatch.setattr(vextract, "extract_video_content", lambda *a, **kw: fake_vc)
+
+        async def fake_run(path: str, **kwargs: Any) -> ImportResult:
+            raise RuntimeError("AI 整理失败(LLMError)，笔记未入库;检查 LLM 配置与网络后重新导入")
+
+        monkeypatch.setattr(imports_pkg, "run_import_async", fake_run)
+        with pytest.raises(RuntimeError, match="笔记未入库"):
+            await extract_and_import_video(
+                {},
+                "https://www.bilibili.com/video/BVpipefail/",
+                owner_id=1,
+                source_id=source_id,
+                mode="whisper",
+            )
+        async with factory() as session:
+            repos = Repos(session, 1)
+            meta = await repos.sources.get_parse_meta(source_id)
+        stages = [e["stage"] for e in meta["video_log"]]
+        assert stages[-1].startswith("❌"), stages[-1]
+        assert "AI 整理失败" in stages[-1], stages[-1]
 
     asyncio.run(db_scope(scenario))

@@ -517,19 +517,23 @@ async def run_import_async(
                 result.g2_verdict = None
             else:
                 t = time.perf_counter()
+                # 视频导入先判(2026-11-28 主人拍板:整理失败=导入失败不入库——裸转写
+                # 入库只会污染检索+假装完成,首例 11876 教训);断点续跑对视频也不跳
+                # organizer:旧 G2 行只存裁决不存重写 blocks,跳过=裸转写入库
+                vmeta = await repos.sources.get_parse_meta(source_id)
+                is_video = bool(vmeta and vmeta.get("video_mode"))
                 g2_run = await repos.review_runs.get(source_id, "G2")
-                if g2_run is not None:
-                    # 断点续跑：organizer 已跑过，直接读结果
+                if g2_run is not None and not is_video:
+                    # 断点续跑：organizer 已跑过，直接读结果(仅普通文件)
                     result.g2_verdict, result.quality, result.action = (
                         g2_run.verdict,
                         g2_run.quality,
                         g2_run.action,
                     )
                 else:
-                    # 视频导入:organizer 跑几十秒~几分钟,先落「AI 整理笔记中」并提交,
-                    # 让前端轮询立刻看到(基于 DB 最新 parse_meta,绕过 ORM 缓存)
-                    vmeta = await repos.sources.get_parse_meta(source_id)
-                    if vmeta and vmeta.get("video_mode"):
+                    if is_video:
+                        # organizer 跑几十秒~几分钟,先落「AI 整理笔记中」并提交,
+                        # 让前端轮询立刻看到(基于 DB 最新 parse_meta,绕过 ORM 缓存)
                         await repos.sources.update_parse_meta(
                             source_id, _append_video_log(vmeta, "AI 整理笔记中")
                         )
@@ -547,7 +551,15 @@ async def run_import_async(
                             video_images=video_images,  # 视频:多模态喂帧图 + 视频 prompt 约束
                             allow_diagram=allow_diagrams,  # 结构图(仍需依据闸命中才画)
                         )
-                    except Exception as exc:  # noqa: BLE001 — LLM 网络异常，降级原文入库
+                    except Exception as exc:  # noqa: BLE001
+                        if is_video:
+                            # 视频:整理失败=导入失败,note 行尚未创建,干净失败;
+                            # worker 侧会补 video_log ❌(与提取阶段失败同 UX)
+                            raise RuntimeError(
+                                f"AI 整理失败({type(exc).__name__})，笔记未入库;"
+                                "检查 LLM 配置与网络后重新导入"
+                            ) from exc
+                        # 普通文件:文件本身可读,不因 LLM 抽风丢用户上传 → 原文入库
                         log.warning("AI 笔记整理异常(降级原文入库): %s", exc)
                         org = OrganizeResult(
                             organizable=True,

@@ -451,12 +451,25 @@ async def extract_and_import_video(
                 )
             if not vc.frame_images:
                 # 6014 教训:帧全军覆没不能静默——候选>0 全被筛除/提取失败/场景数为 0,
-                # 都写进白盒日志(video_log 持久化在 parse_meta,导入完成后仍可见)
-                await _update_video_stage(
-                    source_id,
-                    f"⚠️ 画面帧未进入笔记(候选 {vc.frame_candidates} 张,全部被筛除或提取失败)",
-                    owner_id,
-                )
+                # 都写进白盒日志(video_log 持久化在 parse_meta,导入完成后仍可见)。
+                # 2026-11-28 起区分去向(11876 教训:视觉网关挂=30 帧全异常,旧文案
+                # 「筛除或失败」无从定性;筛除=画面没料属正常,失败=网络问题该重导)
+                stats = getattr(vc, "frame_stats", None)
+                if stats and stats.failed:
+                    detail = f"提取失败 {stats.failed} 张(视觉模型调用异常,多为网络问题)"
+                    if stats.dropped:
+                        detail += f",另有 {stats.dropped} 张被判定无关"
+                    if stats.timed_out:
+                        detail += f",{stats.timed_out} 张超时未处理"
+                    warn = f"⚠️ 画面帧未进入笔记:候选 {vc.frame_candidates} 张,{detail}"
+                elif stats and stats.dropped:
+                    warn = (
+                        f"⚠️ 画面帧未进入笔记:候选 {vc.frame_candidates} 张"
+                        "全部被判定与知识无关(画面没承载知识点,属正常筛除)"
+                    )
+                else:
+                    warn = f"⚠️ 画面帧未进入笔记(候选 {vc.frame_candidates} 张,全部被筛除或提取失败)"
+                await _update_video_stage(source_id, warn, owner_id)
         else:
             from app.service.bilibili import fetch_bilibili, sanitize_filename
 
@@ -510,18 +523,24 @@ async def extract_and_import_video(
         sidecar.write_text(json.dumps(frame_images, ensure_ascii=False), encoding="utf-8")
 
     # ---- Phase 3: 跑 pipeline（用预创建 source + job）----
-    result = await run_import_async(
-        str(staging),
-        no_llm=False,
-        worker=WORKER_NAME,
-        charter=charter,
-        owner_id=owner_id,
-        client=client,
-        prompt_budget=prompt_budget,
-        output_budget=output_budget,
-        allow_diagrams=allow_diagrams,
-        source_id=source_id,
-    )
+    try:
+        result = await run_import_async(
+            str(staging),
+            no_llm=False,
+            worker=WORKER_NAME,
+            charter=charter,
+            owner_id=owner_id,
+            client=client,
+            prompt_budget=prompt_budget,
+            output_budget=output_budget,
+            allow_diagrams=allow_diagrams,
+            source_id=source_id,
+        )
+    except Exception as exc:
+        # pipeline 阶段失败(含 2026-11-28 起的「视频整理失败=不入库」)也要给 video_log
+        # ❌ 留痕:job failed 管道里已记,这里补 source 侧白盒日志,与提取阶段同 UX
+        await _fail_video_job(source_id, owner_id, exc)
+        raise
 
     # 清理暂存（成功才删，失败保留供重试）
     if not result.deduped:

@@ -75,6 +75,18 @@ class FrameContent:
 
 
 @dataclass
+class FrameStats:
+    """帧提取四个去向的计数（2026-11-28：全灭时 worker 要能区分筛除 vs 提取失败——
+    11876 教训：视觉网关挂了 30 帧全异常跳过，日志只含糊说「筛除或失败」，无从定性）。"""
+
+    candidates: int = 0  # 进入视觉筛选的候选帧数（=transcribe_frames 收到的 frames 数）
+    kept: int = 0  # 存活并嵌入笔记
+    dropped: int = 0  # INFO 筛除（模型判定画面与知识无关，属正常）
+    failed: int = 0  # 视觉调用/解析异常（网络问题会表现为全部 failed）
+    timed_out: int = 0  # 总时限截断，未处理的剩余帧
+
+
+@dataclass
 class VideoContent:
     """视频提取结果。"""
 
@@ -92,6 +104,9 @@ class VideoContent:
     # 抽出的候选帧数（去重后、视觉筛选前）：>0 但 frame_images 空 = 全被筛除/失败,
     # worker 依此显式告警（2026-11-19 P1a）
     frame_candidates: int = 0
+    # 帧四去向计数（2026-11-28）：全灭时区分「筛除」与「提取失败」，worker 据此
+    # 给出可定性的告警。None = 未走帧统计的旧调用方（字幕模式等）
+    frame_stats: FrameStats | None = None
     # 转写 LLM 自校正留痕（2026-11-22 治本批）：{n_proposed, n_applied, corrections[],
     # n_missed, missed[]} 或 {"skipped": 原因} / {"error": 原因}——worker 写进
     # source.parse_meta.llm_transcript_fix（pipeline video_ 前缀保留机制的例外键）。
@@ -704,8 +719,11 @@ def transcribe_frames(
     *,
     client,
     deadline_s: float = 600,
-) -> list[FrameContent]:
+) -> tuple[list[FrameContent], FrameStats]:
     """DeepSeek-flash 视觉：逐字转录屏幕代码 + 知识相关性判定 + 描述画面；帧字节 store_media 存库。
+
+    返回 ``(存活帧, 四去向计数)``——计数供 worker 在全灭时区分「筛除」与「提取失败」
+    （2026-11-28，11876 教训：异常静默 continue 连计数都没有，无从定性）。
 
     **知识相关性筛选**（2026-11-19 从「信息密度」升级）：模型判 INFO=low 的帧直接丢弃，
     不存 media、不进笔记。判定标准是「画面是否承载知识」，不是「有没有字」——原标准下
@@ -723,7 +741,7 @@ def transcribe_frames(
 
     results: list[FrameContent] = []
     started = _time.monotonic()
-    kept = dropped = 0
+    kept = dropped = failed = 0
     for frame in frames:
         timestamp, frame_path = frame[0], frame[1]
         scene_idx = frame[2] if len(frame) > 2 else -1
@@ -784,7 +802,7 @@ def transcribe_frames(
                 )
             )
         except Exception:
-            continue  # 单帧失败跳过（不丢其他帧）
+            failed += 1  # 单帧失败跳过（不丢其他帧）；计数留痕供全灭时定性
 
     # 同场景双候选都存活 → 只留时间靠后的一帧（后段画面更可能已稳定）。
     # scene_idx=-1（无场景信息/旧调用方）不参与分组,原样保留。
@@ -801,30 +819,45 @@ def transcribe_frames(
             )
             log.info("同场景双候选择优：%d → %d 帧", len(grouped), len(by_scene))
 
-    if dropped:
-        log.info("帧知识相关性筛选：保留 %d / 丢弃 %d 张无关帧", kept, dropped)
-    return results
+    if dropped or failed:
+        log.info(
+            "帧筛选/提取：保留 %d / 筛除 %d / 失败 %d / 超时截断 %d",
+            kept,
+            dropped,
+            failed,
+            max(len(frames) - kept - dropped - failed, 0),
+        )
+    stats = FrameStats(
+        candidates=len(frames),
+        kept=kept,
+        dropped=dropped,
+        failed=failed,
+        timed_out=max(len(frames) - kept - dropped - failed, 0),
+    )
+    return results, stats
 
 
 def _extract_frames(
     video_path: Path | None, output_dir: Path, client
-) -> tuple[list[FrameContent], int]:
+) -> tuple[list[FrameContent], int, FrameStats]:
     """公共帧逻辑：场景检测双候选抽帧 + dHash 去重 + 视觉转录 + store_media 真嵌图。
 
-    douyin / B站兜底 / yt-dlp 三条路径共用。返回 ``(存活的帧, 候选帧数)``——候选数
-    供 worker 做「全部帧被筛除」的显式警告（6014 零图零警告教训：静默降级不可接受）。
-    任何一步失败返回 ([], 0)，不阻塞转写。
+    douyin / B站兜底 / yt-dlp 三条路径共用。返回 ``(存活的帧, 候选帧数, 四去向计数)``
+    ——候选数 + 计数供 worker 做「全部帧被筛除/失败」的显式且可定性的警告
+    （6014 零图零警告教训：静默降级不可接受）。
+    任何一步失败返回 ([], 0, 空统计)，不阻塞转写。
     """
     if video_path is None:
-        return [], 0
+        return [], 0, FrameStats()
     try:
         scenes = detect_scenes(video_path)
         frames = extract_scene_frames(video_path, scenes, output_dir)
         if not frames:
-            return [], 0
-        return transcribe_frames(frames, client=client), len(frames)
+            return [], 0, FrameStats()
+        results, stats = transcribe_frames(frames, client=client)
+        return results, len(frames), stats
     except Exception:  # noqa: BLE001 —— 帧提取失败不影响转写（与旧逻辑一致）
-        return [], 0
+        return [], 0, FrameStats()
 
 
 def _format_timestamp(seconds: float) -> str:
@@ -967,7 +1000,9 @@ def _content_from_media(
         if progress_cb:
             progress_cb("识别画面中…", 72)
 
-        frame_contents, frame_candidates = _extract_frames(video_path, output_dir, client)
+        frame_contents, frame_candidates, frame_stats = _extract_frames(
+            video_path, output_dir, client
+        )
 
         markdown = build_video_markdown(
             title=title,
@@ -990,6 +1025,7 @@ def _content_from_media(
         frame_contents=frame_contents,
         markdown=markdown,
         frame_candidates=frame_candidates,
+        frame_stats=frame_stats,
         transcript_fix=transcript_fix,
         cover_key=cover_key,
         frame_images=[
