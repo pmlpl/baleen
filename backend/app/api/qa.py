@@ -44,6 +44,7 @@ from app.service.llm.resolve import (
 from app.service.qa.agent import run_agent, run_agent_iter
 from app.service.qa.answerer import (
     _EMPTY_ANSWER,
+    DEFAULT_MAX_TOKENS,
     ContextHit,
     QaResult,
     answer,
@@ -624,7 +625,9 @@ async def _stream_kb_answer(rnd: _ChatRound) -> AsyncIterator[dict]:
     (短回答没到放行阈值,流结束后整段放行);计费取 usage 事件。"""
     accumulated: list[str] = []
     usage_event: dict | None = None
-    iterator = rnd.llm.chat_stream(rnd.messages, max_tokens=3000)
+    # 决策树流式与 agent 共用同一输出预算(单一真源):3000 会被 reasoning+SVG
+    # 腰斩(2026-11-28 现场:10928 msg14 的 ```svg 截断在半截,前端只能按代码显示)
+    iterator = rnd.llm.chat_stream(rnd.messages, max_tokens=DEFAULT_MAX_TOKENS)
     marker = False  # [NO_KB] = 笔记答不了,LLM 会给自身知识回答(不外发)
     buffered = ""
     streaming = False

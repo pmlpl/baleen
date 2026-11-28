@@ -11,11 +11,17 @@
  * 容错:解析失败 → 保留原代码块 + 角标(与 mermaid 失败同款),绝不抛错。
  */
 
-/** 判断一段代码是不是自包含 SVG(排除普通代码被误渲染) */
-function looksLikeSvg(code: string): boolean {
+/** SVG 块的三态:**完整**可渲染;**截断**(开头像 SVG 但没有 </svg>)按代码显示并带角标;
+ *  其他一概不碰。截断的现场(2026-11-28,主人报「AI 画图没渲染」):```svg 围栏内容
+ *  以 `<text x="12` 戛然而止 —— 输出 max_tokens 耗尽把 SVG 腰斩。不渲染半张图
+ *  (缺节点会误导),但也不能静默:用户得知道「为什么没图」,所以给专属角标。 */
+function classifySvg(code: string): 'full' | 'truncated' | 'no' {
   const t = code.trim()
-  if (!t.endsWith('</svg>')) return false
-  return t.startsWith('<svg') || (t.startsWith('<?xml') && t.includes('<svg'))
+  if (t.endsWith('</svg>')) {
+    return t.startsWith('<svg') || (t.startsWith('<?xml') && t.includes('<svg')) ? 'full' : 'no'
+  }
+  if (t.startsWith('<svg')) return 'truncated'
+  return 'no'
 }
 
 interface SvgMetrics {
@@ -78,12 +84,25 @@ export async function renderSvgsIn(root: HTMLElement): Promise<void> {
   const targets = blocks.filter((pre) => {
     if (pre.dataset.svgDone === '1') return false
     const code = pre.querySelector('code')
-    return code !== null && looksLikeSvg(code.textContent ?? '')
+    return code !== null && classifySvg(code.textContent ?? '') !== 'no'
   })
   for (const pre of targets) {
     const codeEl = pre.querySelector('code')
     const source = (codeEl?.textContent ?? '').trim()
     pre.dataset.svgDone = '1'
+
+    // 截断的 SVG:不渲染半张图,退回代码块 + 专属角标(与语法错误角标区分开)
+    if (classifySvg(source) === 'truncated') {
+      pre.classList.add('svg-error')
+      if (pre.querySelector('.svg-error-badge') === null) {
+        const badge = document.createElement('span')
+        badge.className = 'svg-error-badge'
+        badge.textContent = 'SVG 没有生成完整(输出被截断),按代码显示'
+        pre.prepend(badge)
+      }
+      continue
+    }
+
     const metrics = measureSvg(source)
     if (metrics === null) {
       pre.classList.add('svg-error')

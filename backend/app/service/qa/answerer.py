@@ -31,7 +31,11 @@ CONTEXT_TOKEN_BUDGET = 8000
 HISTORY_MAX_MESSAGES = 200
 HISTORY_TOKEN_BUDGET = 200000  # 1M 上下文:安全网提到 200K(冻结阈值 100K,留余量兜底)
 # reasoning 模型会先吃 token 思考,completion 预算要留够(reasoning + 答案)。
-DEFAULT_MAX_TOKENS = 3000
+# 3000 的现场(2026-11-28,会话 10928 msg14):答案=表格+两节正文+```svg 工作流图,
+# SVG 标记碎片化极耗 token,reasoning 再烧一大块 → 输出到 1971 字符被硬截断,
+# 围栏没闭合、SVG 没有 </svg>,前端只能按代码块显示(主人报「没渲染成图」)。
+# 8000 = reasoning(~1-2K)+ 千字正文 + 完整 SVG(~4K)的余量;再大由用户设置页配。
+DEFAULT_MAX_TOKENS = 8000
 # 用户引用的笔记(@某篇):单篇 token 上限(引用是「在问什么」的信号,整篇太长就截头部)
 REF_NOTE_TOKEN_BUDGET = 3000
 # 对话附件(用户临时上传给 AI 看的参考文件,不入库):单文件 token 上限
