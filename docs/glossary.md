@@ -32,13 +32,15 @@
 | **digest** | 长会话的冻结分段摘要：第二条不可变 system，保前缀缓存、止静默丢失 → `qa/digest.py` |
 | **昵称** | 问卷第一题，存 `app_settings.nickname`，问答 system prompt 注入（AI 用它称呼用户；没填不注入） |
 | **缓存命中率** | Σhit/Σ(hit+miss) token 加权；分 overall/库内轮/联网轮三桶——联网轮现抓内容结构性不可缓存，偏低不是 bug |
+| **demo 围栏** | ```demo 理科交互演示：模型输出完整自包含 HTML（零外部资源）→ 沙箱 iframe 可交互；**完整文档型 ```html 也自动提升**，片段型保持代码块 → `utils/demo.ts` |
+| **沙箱配方** | demo 的安全边界：`sandbox="allow-scripts"` 刻意不给 same-origin（不透明源，parent/localStorage 全抛）+ srcdoc 注入 CSP `default-src 'none'`（网络全禁）+ postMessage 单向高度通道（伪造源被拒）；与 SVG 沙箱（纯静态零脚本）配套成两档 |
 
 ## 工程与协作
 
 | 词 | 意思 |
 |---|---|
 | **画像页** | 章程页扩成的个人页（api.md v41+）：左栏五项事实可原地编辑，右栏八块真实统计（互斥三分口径）+ 主题打标写 `notes.tags`；「我答过的问题」清单带真实 total → `api.md` 画像节 |
-| **基线** | 全量 pytest 通过数（当前 **720 passed +1 xfailed**）：唯一真源是 STATUS 里 `基线 **N passed**` 加粗声明；动了测试必须同步升它和 CI 的 grep 行——只增不降 |
+| **基线** | 全量 pytest 通过数（当前 **743 passed +1 xfailed**）：唯一真源是 STATUS 里 `基线 **N passed**` 加粗声明；动了测试必须同步升它和 CI 的 grep 行——只增不降 |
 | **doc_lint** | `scripts/doc_lint.py`：文档一致性护栏（端点数/基线声明/链接/台账同步…），pre-commit 拦 ERROR；⚠️ 它只对账声明之间的一致性，不验真实数——协调方终验要独立复跑 |
 | **交付块** | 每批工作的正式记录（产物表/怎么验的/已知限制），归 `backend/delivery/<月>.md` / `frontend/DELIVERY.md`，格式见 HANDOFF §4——没写交付块的交付不算交付 |
 | **ADR** | 架构决策记录 `docs/adr/00XX-*.md`：为什么这么定 + 不这么定的理由，答辩素材 |

@@ -47,7 +47,7 @@ accept / partial / reject  ── reject 可申诉，partial 只抽有价值部�
 - **笔记自编辑**：PUT 改标题/正文（含图笔记可编辑，图片位置标记往返）
 - **纸篓（软删除）**：删除进纸篓（可放回），30 天自动彻底清理，按账号隔离、换浏览器仍在
 - **图片视觉理解**：导入时视觉模型转写进流水线、问答回传原图、SVG 插图沙箱渲染
-- **输出格式**：markdown 表格、嵌套列表、**mermaid 流程图/统计图 + markmap 交互式思维导图**（缩放/平移/折叠，懒加载）、SVG 矢量图、KaTeX 数学公式（行内/块级）
+- **输出格式**：markdown 表格、嵌套列表、**mermaid 流程图/统计图 + markmap 交互式思维导图**（缩放/平移/折叠，懒加载）、SVG 矢量图、KaTeX 数学公式（行内/块级）、**```demo 理科交互演示**（自包含 HTML 进沙箱 iframe 可交互；笔记导出为自包含 HTML，演示离线照常可玩）
 - **多用户隔离**：用户名+密码+JWT，数据按 `owner_id` 隔离，每用户独立 LLM 配置
 - **章程问卷（事实化）**：六道事实题（昵称/年龄段/性别/学历/当前状态/为什么用）→ LLM 推导个性化章程驱动导入整理；**昵称注入问答**（AI 用它称呼你）；**「我的画像」页**（事实可原地编辑 + 八块系统统计 + 主题打标）
 - **评测**：G1/G2 真链路评测 + bootstrap 95% CI、检索 R@5 评测、真实导入候选样本自动归档
@@ -59,7 +59,7 @@ accept / partial / reject  ── reject 可申诉，partial 只抽有价值部�
 | 后端 | Python 3.13 / FastAPI / SQLAlchemy 2 async / arq + Redis |
 | 数据库 | PostgreSQL 17 + pgvector（HNSW）+ pg_trgm |
 | 向量 | 本地 `bge-large-zh-v1.5`（1024 维，GPU 加速） |
-| 前端 | Vue 3 + TypeScript / Vite / Pinia（渲染：手写 markdown + KaTeX + mermaid + markmap） |
+| 前端 | Vue 3 + TypeScript / Vite / Pinia（渲染：手写 markdown + KaTeX + mermaid + markmap + demo 沙箱） |
 | LLM | OpenAI 兼容协议（DeepSeek 等），每用户独立配置 |
 | 视频 | faster-whisper（small，GPU）+ PySceneDetect + Playwright（抖音免 cookie / B 站兜底） |
 | 基础设施 | Docker Compose（PostgreSQL + Redis） |

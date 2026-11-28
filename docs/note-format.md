@@ -65,6 +65,7 @@
 | 引用 `blockquote` | `> ` | 无 |
 | 分割线 `horizontalRule` | `---` | 【软】前后留文字锚点 |
 | mermaid / svg | ` ```mermaid ` / ` ```svg ` | 【软】前后留文字锚点（图脱离上下文，检索命中也看不懂）|
+| demo 交互演示 | ` ```demo ` | 【硬】完整自包含 HTML 文档（零外部资源，禁 CDN/网络请求）；沙箱 iframe 渲染（脚本可跑、网络全禁、高≤450px）；整理链必须整块原样保留（summarizer/organizer 已点名），改一行就报废 |
 
 ---
 
