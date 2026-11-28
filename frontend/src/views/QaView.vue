@@ -629,6 +629,44 @@ function scrollBottom(): void {
   })
 }
 
+// ── 对话帧:每个提问一帧,右侧轨道点一下跳到那一轮(找历史内容不再滚轮考古) ──
+const frames = computed(() =>
+  messages.value
+    .map((m, i) => ({
+      i,
+      isUser: m.role === 'user',
+      snippet: m.content.replace(/\s+/g, ' ').slice(0, 40),
+    }))
+    .filter((f) => f.isUser),
+)
+/** 当前所在轮(滚动时算,朱砂高亮那一帧) */
+const nowFrame = ref(-1)
+
+function jumpToFrame(index: number): void {
+  const el = document.getElementById(`qa-leaf-${index}`)
+  if (el === null) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
+
+let frameScrollTimer: number | null = null
+function onWeaveScroll(): void {
+  if (frameScrollTimer !== null) return // 节流:120ms 算一次就够
+  frameScrollTimer = window.setTimeout(() => {
+    frameScrollTimer = null
+    const root = msgListEl.value
+    if (root === null) return
+    const rootBottom = root.getBoundingClientRect().bottom
+    let now = -1
+    for (const f of frames.value) {
+      const el = document.getElementById(`qa-leaf-${f.i}`)
+      if (el === null) continue
+      // 该轮提问已滚过视口下缘以上 → 它是「当前所在轮」;取最后一个满足的
+      if (el.getBoundingClientRect().top < rootBottom - 160) now = f.i
+    }
+    nowFrame.value = now
+  }, 120)
+}
+
 /** 会话 id 同步到 URL(?session=N):刷新/分享都能回到同一会话 */
 function syncSessionUrl(id: number | null): void {
   void router.replace({
@@ -659,12 +697,22 @@ async function openSession(id: number): Promise<void> {
     syncSessionUrl(id)
     loadDraft() // 恢复这个会话自己的输入草稿
     scrollBottom()
-    // 历史消息里可能有 mermaid 图 / SVG 插图
+    // 历史消息里可能有 mermaid 图 / SVG 插图。渲染器是异步的,渲染完会把列表撑高,
+    // 只调一次 scrollBottom 就被撑回中间(主人:每次打开会话都停在顶部,要自己滚到
+    // 最下面)——所以渲染完 + 双帧后各钉一次。渲染器对已渲染块幂等,重复调用安全。
     await nextTick()
     if (msgListEl.value !== null) {
-      void renderMermaidIn(msgListEl.value)
-      void renderMindmapsIn(msgListEl.value)
-      void renderSvgsIn(msgListEl.value)
+      await Promise.all([
+        renderMermaidIn(msgListEl.value),
+        renderMindmapsIn(msgListEl.value),
+        renderSvgsIn(msgListEl.value),
+      ])
+      await nextTick()
+      scrollBottom()
+      await new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      )
+      scrollBottom()
     }
   } catch (error) {
     // 旧会话可能已被保留策略清理(每用户只留最近 50 个;别的标签页里建新会话会顶掉它):
@@ -858,10 +906,11 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
           <p class="qa-empty-title">问点什么吧</p>
           <p class="qa-empty-sub">关于笔记库的问题,或任何想整理的资料</p>
         </div>
-        <div v-else ref="msgListEl" class="msg-weave">
+        <div v-else ref="msgListEl" class="msg-weave" @scroll.passive="onWeaveScroll">
           <!-- 单列对话流:问答同列按时间下行;问右对齐(朱砂缘),答通栏文章式 -->
           <div
             v-for="(m, i) in messages"
+            :id="`qa-leaf-${i}`"
             :key="m.id"
             class="leaf"
             :class="m.role === 'user' ? 'leaf--note' : 'leaf--answer'"
@@ -938,6 +987,20 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
             </template>
           </div>
         </div>
+
+        <!-- 对话帧:每个提问一枚帧点,点击跳到该轮;当前所在轮朱砂高亮。
+             钉在对话列右侧可视区(不随滚动),长会话找历史内容不再滚轮考古 -->
+        <nav v-if="frames.length >= 2" class="qa-frames" aria-label="对话帧导航">
+          <button
+            v-for="f in frames"
+            :key="f.i"
+            type="button"
+            class="qa-frame"
+            :class="{ 'qa-frame--now': f.i === nowFrame }"
+            :title="f.snippet"
+            @click="jumpToFrame(f.i)"
+          />
+        </nav>
 
         <p v-if="errorText !== ''" class="note note--error">{{ errorText }}</p>
 
@@ -1299,6 +1362,7 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
 /* 对话列限宽居中:长答案行宽 ~760px 是阅读舒适区,列在侧栏之外的剩余空间里居中,
    两侧对称留白(ChatGPT 式);空态/输入框/缓存行都随列同宽 */
 .chat-main {
+  position: relative; /* 对话帧轨道钉在这里(不随消息滚动) */
   display: flex;
   flex: 1;
   min-width: 0;

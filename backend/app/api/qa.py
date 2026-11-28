@@ -37,6 +37,7 @@ from app.repo.qa import KEEP_SESSIONS, QaRepo
 from app.service.llm import LLMClient, LLMError, estimate_tokens
 from app.service.llm.resolve import (
     resolve_agent_enabled,
+    resolve_llm_budgets,
     resolve_llm_config,
     resolve_nickname,
     resolve_tavily_key,
@@ -44,7 +45,6 @@ from app.service.llm.resolve import (
 from app.service.qa.agent import run_agent, run_agent_iter
 from app.service.qa.answerer import (
     _EMPTY_ANSWER,
-    DEFAULT_MAX_TOKENS,
     ContextHit,
     QaResult,
     answer,
@@ -392,6 +392,11 @@ async def _create_session_and_trim(repo: QaRepo, title: str, *, owner_id: int) -
 # 对外行为零变化(等价性基线见 tests/api/test_qa_equivalence.py,先于重构写、跑绿)。
 
 
+# 问答输出 token 兜底:与 organizer 的兜底同口径(131072 = 模型上限级,不预设模型表)。
+# 用户在设置页填 llm_max_output_tokens 则优先。max_tokens 只是上限,按实际用量计费。
+QA_OUTPUT_TOKENS_FALLBACK = 131072
+
+
 @dataclass
 class _ChatRound:
     """一轮问答的准备结果(``_prepare_chat_round`` 产出,两端点同源消费)。"""
@@ -415,6 +420,8 @@ class _ChatRound:
     tavily_key: str | None
     agent_enabled: bool
     nickname: str | None
+    # 本轮输出 token 上限:设置页 llm_max_output_tokens 优先,没配按模型上限级兜底
+    max_output_tokens: int
 
 
 async def _prepare_chat_round(
@@ -495,12 +502,19 @@ async def _prepare_chat_round(
         attachments=attachments,
         digest_summaries=digest_summaries,
     )
+    # 输出上限:设置页填了就用;没配走模型上限级兜底(131072,与 organizer 兜底同口径
+    # ——max_tokens 是上限不是目标,给大不增计费;网关/模型侧自行 clamp。主人 2026-11-28
+    # 拍板「不要默认固定,按模型上限来」;8000 固定值曾把带 SVG 的答案腰斩)。
+    _, budget_out = await resolve_llm_budgets(session, owner_id)
+    max_output_tokens = budget_out if budget_out else QA_OUTPUT_TOKENS_FALLBACK
+
     return _ChatRound(
         repo=repo,
         payload=payload,
         llm=llm,
         owner_id=owner_id,
         qa_session=qa_session,
+        max_output_tokens=max_output_tokens,
         window_msgs=window_msgs,
         digest_summaries=digest_summaries,
         history=history,
@@ -556,6 +570,7 @@ async def _answer_web_round(rnd: _ChatRound, web_results: list[dict[str, str]]) 
         answer_web,
         rnd.payload.question,
         web_results,
+        max_tokens=rnd.max_output_tokens,
         history=rnd.history,
         nickname=rnd.nickname,
         client=rnd.llm,
@@ -596,6 +611,7 @@ async def _kb_answer_full(rnd: _ChatRound, *, images: list[dict]) -> AsyncIterat
         answer,
         rnd.payload.question,
         rnd.kb_hits,
+        max_tokens=rnd.max_output_tokens,
         history=rnd.history,
         nickname=rnd.nickname,
         client=rnd.llm,
@@ -627,7 +643,7 @@ async def _stream_kb_answer(rnd: _ChatRound) -> AsyncIterator[dict]:
     usage_event: dict | None = None
     # 决策树流式与 agent 共用同一输出预算(单一真源):3000 会被 reasoning+SVG
     # 腰斩(2026-11-28 现场:10928 msg14 的 ```svg 截断在半截,前端只能按代码显示)
-    iterator = rnd.llm.chat_stream(rnd.messages, max_tokens=DEFAULT_MAX_TOKENS)
+    iterator = rnd.llm.chat_stream(rnd.messages, max_tokens=rnd.max_output_tokens)
     marker = False  # [NO_KB] = 笔记答不了,LLM 会给自身知识回答(不外发)
     buffered = ""
     streaming = False
@@ -843,6 +859,7 @@ async def chat(
             tavily_key=rnd.tavily_key,
             fallback_base_url=llm.base_url,
             fallback_api_key=llm.api_key,
+            max_output_tokens=rnd.max_output_tokens,
         )
 
     # 4.5) 工具链兜底(决策树,agent 关/agent 回落时走):前置联网预检(共享 _web_precheck)
@@ -968,6 +985,7 @@ async def chat_stream_endpoint(
                     tavily_key=rnd.tavily_key,
                     fallback_base_url=llm.base_url,
                     fallback_api_key=llm.api_key,
+                    max_output_tokens=rnd.max_output_tokens,
                     streaming=True,
                 ):
                     if ev["type"] == "status":

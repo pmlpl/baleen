@@ -1118,3 +1118,44 @@ a.sec-link {
 .np-cancel:hover:not(:disabled) {
   color: var(--accent);
 }
+
+/* 对话帧(views/QaView.vue):右侧消息轮次导航轨 —— 每个提问一枚帧点,
+   hover 显示该轮问题,点击平滑跳到该轮;当前所在轮朱砂高亮。
+   钉在 chat-main 可视区、不随消息滚动;两轮以下(帧点没有导航价值)不出现。 */
+.qa-frames {
+  position: absolute;
+  top: 34px;
+  right: 8px;
+  bottom: 170px;
+  display: flex;
+  width: 14px;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  overflow: hidden;
+  z-index: 4;
+}
+
+.qa-frame {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: var(--line-strong);
+  cursor: pointer;
+  transition:
+    background 0.15s ease,
+    transform 0.15s ease;
+}
+
+.qa-frame:hover {
+  background: var(--ink-3);
+  transform: scale(1.35);
+}
+
+.qa-frame--now {
+  background: var(--seal);
+  transform: scale(1.2);
+}

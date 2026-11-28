@@ -32,10 +32,12 @@ HISTORY_MAX_MESSAGES = 200
 HISTORY_TOKEN_BUDGET = 200000  # 1M 上下文:安全网提到 200K(冻结阈值 100K,留余量兜底)
 # reasoning 模型会先吃 token 思考,completion 预算要留够(reasoning + 答案)。
 # 3000 的现场(2026-11-28,会话 10928 msg14):答案=表格+两节正文+```svg 工作流图,
-# SVG 标记碎片化极耗 token,reasoning 再烧一大块 → 输出到 1971 字符被硬截断,
-# 围栏没闭合、SVG 没有 </svg>,前端只能按代码块显示(主人报「没渲染成图」)。
-# 8000 = reasoning(~1-2K)+ 千字正文 + 完整 SVG(~4K)的余量;再大由用户设置页配。
-DEFAULT_MAX_TOKENS = 8000
+# SVG 标记碎片化极耗 token,reasoning 再烧一大块 → 输出到 1971 字符被硬截断。
+# 主人 2026-11-28 拍板「不要默认固定,按模型上限来」:兜底改成**模型上限级 131072**
+# (与 organizer 兜底同口径,网关/模型侧自行 clamp;max_tokens 是上限不是目标,
+# 按实际用量计费)。设置页 llm_max_output_tokens 填了则优先(接入点在 api/qa.py
+# 的 _ChatRound)。这个默认值只在测试/调用方没传时生效。
+DEFAULT_MAX_TOKENS = 131072
 # 用户引用的笔记(@某篇):单篇 token 上限(引用是「在问什么」的信号,整篇太长就截头部)
 REF_NOTE_TOKEN_BUDGET = 3000
 # 对话附件(用户临时上传给 AI 看的参考文件,不入库):单文件 token 上限

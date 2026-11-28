@@ -228,6 +228,7 @@ async def run_agent_iter(
     step_timeout: float = AGENT_STEP_TIMEOUT,
     time_budget_s: float = AGENT_TIME_BUDGET_S,
     web_search: Callable[..., list[dict[str, str]]] | None = None,
+    max_output_tokens: int = DEFAULT_MAX_TOKENS,
     streaming: bool = False,
 ) -> AsyncIterator[dict]:
     """agent loop:首轮消息(与现状字节一致)→ 脑选工具/直接答 → 出口校验。
@@ -297,7 +298,7 @@ async def run_agent_iter(
                 # 流式步:chat_stream 驱动(与非流式等价,最终答案边生成边放行)
                 iterator = client.chat_stream(
                     messages,
-                    max_tokens=DEFAULT_MAX_TOKENS,
+                    max_tokens=max_output_tokens,
                     temperature=DEFAULT_TEMPERATURE,
                     tools=tools,
                     tool_choice="auto",
@@ -334,7 +335,7 @@ async def run_agent_iter(
                 chat = await asyncio.to_thread(
                     client.chat,
                     messages,
-                    max_tokens=DEFAULT_MAX_TOKENS,
+                    max_tokens=max_output_tokens,
                     temperature=DEFAULT_TEMPERATURE,
                     tools=tools,
                     tool_choice="auto",
@@ -523,7 +524,7 @@ async def run_agent_iter(
                 repair = await asyncio.to_thread(
                     client.chat,
                     messages,
-                    max_tokens=DEFAULT_MAX_TOKENS,
+                    max_tokens=max_output_tokens,
                     temperature=DEFAULT_TEMPERATURE,
                     timeout=_step_timeout(),
                 )
@@ -607,6 +608,7 @@ async def run_agent(
     step_timeout: float = AGENT_STEP_TIMEOUT,
     time_budget_s: float = AGENT_TIME_BUDGET_S,
     web_search: Callable[..., list[dict[str, str]]] | None = None,
+    max_output_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> QaResult | None:
     """非流式消费:吃掉 run_agent_iter 的全部事件,只返回最终 QaResult(None=回落)。
 
@@ -634,6 +636,7 @@ async def run_agent(
         step_timeout=step_timeout,
         time_budget_s=time_budget_s,
         web_search=web_search,
+        max_output_tokens=max_output_tokens,
         streaming=False,
     ):
         if ev["type"] == "result":
