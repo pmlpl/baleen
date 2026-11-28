@@ -863,7 +863,8 @@ def test_same_scene_dual_candidates_keep_latest(monkeypatch, tmp_path) -> None:
 
     out, stats = transcribe_frames(frames, client=FakeClient())
     assert len(out) == 1
-    assert stats.kept == 3  # kept 计数在择优前(双候选都过筛即计入),终态以 out 为准
+    assert stats.kept == 1  # kept=终态存活(同场景择优后真正进笔记的张数)
+    assert stats.dropped == 2  # 择优丢弃的另两个候选计入筛除
     assert out[0].timestamp == 142.5  # 留最后(95% 点,画面最稳定)
     assert out[0].scene_idx == 7
 
@@ -1245,3 +1246,102 @@ def test_pipeline_stage_failure_marks_video_log(db_scope, tmp_path: Path, monkey
         assert "AI 整理失败" in stages[-1], stages[-1]
 
     asyncio.run(db_scope(scenario))
+
+
+# ---------- 帧判定跨帧记忆 + 去重兜底（2026-11-28,11876/12148 冗余帧教训）----------
+
+
+def test_frame_prompt_has_three_hard_rules() -> None:
+    """判定 prompt 必须带三条硬规则:装饰动画/遮挡/跨帧重复(12148 十张无用帧的病根)。"""
+    from app.service.video_extractor import _FRAME_TRANSCRIBE_PROMPT
+
+    assert "纯装饰动画/B-roll" in _FRAME_TRANSCRIBE_PROMPT
+    assert "不算画面内容" in _FRAME_TRANSCRIBE_PROMPT  # 字幕/大字 ≠ 画面知识
+    assert "被遮挡" in _FRAME_TRANSCRIBE_PROMPT  # 遮挡帧宁丢不收
+    assert "已保留帧重复" in _FRAME_TRANSCRIBE_PROMPT  # 跨帧冗余
+    # v28「讲解动画有图形结构就 high」的口子必须收紧——B-roll 就是从这钻进去的
+    assert "讲解动画的完整关键帧" not in _FRAME_TRANSCRIBE_PROMPT
+
+
+def test_frame_judge_memory_context_grows(monkeypatch, tmp_path) -> None:
+    """已保留帧清单逐帧累积进判定消息(硬规则 c 的依据);不同描述互不为重复。"""
+    from PIL import Image
+
+    import app.service.media as media_module
+    from app.service.video_extractor import transcribe_frames
+
+    monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
+    frames = []
+    for j, ts in enumerate((10.0, 20.0, 30.0)):
+        p = tmp_path / f"m{j}.jpg"
+        Image.new("RGB", (16, 16), (j * 120, 0, 0)).save(p)  # 纯色图:签名全同,靠描述闸区分
+        frames.append((ts, p, -1))
+
+    descs = ["网格架构图", "柱状统计图", "命令行终端截图"]
+    seen_messages: list[str] = []
+
+    class FakeClient:
+        def __init__(self):
+            self.i = 0
+
+        def chat(self, messages, **_kw):
+            from types import SimpleNamespace
+
+            text_part = messages[0]["content"][0]["text"]
+            seen_messages.append(text_part)
+            r = f"INFO: high\n\nTEXT_LAYER:\n无\n\nDESC:\n{descs[self.i]}"
+            self.i += 1
+            return SimpleNamespace(content=r)
+
+    out, stats = transcribe_frames(frames, client=FakeClient())
+    assert len(out) == 3  # 描述不同 → 三信号不齐 → 去重兜底不触发
+    assert stats.kept == 3
+    # 第 1 帧没有记忆;第 2 帧看见第 1 帧;第 3 帧看见前两帧
+    assert "网格架构图" not in seen_messages[0]  # 第 1 帧判定时还没有任何记忆
+    assert "网格架构图" in seen_messages[1]
+    assert "网格架构图" in seen_messages[2] and "柱状统计图" in seen_messages[2]
+
+
+def test_cross_frame_dedup_keeps_first_of_same_content(monkeypatch, tmp_path) -> None:
+    """VLM 判 high 但内容重复 → 双哈希+描述三信号兜底丢后到帧,保首见。
+
+    同内容对(同色纯色图+同描述)判重;不同内容(渐变图+不同描述)必须存活——
+    防止去重误杀(10↔21 假阳性教训:哈希近不等于内容同)。
+    """
+    from PIL import Image
+
+    import app.service.media as media_module
+    from app.service.video_extractor import transcribe_frames
+
+    monkeypatch.setattr(media_module, "MEDIA_ROOT", tmp_path / "media")
+    p1 = tmp_path / "d1.jpg"
+    Image.new("RGB", (24, 24), (60, 60, 60)).save(p1)  # 纯色 → dHash=pHash=0
+    p2 = tmp_path / "d2.jpg"
+    Image.new("RGB", (24, 24), (60, 60, 60)).save(p2)  # 与 d1 完全同图
+    p3 = tmp_path / "d3.jpg"
+    grad = Image.new("L", (2, 1))
+    grad.putpixel((0, 0), 0)
+    grad.putpixel((1, 0), 255)
+    grad.resize((24, 24)).convert("RGB").save(p3)  # 水平渐变 → dHash 全 1,与纯色距离 64
+
+    frames = [(100.0, p1, -1), (200.0, p2, -1), (300.0, p3, -1)]
+
+    class FakeClient:
+        def __init__(self):
+            self.i = 0
+
+        def chat(self, _messages, **_kw):
+            from types import SimpleNamespace
+
+            desc = [
+                "Text encoder 与 Image encoder 示意图",
+                "Text encoder 与 Image encoder 示意图",
+                "出图对比图：有负面词 vs 无负面词",
+            ][self.i]
+            self.i += 1
+            return SimpleNamespace(content=f"INFO: high\n\nTEXT_LAYER:\n无\n\nDESC:\n{desc}")
+
+    out, stats = transcribe_frames(frames, client=FakeClient())
+    assert [f.timestamp for f in out] == [100.0, 300.0]  # 首见保留,200s 判重丢弃
+    assert stats.kept == 2 and stats.dropped == 1
+    assert out[0].alt == "Text encoder 与 Image encoder 示意图"

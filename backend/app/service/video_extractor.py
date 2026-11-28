@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import base64
+import io
 import json
 import logging
 import re
@@ -80,8 +81,8 @@ class FrameStats:
     11876 教训：视觉网关挂了 30 帧全异常跳过，日志只含糊说「筛除或失败」，无从定性）。"""
 
     candidates: int = 0  # 进入视觉筛选的候选帧数（=transcribe_frames 收到的 frames 数）
-    kept: int = 0  # 存活并嵌入笔记
-    dropped: int = 0  # INFO 筛除（模型判定画面与知识无关，属正常）
+    kept: int = 0  # 终态存活进笔记（经同场景择优+跨帧去重）
+    dropped: int = 0  # 判定筛除总数（VLM 判 low + 同场景择优 + 跨帧去重兜底,均属「判定不要」）
     failed: int = 0  # 视觉调用/解析异常（网络问题会表现为全部 failed）
     timed_out: int = 0  # 总时限截断，未处理的剩余帧
 
@@ -690,10 +691,22 @@ _FRAME_TRANSCRIBE_PROMPT = (
     "1. 【知识相关性】判断这个画面该不该放进笔记（标准是「画面是否承载正文讲解的"
     "知识内容」，不是「画面里有没有字」）：\n"
     "   - high：画面承载知识——代码、命令行、幻灯片要点、表格、图表、架构图、流程示意、"
-    "软件操作/演示界面、讲解动画的完整关键帧（有图形结构或文字标注的动画画面）\n"
+    "软件操作/演示界面、正在讲解的知识内容本身的示意图/动画关键帧\n"
     "   - low：与知识无关——互动引导画面（点赞/收藏/关注/一键三连/评论区）、搜索框/"
     "地址栏自动补全、片头片尾包装、纯人物口播的特写（**即使画面有字幕，字幕内容口播里"
     "已经说了**）、转场动画的过渡帧、表情包/梗图、纯黑屏/纯标题卡\n"
+    "   - low 三条硬规则（2026-11-28 补,先于上面的一般标准）：\n"
+    "     a. **纯装饰动画/B-roll**：抽象 3D 渲染、氛围场景、运镜空镜等与正在讲解的"
+    "软件或知识点无直接关系的画面——**画面里的字幕和叠加大字不算画面内容**"
+    "（字幕是口播的转录,不是画面知识）；\n"
+    "     b. **关键内容被遮挡**：鼠标/手势/弹窗/动效大面积挡住主体,或主体上的关键"
+    "文字不可读——被挡住的帧救不回来,宁可丢弃；\n"
+    "     c. **与已保留帧重复**：若消息附有【已保留的帧】清单,本帧与其中的某一张"
+    "是**同一张图/同一张幻灯片/同一张示意图**（内容完全相同,仅多强调性手绘圈划/箭头"
+    "也算重复）,且没有新增可读信息（新标注内容/新状态/新数值/新结果）"
+    "——同一段知识内容只值一张帧。**注意:同一软件界面的不同操作状态不算重复**"
+    "（同一工作流改了参数、输入了不同提示词、展示了不同结果,画面相似但内容变了"
+    "就是新信息;判定时对照各帧的「画面文字」差异）。\n"
     "2. 【逐字转录】画面里如果有代码/命令行/终端/幻灯片文字/表格，逐字转录出来，"
     "严格保留缩进、符号、大小写、表格结构，不要改写或修正，不要添加解释。"
     "是代码就用代码块包裹（标注语言，如 ```python）；表格用 markdown 表格；是纯文字就直接给。\n"
@@ -712,6 +725,96 @@ _FRAME_DESC_ONLY_PROMPT = (
     "软件界面截图（说明是什么软件和页面）、幻灯片（说明标题）、白板（说明画了什么）。"
     "只输出这一句话，不要解释。"
 )
+
+
+def _image_hashes(raw: bytes) -> tuple[int, int]:
+    """帧内容签名 (dHash, pHash)，都裁底部 25%（避开字幕条，同 _dedup_by_dhash 口径）。
+
+    pHash 用纯 Python DCT-II（32x32 灰度取左上 8x8 低频系数做中位数阈值）——Pillow
+    已装、无新依赖。dHash 对整体渐变敏感，pHash 对局部改动（红笔圈划）更稳，两把尺
+    互补。cos 表预计算，避免逐系数重算三角函数（64 系数 × 1024 像素纯 Python 也够快）。
+    """
+    from math import cos, pi, sqrt
+
+    from PIL import Image
+
+    N = 32
+    with Image.open(io.BytesIO(raw)) as img:
+        w, h = img.size
+        gray = img.crop((0, 0, w, max(1, int(h * 0.75)))).convert("L")
+        px = list(gray.resize((9, 8)).tobytes())
+        g32 = list(gray.resize((N, N)).tobytes())
+    d = 0
+    for row in range(8):
+        for col in range(8):
+            idx = row * 9 + col
+            if px[idx] > px[idx + 1]:
+                d |= 1 << (row * 8 + col)
+    mat = [[g32[y * N + x] for x in range(N)] for y in range(N)]
+    cos_x = [[cos((2 * x + 1) * u * pi / (2 * N)) for u in range(8)] for x in range(N)]
+    cos_y = [[cos((2 * y + 1) * v * pi / (2 * N)) for v in range(8)] for y in range(N)]
+    coeffs = [0.0] * 64
+    for x in range(N):
+        cx = cos_x[x]
+        row_px = mat[x]
+        for y in range(N):
+            v0 = row_px[y]
+            if not v0:
+                continue
+            cy = cos_y[y]
+            for u in range(8):
+                f = v0 * cx[u]
+                base = u * 8
+                for v in range(8):
+                    coeffs[base + v] += f * cy[v]
+    scaled = []
+    for i, c in enumerate(coeffs):
+        u, v = divmod(i, 8)
+        cu = sqrt(1 / N) if u == 0 else sqrt(2 / N)
+        cv = sqrt(1 / N) if v == 0 else sqrt(2 / N)
+        scaled.append(c * cu * cv)
+    med = sorted(scaled)[32]
+    p = 0
+    for i, c in enumerate(scaled):
+        if c > med:
+            p |= 1 << i
+    return d, p
+
+
+def _dedupe_kept_frames(
+    results: list[FrameContent], sigs: dict[int, tuple[int, int]]
+) -> tuple[list[FrameContent], int]:
+    """跨帧内容去重兜底（2026-11-28）：VLM 判定难免漏网，产出后机械复核。
+
+    三信号同时命中才判重复——阈值用 p03 实测 21 帧标定：同 UI 布局不同内容的工作流
+    截图 dHash 距离可低至 7，纯哈希会误杀好帧，所以必须再过描述词面相似度闸。
+    同组保留时间最早的一帧（与跨帧记忆判定同向：首见帧已进记忆清单，后续重复帧
+    在判定阶段就该被拦；兜底只收拾漏网的）。
+    """
+    from difflib import SequenceMatcher
+
+    if len(results) <= 1:
+        return results, 0
+    kept: list[FrameContent] = []
+    kept_sigs: list[tuple[int, int, str]] = []
+    dropped = 0
+    for fc in sorted(results, key=lambda f: f.timestamp):
+        d, p = sigs.get(id(fc), (0, 0))
+        alt = fc.alt or ""
+        dup = any(
+            _hamming(d, kd) <= 10
+            and _hamming(p, kp) <= 10
+            and SequenceMatcher(None, alt, kalt).ratio() >= 0.5
+            for kd, kp, kalt in kept_sigs
+        )
+        if dup:
+            dropped += 1
+            continue
+        kept.append(fc)
+        kept_sigs.append((d, p, alt))
+    if dropped:
+        log.info("跨帧内容去重兜底：同内容帧再丢 %d 张", dropped)
+    return kept, dropped
 
 
 def transcribe_frames(
@@ -742,6 +845,10 @@ def transcribe_frames(
     results: list[FrameContent] = []
     started = _time.monotonic()
     kept = dropped = failed = 0
+    # 跨帧冗余判定（2026-11-28）：已保留帧的「时间戳+描述」随判定逐帧累积,让模型
+    # 看得见之前收过什么（硬规则 c 的依据）;签名表供产出后的双哈希兜底去重。
+    kept_notes: list[str] = []
+    sigs: dict[int, tuple[int, int]] = {}
     for frame in frames:
         timestamp, frame_path = frame[0], frame[1]
         scene_idx = frame[2] if len(frame) > 2 else -1
@@ -757,11 +864,18 @@ def transcribe_frames(
                 "image_url": {"url": f"data:image/jpeg;base64,{b64}"},
             }
 
+            prompt = _FRAME_TRANSCRIBE_PROMPT
+            if kept_notes:
+                prompt += (
+                    "\n\n【已保留的帧】(时间戳+画面内容)：\n"
+                    + "\n".join(kept_notes)
+                    + "\n本帧若与上面某帧是同一画面且无新增可读信息,按硬规则 c 判 low。"
+                )
             chat = client.chat(
                 [
                     {
                         "role": "user",
-                        "content": [{"type": "text", "text": _FRAME_TRANSCRIBE_PROMPT}, image_part],
+                        "content": [{"type": "text", "text": prompt}, image_part],
                     }
                 ],
                 temperature=0.0,
@@ -791,21 +905,27 @@ def transcribe_frames(
                 )
                 desc = chat2.content.strip()[:300]
             media_key = store_media(raw, "")  # 只给留下的信息帧存字节
-            kept += 1
-            results.append(
-                FrameContent(
-                    timestamp=timestamp,
-                    alt=desc or "画面截图",
-                    text_layer=text_layer,
-                    media_key=media_key,
-                    scene_idx=scene_idx,
-                )
+            fc = FrameContent(
+                timestamp=timestamp,
+                alt=desc or "画面截图",
+                text_layer=text_layer,
+                media_key=media_key,
+                scene_idx=scene_idx,
             )
+            sigs[id(fc)] = _image_hashes(raw)
+            # 记忆条目带「画面文字」摘要:同 UI 不同状态(改参数/换提示词)靠它区分,
+            # 否则判定只看到「工作流界面截图」这种粗描述,会把不同状态误判成重复
+            tl_flat = " ".join((text_layer or "").split())
+            tl_note = f"；画面文字:{tl_flat[:60]}" if tl_flat and tl_flat != "无" else ""
+            kept_notes.append(f"- {_format_timestamp(timestamp)} {fc.alt}{tl_note}")
+            kept += 1
+            results.append(fc)
         except Exception:
             failed += 1  # 单帧失败跳过（不丢其他帧）；计数留痕供全灭时定性
 
     # 同场景双候选都存活 → 只留时间靠后的一帧（后段画面更可能已稳定）。
     # scene_idx=-1（无场景信息/旧调用方）不参与分组,原样保留。
+    judge_survivors = len(results)  # VLM 判 high 的张数（择优/去重前）
     grouped = [fc for fc in results if fc.scene_idx >= 0]
     if grouped:
         by_scene: dict[int, FrameContent] = {}
@@ -819,21 +939,24 @@ def transcribe_frames(
             )
             log.info("同场景双候选择优：%d → %d 帧", len(grouped), len(by_scene))
 
-    if dropped or failed:
-        log.info(
-            "帧筛选/提取：保留 %d / 筛除 %d / 失败 %d / 超时截断 %d",
-            kept,
-            dropped,
-            failed,
-            max(len(frames) - kept - dropped - failed, 0),
-        )
+    # 跨帧内容去重兜底（2026-11-28）：记忆判定是主闸,双哈希+描述三信号收拾漏网
+    results, dup_dropped = _dedupe_kept_frames(results, sigs)
+
     stats = FrameStats(
         candidates=len(frames),
-        kept=kept,
-        dropped=dropped,
+        kept=len(results),  # 终态存活（经同场景择优+跨帧去重,真正进笔记的张数）
+        dropped=dropped + (judge_survivors - len(results)),  # 判定筛除总数
         failed=failed,
-        timed_out=max(len(frames) - kept - dropped - failed, 0),
+        timed_out=max(len(frames) - judge_survivors - dropped - failed, 0),
     )
+    if stats.dropped or stats.failed:
+        log.info(
+            "帧筛选/提取：保留 %d / 筛除 %d / 失败 %d / 超时截断 %d",
+            stats.kept,
+            stats.dropped,
+            stats.failed,
+            stats.timed_out,
+        )
     return results, stats
 
 
