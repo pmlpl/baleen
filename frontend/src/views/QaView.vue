@@ -1027,6 +1027,12 @@ function onAnswerClick(m: ChatMessage, event: MouseEvent): void {
           <span v-if="thinkingSec >= 15" class="thinking-hint">（模型较慢，最长可能需要 2 分钟）</span>
         </p>
 
+        <!-- 存笔记两段 LLM(提炼主题/生成笔记)的加载反馈,与思考中同一习语 -->
+        <p v-if="planningNote || executingNote" class="thinking-strip muted" aria-live="polite">
+          <span class="thinking">{{ planningNote ? '正在提炼可整理的主题' : '正在生成笔记' }}</span>
+          <span class="thinking-dots" aria-hidden="true">…</span>
+        </p>
+
         <!-- 交互式存笔记:选项卡取代输入框(最后一个选项是自己输入) -->
         <div v-if="notePlan !== null" class="note-plan card">
           <p class="np-title">
