@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <title>设计稿试验台 · 流程图表现形态</title>
+    <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5/400.css" />
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/noto-serif-sc@5/700.css" />
+    <style>
+      /* 纸墨 token —— 与 styles.css :root 同值,独立一份供试验台使用 */
+      :root {
+        --bg: #f4f2ec;
+        --bg-soft: #ece9e0;
+        --panel: #fffdf8;
+        --ink: #211f1c;
+        --ink-2: #5f594e;
+        --ink-3: #9c9484;
+        --line: #e6e1d3;
+        --line-strong: #d8d2c2;
+        --accent: #3d5a73;
+        --accent-soft: #e8eef2;
+        --seal: #b03a2e;
+        --seal-soft: #f7ebe8;
+        --serif: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 28px 40px 80px;
+        background: var(--bg);
+        color: var(--ink);
+        font-family: var(--serif);
+      }
+      h1 { font-size: 20px; font-weight: 700; margin: 0 0 4px; }
+      .lede { color: var(--ink-2); font-size: 13px; margin: 0 0 28px; }
+      section { margin-bottom: 44px; }
+      .dataset-title {
+        display: inline-block;
+        font-size: 15px;
+        font-weight: 700;
+        padding: 3px 12px;
+        border-radius: 999px;
+        background: var(--bg-soft);
+        margin-bottom: 18px;
+      }
+      .variant { margin: 0 0 30px; padding: 18px 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+      .variant > h3 { font-size: 13.5px; margin: 0 0 4px; }
+      .variant > p.note { font-size: 12px; color: var(--ink-3); margin: 0 0 14px; }
+      .badge {
+        display: inline-block;
+        font-size: 11px;
+        padding: 1px 8px;
+        border-radius: 999px;
+        margin-left: 8px;
+        vertical-align: 1px;
+      }
+      .badge--new { background: var(--seal-soft); color: var(--seal); }
+      .badge--cur { background: var(--bg-soft); color: var(--ink-3); }
+
+      /* ---- 现状(方案 D)外观,与 styles.css 的 .mermaid-figure--graphviz 同值 ---- */
+      .now-box {
+        display: flex; width: fit-content; max-width: 100%;
+        margin: 0 auto; padding: 8px;
+        border: 1px solid var(--line); border-radius: 8px;
+        background: var(--panel);
+      }
+      .now-box svg { max-width: 100%; height: auto; max-height: 420px; }
+      .now-box .node polygon, .now-box .node path, .now-box .node ellipse { stroke: var(--ink-2); stroke-width: 1.2; }
+      .now-box .edge path, .now-box .edge polygon { stroke: var(--line-strong); fill: var(--line-strong); }
+      .now-box text { fill: var(--ink); font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif; }
+
+      /* ---- 方案 B:稿件步骤条 ---- */
+      .stepper { max-width: 560px; margin: 0 auto; position: relative; padding-left: 6px; }
+      .stepper .spine {
+        position: absolute; left: 19px; top: 14px; bottom: 26px;
+        width: 2px; background: var(--line-strong);
+      }
+      .step { position: relative; display: flex; gap: 14px; padding: 0 0 20px; }
+      .step:last-child { padding-bottom: 0; }
+      .seal-no {
+        flex: 0 0 auto;
+        width: 28px; height: 28px;
+        display: flex; align-items: center; justify-content: center;
+        border-radius: 7px;
+        background: var(--seal-soft); color: var(--seal);
+        font-weight: 700; font-size: 13px;
+        box-shadow: 0 1px 0 rgba(45, 40, 32, 0.06);
+        position: relative; z-index: 1;
+      }
+      .step--end .seal-no { background: var(--seal); color: #fffdf8; }
+      .step-body { flex: 1; padding-top: 3px; }
+      .step-title { font-size: 15px; font-weight: 700; line-height: 1.35; }
+      .step-sub { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; line-height: 1.5; }
+      .step--end .step-body {
+        background: var(--seal-soft); border: 1px dashed rgba(176, 58, 46, 0.35);
+        border-radius: 10px; padding: 9px 13px 10px; margin-top: -6px;
+      }
+      .branches { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+      .branch {
+        display: flex; align-items: flex-start; gap: 8px;
+        border-left: 2px solid var(--line-strong);
+        padding: 2px 0 2px 10px; margin-left: 5px;
+      }
+      .branch-tag {
+        flex: 0 0 auto; font-size: 11px; color: var(--accent-ink);
+        background: var(--accent-soft); border-radius: 999px; padding: 2px 9px;
+        margin-top: 2px;
+      }
+      .branch-text { font-size: 13.5px; line-height: 1.5; }
+      .branch-text small { display: block; color: var(--ink-2); font-size: 12px; }
+
+      /* ---- 方案 C:管道胶囊 ---- */
+      .pipeline { max-width: 680px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+      .pipe-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+      .chip {
+        display: inline-flex; align-items: center;
+        padding: 7px 14px;
+        background: var(--panel);
+        border: 1px solid var(--line-strong);
+        border-radius: 999px;
+        font-size: 13.5px;
+        line-height: 1.3;
+      }
+      .chip small { color: var(--ink-2); font-size: 11.5px; margin-left: 6px; }
+      .chip--decision { border-style: dashed; border-color: var(--accent); color: var(--accent-ink); background: var(--accent-soft); }
+      .chip--end { background: var(--seal-soft); border-color: rgba(176, 58, 46, 0.4); color: var(--seal); }
+      .pipe-arrow { color: var(--ink-3); font-size: 14px; }
+      .pipe-fork {
+        color: var(--ink-3); font-size: 12px;
+        display: flex; align-items: center; gap: 8px; margin: 0 0 0 12px;
+      }
+      .pipe-indent { margin-left: 34px; }
+
+      .fig-mount svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+      .err { color: var(--seal); font-size: 13px; }
+    </style>
+  </head>
+  <body>
+    <h1>设计稿试验台 · 流程图表现形态</h1>
+    <p class="lede">
+      数据 = 会话 10928 的两条真实答案(AI 漫剧·线性 / ComfyUI·分支)。
+      方案 A/B/C 为新方向,D 为现状对照。此页仅供设计评审,手动访问,不进 build。
+    </p>
+
+    <section id="sec-aidrama">
+      <span class="dataset-title">数据① 线性流程 · AI 漫剧(6 步)</span>
+      <div class="variant" id="aidrama-ink"><h3>方案 A · 宣纸墨稿<span class="badge badge--new">rough.js 手绘</span></h3><p class="note">Graphviz WASM 算坐标(不变),笔画全部用 rough.js 重描:抖动墨线 + 宣纸填面 + 朱砂端点</p><div class="fig-mount"></div></div>
+      <div class="variant" id="aidrama-step"><h3>方案 B · 稿件步骤条<span class="badge badge--new">无画布</span></h3><p class="note">不要图:朱砂序号章 + 墨线主轴,像文章的一部分;天然响应式,永不塌</p><div class="stepper"></div></div>
+      <div class="variant" id="aidrama-pipe"><h3>方案 C · 管道胶囊</h3><p class="note">短流程压缩成一行行胶囊,极省空间</p><div class="pipeline"></div></div>
+      <div class="variant" id="aidrama-now"><h3>现状对照<span class="badge badge--cur">D</span></h3><div class="now-box fig-mount"></div></div>
+    </section>
+
+    <section id="sec-comfy">
+      <span class="dataset-title">数据② 分支流程 · ComfyUI(菱形分叉)</span>
+      <div class="variant" id="comfy-ink"><h3>方案 A · 宣纸墨稿<span class="badge badge--new">rough.js 手绘</span></h3><p class="note">菱形判断节点给黛青底,起止给朱砂,普通节点宣纸白</p><div class="fig-mount"></div></div>
+      <div class="variant" id="comfy-step"><h3>方案 B · 稿件步骤条<span class="badge badge--new">无画布</span></h3><p class="note">分支 = 步骤下挂两行支线,支线带黛青标签</p><div class="stepper"></div></div>
+      <div class="variant" id="comfy-pipe"><h3>方案 C · 管道胶囊</h3><p class="note">分叉 = 虚线判断胶囊下两行支线</p><div class="pipeline"></div></div>
+      <div class="variant" id="comfy-now"><h3>现状对照<span class="badge badge--cur">D</span></h3><div class="now-box fig-mount"></div></div>
+    </section>
+
+    <script type="module">
+      import rough from 'roughjs'
+      import { mermaidFlowchartToDot } from '/src/utils/mermaidToDot.ts'
+      import { renderDotToSvg } from '/src/utils/viz.ts'
+
+      const SVGNS = 'http://www.w3.org/2000/svg'
+
+      // ── 真实数据(会话 10928) ──
+      const AIDRAMA = `flowchart TD
+    A[小说/大纲] --> B[LLM 拆分镜<br/>Gemini/Claude/GPT/豆包]
+    B --> C[角色三视图 + 场景图<br/>Seedream / Nano Banana Pro / GPT Image]
+    C --> D[图生视频<br/>可灵3.0 / Seedance 2.0 / 海螺 / Vidu]
+    D --> E[配音配乐 + 剪映]
+    E --> F[成片投放]`
+
+      const COMFY = `flowchart TD
+    A[ComfyUI 画布] --> B{第三方服务在哪}
+    B -->|官方已接入| C[API / Partner 节点<br/>登录买积分直接连]
+    B -->|没接入| D[自定义节点 或 HTTP 请求脚本<br/>自己写 fetch/axios]
+    C --> E[结果回画布继续下一个节点]
+    D --> E`
+
+      // ── 共用:Graphviz 出几何 ──
+      async function graphvizSvg(src) {
+        return renderDotToSvg(mermaidFlowchartToDot(src))
+      }
+
+      // ── 方案 A:宣纸墨稿(rough.js 重描 Graphviz 几何) ──
+      // 参考:draw.io rough 风格 / mermaid v11 look:handDrawn 的同源思路 —— 布局坐标
+      // 来自确定性引擎,笔画层用 rough.js 抖动重画,得到「宣纸上的手绘稿」。
+      const INK = {
+        stroke: '#5f594e',      // 淡墨描边
+        edge: '#8f8677',        // 更淡一档的墨(连线)
+        paper: '#fffdf8',       // 节点宣纸面
+        decision: '#e8eef2',    // 菱形判断:黛青底
+        endpoint: '#f7ebe8',    // 起点/终点:朱砂纸
+        text: '#211f1c',
+      }
+
+      function inkSketch(svgStr, mount, seedBase = 7) {
+        const doc = new DOMParser().parseFromString(svgStr, 'image/svg+xml')
+        const src = doc.documentElement
+
+        const out = document.createElementNS(SVGNS, 'svg')
+        out.setAttribute('viewBox', src.getAttribute('viewBox'))
+        out.setAttribute('width', src.getAttribute('width'))
+        out.setAttribute('height', src.getAttribute('height'))
+
+        // 关键:Graphviz 在根 <g> 上有 translate(把负坐标平移进 viewBox),丢掉它
+        // 所有笔画会画到 viewBox 外被裁成空白(踩过:截图全白,svg 却有尺寸)。
+        const rootG = document.createElementNS(SVGNS, 'g')
+        const srcRoot = src.querySelector(':scope > g')
+        if (srcRoot) rootG.setAttribute('transform', srcRoot.getAttribute('transform') || '')
+        out.appendChild(rootG)
+        const rc = rough.svg(out)
+
+        // 端点判定:边 title 形如 "A->B"。起点=只出不进,终点=只进不出。
+        // 注意必须**分开**统计出入度:出-入 合并算会误判(2 出 1 入 = 1,撞上"只出不进")
+        const outdeg = {}
+        const indeg = {}
+        for (const g of src.querySelectorAll('g.edge')) {
+          const t = (g.querySelector('title')?.textContent || '').trim()
+          const m = /^(.+?)->(?:<.+?>)?(.+)$/.exec(t)
+          if (m) {
+            outdeg[m[1]] = (outdeg[m[1]] || 0) + 1
+            indeg[m[2]] = (indeg[m[2]] || 0) + 1
+          }
+        }
+
+        // 先画边(在节点下层)。rough.js 的 rc.xxx 只返回节点、**不自动插入**,必须手动 append
+        let seed = seedBase
+        for (const g of src.querySelectorAll('g.edge')) {
+          const p = g.querySelector('path')
+          if (p) {
+            rootG.appendChild(rc.path(p.getAttribute('d'), {
+              stroke: INK.edge, strokeWidth: 1.3,
+              roughness: 1.9, bowing: 1.6, seed: seed++,
+            }))
+          }
+          const head = g.querySelector('polygon')
+          if (head) {
+            head.setAttribute('fill', INK.edge)
+            head.setAttribute('stroke', INK.edge)
+            rootG.appendChild(head.cloneNode(true))
+          }
+          for (const t of g.querySelectorAll('text')) {
+            const c = t.cloneNode(true)
+            c.setAttribute('fill', INK.stroke)
+            c.setAttribute('font-family', 'Noto Serif SC, Songti SC, serif')
+            rootG.appendChild(c)
+          }
+        }
+
+        // 再画节点(盖住边的端头)
+        for (const g of src.querySelectorAll('g.node')) {
+          const id = (g.querySelector('title')?.textContent || '').trim()
+          const od = outdeg[id] || 0
+          const idg = indeg[id] || 0
+          const isEndpoint = (od > 0 && idg === 0) || (idg > 0 && od === 0)
+          const poly = g.querySelector('polygon')
+          const ell = g.querySelector('ellipse')
+          const opts = {
+            fill: isEndpoint ? INK.endpoint : INK.paper,
+            fillStyle: 'solid',
+            stroke: INK.stroke,
+            strokeWidth: 1.3,
+            roughness: 1.7,
+            bowing: 1.4,
+            seed: seed++,
+          }
+          if (poly) {
+            const pts = poly
+              .getAttribute('points')
+              .trim()
+              .split(/\s+/)
+              .map((pair) => pair.split(',').map(Number))
+            // 菱形 = 4 个顶点(判断节点给黛青)
+            if (pts.length === 4) {
+              opts.fill = INK.decision
+              opts.strokeWidth = 1.2
+            }
+            rootG.appendChild(rc.polygon(pts, opts))
+          } else if (ell) {
+            const cx = Number(ell.getAttribute('cx'))
+            const cy = Number(ell.getAttribute('cy'))
+            rootG.appendChild(rc.ellipse(cx, cy, Number(ell.getAttribute('rx')) * 2, Number(ell.getAttribute('ry')) * 2, opts))
+          }
+          for (const t of g.querySelectorAll('text')) {
+            const c = t.cloneNode(true)
+            c.setAttribute('fill', INK.text)
+            c.setAttribute('font-family', 'Noto Serif SC, Songti SC, serif')
+            rootG.appendChild(c)
+          }
+        }
+        mount.appendChild(out)
+      }
+
+      // ── 方案 B:稿件步骤条 ──
+      const AIDRAMA_STEPS = [
+        { t: '小说/大纲', sub: '原始素材' },
+        { t: 'LLM 拆分镜', sub: 'Gemini / Claude / GPT / 豆包' },
+        { t: '角色三视图 + 场景图', sub: 'Seedream / Nano Banana Pro / GPT Image' },
+        { t: '图生视频', sub: '可灵 3.0 / Seedance 2.0 / 海螺 / Vidu' },
+        { t: '配音配乐 + 剪映', sub: '后期落地' },
+        { t: '成片投放', end: true },
+      ]
+      const COMFY_STEPS = [
+        { t: 'ComfyUI 画布', sub: '节点式操作界面' },
+        {
+          t: '第三方服务在哪',
+          branches: [
+            { tag: '官方已接入', t: 'API / Partner 节点', sub: '登录买积分直接连' },
+            { tag: '没接入', t: '自定义节点 或 HTTP 请求脚本', sub: '自己写 fetch/axios' },
+          ],
+        },
+        { t: '结果回画布继续下一个节点', end: true },
+      ]
+
+      function stepper(steps, mount) {
+        const spine = document.createElement('div')
+        spine.className = 'spine'
+        mount.appendChild(spine)
+        let n = 0
+        for (const s of steps) {
+          n += 1
+          const row = document.createElement('div')
+          row.className = 'step' + (s.end ? ' step--end' : '')
+          const no = document.createElement('div')
+          no.className = 'seal-no'
+          no.textContent = String(n)
+          const body = document.createElement('div')
+          body.className = 'step-body'
+          const title = document.createElement('div')
+          title.className = 'step-title'
+          title.textContent = s.t
+          body.appendChild(title)
+          if (s.sub) {
+            const sub = document.createElement('div')
+            sub.className = 'step-sub'
+            sub.textContent = s.sub
+            body.appendChild(sub)
+          }
+          if (s.branches) {
+            const wrap = document.createElement('div')
+            wrap.className = 'branches'
+            for (const b of s.branches) {
+              const br = document.createElement('div')
+              br.className = 'branch'
+              const tag = document.createElement('span')
+              tag.className = 'branch-tag'
+              tag.textContent = b.tag
+              const txt = document.createElement('div')
+              txt.className = 'branch-text'
+              txt.textContent = b.t
+              if (b.sub) {
+                const small = document.createElement('small')
+                small.textContent = b.sub
+                txt.appendChild(small)
+              }
+              br.appendChild(tag)
+              br.appendChild(txt)
+              wrap.appendChild(br)
+            }
+            body.appendChild(wrap)
+          }
+          row.appendChild(no)
+          row.appendChild(body)
+          mount.appendChild(row)
+        }
+      }
+
+      // ── 方案 C:管道胶囊 ──
+      function pipeline(steps, mount) {
+        const rows = [[]]
+        for (const s of steps) {
+          if (s.branches) {
+            rows.push({ fork: s, branches: s.branches })
+            rows.push([])
+            continue
+          }
+          rows[rows.length - 1].push(s)
+        }
+        for (const r of rows) {
+          if (r.fork) {
+            const forkRow = document.createElement('div')
+            forkRow.className = 'pipe-row pipe-indent'
+            const arrow = document.createElement('span')
+            arrow.className = 'pipe-arrow'
+            arrow.textContent = '↳'
+            forkRow.appendChild(arrow)
+            for (const b of r.branches) {
+              const tag = document.createElement('span')
+              tag.className = 'branch-tag'
+              tag.textContent = b.tag
+              forkRow.appendChild(tag)
+              const chip = document.createElement('span')
+              chip.className = 'chip'
+              chip.textContent = b.t
+              forkRow.appendChild(chip)
+            }
+            mount.appendChild(forkRow)
+            continue
+          }
+          if (r.length === 0) continue
+          const row = document.createElement('div')
+          row.className = 'pipe-row'
+          r.forEach((s, i) => {
+            if (i > 0) {
+              const a = document.createElement('span')
+              a.className = 'pipe-arrow'
+              a.textContent = '→'
+              row.appendChild(a)
+            }
+            const chip = document.createElement('span')
+            chip.className = 'chip' + (s.end ? ' chip--end' : '')
+            chip.textContent = s.t
+            if (s.sub) {
+              const small = document.createElement('small')
+              small.textContent = s.sub
+              chip.appendChild(small)
+            }
+            row.appendChild(chip)
+          })
+          mount.appendChild(row)
+        }
+        // 决策胶囊(分支数据)在 fork 行前插一枚虚线胶囊
+        if (mount.dataset.fork === '1') {
+          // 由调用方在 fork 前手插,这里不再处理
+        }
+      }
+
+      // ── 挂载 ──
+      async function boot() {
+        const T = (sel) => document.querySelector(sel)
+
+        // 数据① AI 漫剧
+        try {
+          const s1 = await graphvizSvg(AIDRAMA)
+          inkSketch(s1, T('#aidrama-ink .fig-mount'), 11)
+          T('#aidrama-now .fig-mount').innerHTML = s1
+        } catch (e) {
+          T('#aidrama-ink .fig-mount').innerHTML = `<span class="err">A 渲染失败: ${e}</span>`
+        }
+        stepper(AIDRAMA_STEPS, T('#aidrama-step .stepper'))
+        pipeline(AIDRAMA_STEPS, T('#aidrama-pipe .pipeline'))
+
+        // 数据② ComfyUI(分支)
+        try {
+          const s2 = await graphvizSvg(COMFY)
+          inkSketch(s2, T('#comfy-ink .fig-mount'), 23)
+          T('#comfy-now .fig-mount').innerHTML = s2
+          // 方案 C 分支:判断胶囊 + 支线
+          const pipe = T('#comfy-pipe .pipeline')
+          const row0 = document.createElement('div')
+          row0.className = 'pipe-row'
+          row0.innerHTML = '<span class="chip">ComfyUI 画布</span><span class="pipe-arrow">→</span>'
+            + '<span class="chip chip--decision">第三方服务在哪</span>'
+          pipe.appendChild(row0)
+          const forkRow = document.createElement('div')
+          forkRow.className = 'pipe-row pipe-indent'
+          forkRow.innerHTML =
+            '<span class="branch-tag">官方已接入</span><span class="chip">API / Partner 节点<small>登录买积分直接连</small></span>'
+            + '<span class="branch-tag">没接入</span><span class="chip">自定义节点 或 HTTP 请求脚本<small>自己写 fetch/axios</small></span>'
+          pipe.appendChild(forkRow)
+          const row2 = document.createElement('div')
+          row2.className = 'pipe-row'
+          row2.innerHTML = '<span class="chip chip--end">结果回画布继续下一个节点</span>'
+          pipe.appendChild(row2)
+        } catch (e) {
+          T('#comfy-ink .fig-mount').innerHTML = `<span class="err">A 渲染失败: ${e}</span>`
+        }
+        stepper(COMFY_STEPS, T('#comfy-step .stepper'))
+
+        document.body.dataset.ready = '1'
+      }
+      boot()
+    </script>
+  </body>
+</html>

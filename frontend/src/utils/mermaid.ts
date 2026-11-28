@@ -15,8 +15,9 @@
  * 宽图横向滚动而不是被压小,节点文字不因缩放测量偏差被裁。
  */
 
-import { looksLikeFlowchart, mermaidFlowchartToDot } from './mermaidToDot'
+import { looksLikeFlowchart, mermaidFlowchartToDot, parseLinearFlow } from './mermaidToDot'
 import { renderDotToSvg } from './viz'
+import { inkifyGraphvizSvg } from './ink'
 
 let mermaidPromise: Promise<typeof import('mermaid').default> | null = null
 
@@ -575,13 +576,53 @@ export function fitSvgToContent(svg: SVGSVGElement): boolean {
 }
 
 /**
- * **优先路径**:flowchart 交给 Graphviz WASM 渲染。
+ * **混合路径**(主人 2026-11-28 拍板):
+ * - 线性单链 → 「稿件步骤条」(纯 HTML,朱砂序号章 + 墨线主轴),没有画布、永不塌;
+ * - 分支/菱形 → Graphviz WASM「宣纸墨稿」rough.js 手绘(布局确定性不变);
+ * - 两者都不适用 → 原 mermaid 回退(时序图/饼图/甘特等)。
+ *
+ * 为什么按形状分流(设计稿试验台主人比稿结论):线性流程没有分叉信息,画成
+ * 布局图只是把文字竖排再框起来 —— 步骤条融进文章、信息不重复;分支关系只有
+ * 图才说得清,交给墨稿画布。
+ */
+function renderLinearStepper(
+  pre: HTMLPreElement,
+  steps: { title: string; sub: string }[],
+): void {
+  const box = document.createElement('div')
+  box.className = 'flow-stepper'
+  const spine = document.createElement('div')
+  spine.className = 'flow-stepper-spine'
+  box.appendChild(spine)
+  steps.forEach((step, i) => {
+    const row = document.createElement('div')
+    row.className = 'flow-step' + (i === steps.length - 1 ? ' flow-step--end' : '')
+    const no = document.createElement('div')
+    no.className = 'flow-step-no'
+    no.textContent = String(i + 1)
+    const body = document.createElement('div')
+    body.className = 'flow-step-body'
+    const title = document.createElement('div')
+    title.className = 'flow-step-title'
+    title.textContent = step.title
+    body.appendChild(title)
+    if (step.sub !== '') {
+      const sub = document.createElement('div')
+      sub.className = 'flow-step-sub'
+      sub.textContent = step.sub
+      body.appendChild(sub)
+    }
+    row.appendChild(no)
+    row.appendChild(body)
+    box.appendChild(row)
+  })
+  pre.replaceWith(box)
+}
+
+/**
+ * Graphviz 墨稿路径(分支/菱形流程):布局在 WASM 里算,不读浏览器测量。
  *
  * 返回 true = 已成功画进 DOM;false = 不支持/失败,调用方回退 mermaid。
- *
- * 为什么优先走这条(2026-11-27):mermaid 依赖浏览器量文字,同一份内容在主人机器上
- * 渲染成空白框/只剩一个节点,在我这里完全正常,两轮防护都没治好。Graphviz 的布局
- * 在 WASM 里算,不读浏览器测量,从机制上没有那个差异源。
  */
 async function tryRenderViaGraphviz(pre: HTMLPreElement, source: string): Promise<boolean> {
   if (!looksLikeFlowchart(source)) return false
@@ -592,17 +633,28 @@ async function tryRenderViaGraphviz(pre: HTMLPreElement, source: string): Promis
     return false // 语法不在转换器支持范围 → 交还给 mermaid
   }
   const figure = document.createElement('div')
-  figure.className = 'mermaid-figure mermaid-figure--graphviz'
+  figure.className = 'mermaid-figure mermaid-figure--graphviz mermaid-figure--ink'
   figure.title = '滚轮缩放 / 拖动平移 / 双击复位 / 单击看大图'
   figure.innerHTML = svg
   pre.replaceWith(figure)
   await nextFrame()
 
-  // 同一套像素判据兜底:万一 Graphviz 输出也有问题(比如字体缺字),按坏图处理
+  // 宣纸墨稿:rough.js 把直线框重描成手绘墨线(主人比稿拍板的分支流程形态)
   const svgEl = figure.querySelector('svg')
-  if (svgEl !== null && judgeMermaidSvg(svgEl) !== 'bad') {
+  if (svgEl !== null) {
+    try {
+      await inkifyGraphvizSvg(svgEl)
+      await nextFrame() // 重描后重新布局再判
+    } catch {
+      /* 重描失败保留直线稿,不阻塞 */
+    }
+  }
+
+  // 同一套像素判据兜底:万一输出有问题(比如字体缺字),按坏图处理
+  const judgeEl = figure.querySelector('svg')
+  if (judgeEl !== null && judgeMermaidSvg(judgeEl) !== 'bad') {
     bindFigureClick()
-    enableZoomPan(figure, svgEl) // 静态 SVG 补手势,和思维导图手感一致
+    enableZoomPan(figure, judgeEl) // 静态 SVG 补手势,和思维导图手感一致
     return true
   }
   figure.replaceWith(pre)
@@ -617,10 +669,19 @@ export async function renderMermaidBlock(
   seq: number,
   offscreen: HTMLElement,
 ): Promise<void> {
-  // 先试 Graphviz(WASM 布局,不受浏览器量字影响);不行再走 mermaid
+  // 0) 线性单链 → 稿件步骤条(无画布,不参与缩放/灯箱)
+  if (looksLikeFlowchart(source)) {
+    const steps = parseLinearFlow(source)
+    if (steps !== null && steps.length >= 2) {
+      renderLinearStepper(pre, steps)
+      return
+    }
+  }
+
+  // 1) 分支/菱形 → Graphviz 墨稿;失败或不支持 → 2) mermaid 回退
   if (await tryRenderViaGraphviz(pre, source)) return
 
-  // 两次机会:第一次可能撞上字体未就绪/容器尚未布局,重试通常就好了
+  // 2) mermaid 回退:两次机会(第一次可能撞上字体未就绪/容器尚未布局,重试通常就好了)
   for (let attempt = 0; attempt < 2; attempt += 1) {
     blockSeq += 1
     const { svg } = await mermaid.render(`mmd-${seq}-${blockSeq}`, source, offscreen)

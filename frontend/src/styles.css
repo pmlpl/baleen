@@ -531,6 +531,86 @@ textarea:focus-visible {
   height: auto;
 }
 
+/* 稿件步骤条(utils/mermaid.ts → 线性单链流程,主人 2026-11-28 比稿拍板):
+   不要画布 —— 朱砂序号章 + 墨线主轴,像文章的一部分。
+   分支/菱形流程不走这里(分支关系需要图才说得清),交给 .mermaid-figure--graphviz。 */
+.flow-stepper {
+  position: relative;
+  max-width: 520px;
+  margin: 16px 0;
+  padding-left: 2px;
+}
+
+.flow-stepper-spine {
+  position: absolute;
+  top: 14px;
+  bottom: 22px;
+  left: 19px;
+  width: 2px;
+  background: var(--line-strong);
+}
+
+.flow-step {
+  position: relative;
+  display: flex;
+  gap: 14px;
+  padding-bottom: 18px;
+}
+
+.flow-step:last-child {
+  padding-bottom: 0;
+}
+
+.flow-step-no {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--seal-soft);
+  color: var(--seal);
+  font-family: var(--font-serif);
+  font-size: 13px;
+  font-weight: 700;
+  box-shadow: 0 1px 0 rgba(45, 40, 32, 0.06);
+}
+
+.flow-step-body {
+  flex: 1;
+  padding-top: 3px;
+}
+
+.flow-step-title {
+  font-family: var(--font-serif);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+
+.flow-step-sub {
+  margin-top: 2px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+/* 终点:实底朱砂章 + 虚线卡,给流程一个「落款」的收束感 */
+.flow-step--end .flow-step-no {
+  background: var(--seal);
+  color: #fffdf8;
+}
+
+.flow-step--end .flow-step-body {
+  margin-top: -6px;
+  padding: 9px 13px 10px;
+  border: 1px dashed rgba(176, 58, 46, 0.35);
+  border-radius: 10px;
+  background: var(--seal-soft);
+}
+
 /* Graphviz 渲染的流程图(utils/viz.ts)。
    svg 自带 px 固有尺寸(由 pt 换算),这里只做「宽容器不放大、窄容器等比缩小」:
    **绝不能用 width:100%** —— 那会把 335px 宽的图拉到容器宽度,字随之放大到 2 倍
@@ -571,21 +651,23 @@ textarea:focus-visible {
   cursor: grabbing;
 }
 
-.mermaid-figure--graphviz .node polygon,
-.mermaid-figure--graphviz .node path,
-.mermaid-figure--graphviz .node ellipse {
+/* 直线稿(非墨稿)的描边/文字配色;墨稿(--ink)的笔画颜色由 rough.js 内联给定,
+   不被这里的规则覆盖 —— 手绘线条有自己的浓淡层次 */
+.mermaid-figure--graphviz:not(.mermaid-figure--ink) .node polygon,
+.mermaid-figure--graphviz:not(.mermaid-figure--ink) .node path,
+.mermaid-figure--graphviz:not(.mermaid-figure--ink) .node ellipse {
   stroke: var(--ink-2);
   stroke-width: 1.2;
 }
 
-.mermaid-figure--graphviz .edge path,
-.mermaid-figure--graphviz .edge polygon {
+.mermaid-figure--graphviz:not(.mermaid-figure--ink) .edge path,
+.mermaid-figure--graphviz:not(.mermaid-figure--ink) .edge polygon {
   stroke: var(--line-strong);
   fill: var(--line-strong);
 }
 
-.mermaid-figure--graphviz .node text,
-.mermaid-figure--graphviz .edge text {
+.mermaid-figure--graphviz:not(.mermaid-figure--ink) .node text,
+.mermaid-figure--graphviz:not(.mermaid-figure--ink) .edge text {
   fill: var(--ink);
   font-family:
     -apple-system, 'SF Pro Text', 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui,

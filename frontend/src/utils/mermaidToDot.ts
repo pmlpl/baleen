@@ -71,17 +71,6 @@ function nodeWidthIn(label: string): number {
   return Math.max(0.6, widthPt / 72)
 }
 
-interface ParsedNode {
-  label: string
-  shape: 'box' | 'round' | 'diamond' | 'ellipse'
-}
-
-interface ParsedEdge {
-  from: string
-  to: string
-  label: string
-}
-
 /** 转义成 DOT 字符串字面量内部可用的形式 */
 function escapeLabel(raw: string): string {
   return raw
@@ -94,18 +83,32 @@ const ARROW_RE = /^\s*(?:-{2,3}>|==>|-\.->|-{2,3})\s*(?:\|([^|]*)\|)?\s*/
 const SKIP_RE =
   /^(?:subgraph|end|style|classDef|class|linkStyle|click|direction|accTitle|accDescr)\b/
 
-/**
- * 把一段 mermaid flowchart 源码转成 DOT。
- *
- * 抛错表示「这段语法我不支持」,调用方应回退到 mermaid 渲染(而不是给出错图)。
- */
-export function mermaidFlowchartToDot(source: string): string {
-  const header = /^\s*(?:flowchart|graph)\s+(TD|TB|LR|RL|BT)/i.exec(source)
-  if (header === null) throw new Error('只支持 flowchart/graph 语法')
-  const rankdir = RANKDIR[header[1].toUpperCase()] ?? 'TB'
+export interface FlowNode {
+  /** 未转义的原 label(保留 <br/> 前的原始换行语义) */
+  label: string
+  shape: 'box' | 'round' | 'diamond' | 'ellipse'
+}
 
-  const nodes = new Map<string, ParsedNode>()
-  const edges: ParsedEdge[] = []
+export interface FlowEdge {
+  from: string
+  to: string
+  label: string
+}
+
+export interface FlowGraph {
+  nodes: Map<string, FlowNode>
+  edges: FlowEdge[]
+}
+
+/**
+ * 解析 mermaid flowchart 源码 → 节点/边。
+ *
+ * mermaidFlowchartToDot 与 parseLinearFlow 共用这一个解析器,
+ * 保证「形状判定」和「真正画图」看到的是同一份结构。
+ */
+export function parseFlowgraph(source: string): FlowGraph {
+  const nodes = new Map<string, FlowNode>()
+  const edges: FlowEdge[] = []
 
   const register = (id: string, rawShape?: string): string => {
     if (rawShape === undefined) {
@@ -113,7 +116,7 @@ export function mermaidFlowchartToDot(source: string): string {
       return id
     }
     let label = rawShape
-    let shape: ParsedNode['shape'] = 'box'
+    let shape: FlowNode['shape'] = 'box'
     if (rawShape.startsWith('((')) {
       label = rawShape.slice(2, -2)
       shape = 'ellipse'
@@ -126,7 +129,7 @@ export function mermaidFlowchartToDot(source: string): string {
     } else {
       label = rawShape.slice(1, -1)
     }
-    nodes.set(id, { label: escapeLabel(label), shape })
+    nodes.set(id, { label, shape })
     return id
   }
 
@@ -151,12 +154,90 @@ export function mermaidFlowchartToDot(source: string): string {
 
       const arrowMatch = ARROW_RE.exec(rest)
       if (arrowMatch === null) break
-      pendingLabel = arrowMatch[1] === undefined ? '' : escapeLabel(arrowMatch[1])
+      pendingLabel = arrowMatch[1] === undefined ? '' : arrowMatch[1]
       rest = rest.slice(arrowMatch[0].length)
     }
   }
 
   if (nodes.size === 0) throw new Error('没有解析出任何节点')
+  return { nodes, edges }
+}
+
+export interface LinearFlowStep {
+  title: string
+  sub: string
+}
+
+/**
+ * 判断这份 flowchart 是不是**单链**(线性),是则给出有序步骤。
+ *
+ * 判据(三者同时成立):
+ *   1. 边数 = 节点数 − 1(树形链的最小边数)
+ *   2. 每个节点入度 ≤ 1 且出度 ≤ 1(无分叉无汇聚)
+ *   3. 从唯一入度 0 的节点沿链走完所有节点(连通单链,不是几条散链)
+ *
+ * 线性 → 返回步骤序列(供「稿件步骤条」渲染);否则返回 null(走墨稿画布)。
+ * 分叉/菱形/汇聚都不能压成步骤条 —— 那正是图形存在的意义。
+ */
+export function parseLinearFlow(source: string): LinearFlowStep[] | null {
+  const header = /^\s*(?:flowchart|graph)\s+(TD|TB|LR|RL|BT)/i.exec(source)
+  if (header === null) return null
+  let graph: FlowGraph
+  try {
+    graph = parseFlowgraph(source)
+  } catch {
+    return null
+  }
+  const { nodes, edges } = graph
+  if (edges.length !== nodes.size - 1) return null
+
+  const indeg = new Map<string, number>()
+  const outdeg = new Map<string, number>()
+  const nextOf = new Map<string, string>()
+  for (const e of edges) {
+    if ((outdeg.get(e.from) ?? 0) > 0) return null // 一个节点出两条 → 分叉
+    if ((indeg.get(e.to) ?? 0) > 0) return null // 一个节点进两条 → 汇聚
+    outdeg.set(e.from, (outdeg.get(e.from) ?? 0) + 1)
+    indeg.set(e.to, (indeg.get(e.to) ?? 0) + 1)
+    nextOf.set(e.from, e.to)
+  }
+
+  // 唯一起点(入度 0),沿链走完所有节点
+  const starts = [...nodes.keys()].filter((id) => (indeg.get(id) ?? 0) === 0)
+  if (starts.length !== 1) return null
+  const steps: LinearFlowStep[] = []
+  const seen = new Set<string>()
+  let cur: string | undefined = starts[0]
+  while (cur !== undefined && !seen.has(cur)) {
+    seen.add(cur)
+    const node = nodes.get(cur)
+    if (node === undefined) return null
+    const lines = node.label.replace(/<br\s*\/?>/gi, '\n').split('\n')
+    const title = (lines[0] ?? '').trim() || cur
+    const sub = lines
+      .slice(1)
+      .map((l) => l.trim())
+      .filter((l) => l !== '')
+      .join(' / ')
+    steps.push({ title, sub })
+    cur = nextOf.get(cur)
+  }
+  if (seen.size !== nodes.size) return null // 有孤立节点/散链,不是一条链
+  return steps
+}
+
+/**
+ * 把一段 mermaid flowchart 源码转成 DOT。
+ *
+ * 抛错表示「这段语法我不支持」,调用方应回退到 mermaid 渲染(而不是给出错图)。
+ */
+export function mermaidFlowchartToDot(source: string): string {
+  const header = /^\s*(?:flowchart|graph)\s+(TD|TB|LR|RL|BT)/i.exec(source)
+  if (header === null) throw new Error('只支持 flowchart/graph 语法')
+  const rankdir = RANKDIR[header[1].toUpperCase()] ?? 'TB'
+
+  const { nodes, edges } = parseFlowgraph(source)
+
   // 节点定义与边分开写:DOT 里先声明节点再连边,布局更稳
   const lines: string[] = [
     'digraph G {',
@@ -169,14 +250,16 @@ export function mermaidFlowchartToDot(source: string): string {
   ]
 
   for (const [id, node] of nodes) {
+    // parseFlowgraph 存的是未转义 label,DOT 字符串这里统一转义
+    const label = escapeLabel(node.label)
     if (node.shape === 'diamond') {
       // 菱形内接矩形的可用宽度只有外框一半左右,所以按文字宽度 ×1.6 给外框
-      const width = Math.max(1.6, nodeWidthIn(node.label) * 1.6)
+      const width = Math.max(1.6, nodeWidthIn(label) * 1.6)
       lines.push(
-        `  ${id} [label="${node.label}", shape=diamond, width=${width.toFixed(3)}, height=${(width * 0.55).toFixed(3)}];`,
+        `  ${id} [label="${label}", shape=diamond, width=${width.toFixed(3)}, height=${(width * 0.55).toFixed(3)}];`,
       )
     } else {
-      const attrs = [`label="${node.label}"`, `width=${nodeWidthIn(node.label).toFixed(3)}`]
+      const attrs = [`label="${label}"`, `width=${nodeWidthIn(label).toFixed(3)}`]
       if (node.shape === 'round') attrs.push('style="rounded"')
       else if (node.shape === 'ellipse') attrs.push('shape=ellipse')
       lines.push(`  ${id} [${attrs.join(', ')}];`)
@@ -187,7 +270,7 @@ export function mermaidFlowchartToDot(source: string): string {
     lines.push(
       edge.label === ''
         ? `  ${edge.from} -> ${edge.to};`
-        : `  ${edge.from} -> ${edge.to} [label="${edge.label}"];`,
+        : `  ${edge.from} -> ${edge.to} [label="${escapeLabel(edge.label)}"];`,
     )
   }
 
