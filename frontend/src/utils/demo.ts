@@ -134,8 +134,24 @@ function renderOne(pre: HTMLPreElement): void {
 
 export async function renderDemosIn(root: HTMLElement): Promise<void> {
   bindHeightListener()
+  // ```demo 之外,完整文档型 ```html 围栏(<!DOCTYPE/<html> + script/canvas/svg)也提升为
+  // 沙箱演示 —— 模型偶尔不按围栏名出牌(Claude Artifacts 对 ```html 同样直接渲染);
+  // 片段型 html 代码(教学示例等)保持代码块原样,不打扰。
   const targets = Array.from(
-    root.querySelectorAll<HTMLPreElement>('pre[data-lang="demo"]'),
+    root.querySelectorAll<HTMLPreElement>('pre[data-lang="demo"], pre[data-lang="html"]'),
   ).filter((pre) => pre.dataset.demoDone !== '1')
-  for (const pre of targets) renderOne(pre)
+  for (const pre of targets) {
+    const lang = (pre.getAttribute('data-lang') ?? '').toLowerCase()
+    const source = (pre.querySelector('code')?.textContent ?? '').trim()
+    if (lang !== 'demo') {
+      // html 围栏只有「完整文档 + 有脚本/画布」才提升,否则留在代码块
+      const fullDoc = /<(!DOCTYPE\s+html|html[\s>])/i.test(source)
+      const hasEngine = /<(script|canvas|svg)\b/i.test(source)
+      if (!fullDoc || !hasEngine || !looksLikeHtml(source)) {
+        pre.dataset.demoDone = '1'
+        continue
+      }
+    }
+    renderOne(pre)
+  }
 }
